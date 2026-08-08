@@ -12,3 +12,7 @@ unsafe_code = "forbid"
 
 [dependencies]
 radar-core.workspace = true
+scraper.workspace = true
+feed-rs.workspace = true
+serde_json.workspace = true
+icalendar.workspace = true

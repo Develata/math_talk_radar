@@ -12,7 +12,7 @@ members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.96"
 license = "MIT"
 authors = ["Deve and math_talk_radar contributors"]
 repository = "https://github.com/Develata/math_talk_radar"
@@ -51,10 +51,12 @@ semver = { version = "1.0", features = ["serde"] }
 # Async runtime / HTTP
 tokio = { version = "1.0", features = ["full"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "gzip", "json", "stream"] }
+futures = "0.3"
 
 # Parsing
-scraper = "0.22"
-feed-rs = "2.0"
+scraper = "0.27"
+feed-rs = "2.4"
+icalendar = { version = "0.17", features = ["parser"] }
 
 # State
 redb = "2.0"
@@ -63,6 +65,9 @@ redb = "2.0"
 clap = { version = "4.5", features = ["derive", "env", "cargo"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "fmt"] }
+
+# Test-only (inherited by member [dev-dependencies] via .workspace = true)
+wiremock = "0.6"
 
 # Internal crates
 radar-core = { path = "crates/radar-core" }
