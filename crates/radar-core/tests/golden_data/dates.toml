@@ -1,0 +1,424 @@
+# Golden test data for the date parser (§8, M1).
+# Schema:
+#   id                — unique case identifier
+#   input             — raw text fed to parse_date
+#   expected_start    — ISO date "YYYY-MM-DD" or "null"
+#   expected_end      — ISO date "YYYY-MM-DD" or "null"
+#   expected_precision — year|month|day|date_time|range|unknown
+#
+# parse_date always returns Ok; unparseable text → Unknown precision, None
+# start/end. No year inference (clock-free).
+
+# --- Acceptance cases DATE-001..005 (explicitly identifiable) ---------------
+
+[[cases]]
+id = "DATE-001"
+input = "3–7 August 2026"
+expected_start = "2026-08-03"
+expected_end = "2026-08-07"
+expected_precision = "range"
+
+[[cases]]
+id = "DATE-001-hyphen"
+input = "3-7 August 2026"
+expected_start = "2026-08-03"
+expected_end = "2026-08-07"
+expected_precision = "range"
+
+[[cases]]
+id = "DATE-002"
+input = "31 August – 4 September 2026"
+expected_start = "2026-08-31"
+expected_end = "2026-09-04"
+expected_precision = "range"
+
+[[cases]]
+id = "DATE-002-hyphen"
+input = "31 August - 4 September 2026"
+expected_start = "2026-08-31"
+expected_end = "2026-09-04"
+expected_precision = "range"
+
+[[cases]]
+id = "DATE-003-range"
+input = "August 3–7, 2026"
+expected_start = "2026-08-03"
+expected_end = "2026-08-07"
+expected_precision = "range"
+
+[[cases]]
+id = "DATE-003-single"
+input = "August 3, 2026"
+expected_start = "2026-08-03"
+expected_end = "null"
+expected_precision = "day"
+
+[[cases]]
+id = "DATE-004"
+input = "15–18 August 2026"
+expected_start = "2026-08-15"
+expected_end = "2026-08-18"
+expected_precision = "range"
+
+[[cases]]
+id = "DATE-005-text"
+input = "not a date at all"
+expected_start = "null"
+expected_end = "null"
+expected_precision = "unknown"
+
+[[cases]]
+id = "DATE-005-yearless"
+input = "3–7 August"
+expected_start = "null"
+expected_end = "null"
+expected_precision = "unknown"
+
+# --- ISO single dates --------------------------------------------------------
+
+[[cases]]
+id = "date-010"
+input = "2026-08-08"
+expected_start = "2026-08-08"
+expected_end = "null"
+expected_precision = "day"
+
+[[cases]]
+id = "date-011"
+input = "2026-01-01"
+expected_start = "2026-01-01"
+expected_end = "null"
+expected_precision = "day"
+
+[[cases]]
+id = "date-012"
+input = "2025-12-31"
+expected_start = "2025-12-31"
+expected_end = "null"
+expected_precision = "day"
+
+[[cases]]
+id = "date-013"
+input = "2026-02-29"
+expected_start = "null"
+expected_end = "null"
+expected_precision = "unknown"
+
+[[cases]]
+id = "date-014"
+input = "2024-02-29"
+expected_start = "2024-02-29"
+expected_end = "null"
+expected_precision = "day"
+
+# --- DMY single dates --------------------------------------------------------
+
+[[cases]]
+id = "date-020"
+input = "8 August 2026"
+expected_start = "2026-08-08"
+expected_end = "null"
+expected_precision = "day"
+
+[[cases]]
+id = "date-021"
+input = "31 December 2025"
+expected_start = "2025-12-31"
+expected_end = "null"
+expected_precision = "day"
+
+[[cases]]
+id = "date-022"
+input = "1 January 2026"
+expected_start = "2026-01-01"
+expected_end = "null"
+expected_precision = "day"
+
+[[cases]]
+id = "date-023"
+input = "15 March 2027"
+expected_start = "2027-03-15"
+expected_end = "null"
+expected_precision = "day"
+
+[[cases]]
+id = "date-024"
+input = "3 August 2026"
+expected_start = "2026-08-03"
+expected_end = "null"
+expected_precision = "day"
+
+# --- Month abbreviation US single --------------------------------------------
+
+[[cases]]
+id = "date-030"
+input = "Aug 3, 2026"
+expected_start = "2026-08-03"
+expected_end = "null"
+expected_precision = "day"
+
+[[cases]]
+id = "date-031"
+input = "Sep 15, 2026"
+expected_start = "2026-09-15"
+expected_end = "null"
+expected_precision = "day"
+
+[[cases]]
+id = "date-032"
+input = "Feb 29, 2024"
+expected_start = "2024-02-29"
+expected_end = "null"
+expected_precision = "day"
+
+[[cases]]
+id = "date-033"
+input = "Oct 1, 2025"
+expected_start = "2025-10-01"
+expected_end = "null"
+expected_precision = "day"
+
+[[cases]]
+id = "date-034"
+input = "Nov 11, 2026"
+expected_start = "2026-11-11"
+expected_end = "null"
+expected_precision = "day"
+
+[[cases]]
+id = "date-035"
+input = "Dec 25, 2026"
+expected_start = "2026-12-25"
+expected_end = "null"
+expected_precision = "day"
+
+# --- US format range (abbreviation) ------------------------------------------
+
+[[cases]]
+id = "date-040"
+input = "Aug 3–7, 2026"
+expected_start = "2026-08-03"
+expected_end = "2026-08-07"
+expected_precision = "range"
+
+[[cases]]
+id = "date-041"
+input = "Sep 10–12, 2026"
+expected_start = "2026-09-10"
+expected_end = "2026-09-12"
+expected_precision = "range"
+
+[[cases]]
+id = "date-042"
+input = "Jan 5–8, 2026"
+expected_start = "2026-01-05"
+expected_end = "2026-01-08"
+expected_precision = "range"
+
+# --- DMY single with abbreviation --------------------------------------------
+
+[[cases]]
+id = "date-050"
+input = "3 Aug 2026"
+expected_start = "2026-08-03"
+expected_end = "null"
+expected_precision = "day"
+
+[[cases]]
+id = "date-051"
+input = "10 Sept 2026"
+expected_start = "2026-09-10"
+expected_end = "null"
+expected_precision = "day"
+
+# --- Cross-month range with abbreviation -------------------------------------
+
+[[cases]]
+id = "date-052"
+input = "31 Aug – 4 Sep 2026"
+expected_start = "2026-08-31"
+expected_end = "2026-09-04"
+expected_precision = "range"
+
+# --- Whitespace variants -----------------------------------------------------
+
+[[cases]]
+id = "date-060"
+input = "  2026-08-08  "
+expected_start = "2026-08-08"
+expected_end = "null"
+expected_precision = "day"
+
+[[cases]]
+id = "date-061"
+input = "  3–7 August 2026  "
+expected_start = "2026-08-03"
+expected_end = "2026-08-07"
+expected_precision = "range"
+
+[[cases]]
+id = "date-062"
+input = "August 3, 2026  "
+expected_start = "2026-08-03"
+expected_end = "null"
+expected_precision = "day"
+
+[[cases]]
+id = "date-063"
+input = "  8 August 2026"
+expected_start = "2026-08-08"
+expected_end = "null"
+expected_precision = "day"
+
+# --- Invalid calendar dates → Unknown ---------------------------------------
+
+[[cases]]
+id = "date-070"
+input = "30 February 2026"
+expected_start = "null"
+expected_end = "null"
+expected_precision = "unknown"
+
+[[cases]]
+id = "date-071"
+input = "31 April 2026"
+expected_start = "null"
+expected_end = "null"
+expected_precision = "unknown"
+
+[[cases]]
+id = "date-072"
+input = "February 30, 2026"
+expected_start = "null"
+expected_end = "null"
+expected_precision = "unknown"
+
+[[cases]]
+id = "date-073"
+input = "33 August 2026"
+expected_start = "null"
+expected_end = "null"
+expected_precision = "unknown"
+
+[[cases]]
+id = "date-074"
+input = "0 January 2026"
+expected_start = "null"
+expected_end = "null"
+expected_precision = "unknown"
+
+[[cases]]
+id = "date-075"
+input = "August 32, 2026"
+expected_start = "null"
+expected_end = "null"
+expected_precision = "unknown"
+
+# --- Unparseable text → Unknown ----------------------------------------------
+
+[[cases]]
+id = "date-080"
+input = ""
+expected_start = "null"
+expected_end = "null"
+expected_precision = "unknown"
+
+[[cases]]
+id = "date-081"
+input = "   "
+expected_start = "null"
+expected_end = "null"
+expected_precision = "unknown"
+
+[[cases]]
+id = "date-082"
+input = "2026"
+expected_start = "null"
+expected_end = "null"
+expected_precision = "unknown"
+
+[[cases]]
+id = "date-083"
+input = "August"
+expected_start = "null"
+expected_end = "null"
+expected_precision = "unknown"
+
+[[cases]]
+id = "date-084"
+input = "August 2026"
+expected_start = "null"
+expected_end = "null"
+expected_precision = "unknown"
+
+[[cases]]
+id = "date-085"
+input = "13–14"
+expected_start = "null"
+expected_end = "null"
+expected_precision = "unknown"
+
+[[cases]]
+id = "date-086"
+input = "garbage!@#"
+expected_start = "null"
+expected_end = "null"
+expected_precision = "unknown"
+
+[[cases]]
+id = "date-087"
+input = "TBD"
+expected_start = "null"
+expected_end = "null"
+expected_precision = "unknown"
+
+[[cases]]
+id = "date-088"
+input = "Sometime in 2026"
+expected_start = "null"
+expected_end = "null"
+expected_precision = "unknown"
+
+# --- Additional range cases --------------------------------------------------
+
+[[cases]]
+id = "date-090"
+input = "1–31 August 2026"
+expected_start = "2026-08-01"
+expected_end = "2026-08-31"
+expected_precision = "range"
+
+[[cases]]
+id = "date-091"
+input = "1–1 August 2026"
+expected_start = "2026-08-01"
+expected_end = "2026-08-01"
+expected_precision = "range"
+
+[[cases]]
+id = "date-092"
+input = "10–12 September 2026"
+expected_start = "2026-09-10"
+expected_end = "2026-09-12"
+expected_precision = "range"
+
+[[cases]]
+id = "date-093"
+input = "September 10–12, 2026"
+expected_start = "2026-09-10"
+expected_end = "2026-09-12"
+expected_precision = "range"
+
+[[cases]]
+id = "date-094"
+input = "15–22 July 2026"
+expected_start = "2026-07-15"
+expected_end = "2026-07-22"
+expected_precision = "range"
+
+[[cases]]
+id = "date-095"
+input = "July 15–22, 2026"
+expected_start = "2026-07-15"
+expected_end = "2026-07-22"
+expected_precision = "range"

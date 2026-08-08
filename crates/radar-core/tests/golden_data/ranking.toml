@@ -1,0 +1,544 @@
+# Golden test data for the ranking score composer (§26, M1).
+#
+# Schema:
+#   id                    — unique case identifier (RANK-xxx for acceptance)
+#   description           — human-readable description
+#   topics                — list of topic_id strings
+#   media                 — list of {type, access} inline tables
+#   access_online         — livestream|hybrid|recording_expected|recording_available|no_online_access|unknown
+#   source_tiers          — list of source_id strings (harness maps to tiers)
+#   people                — list of {canonical, role, tags} inline tables
+#   has_description       — bool
+#   has_abstract          — bool
+#   has_location          — bool
+#   talk_count            — usize
+#   interests             — optional inline map: topic_id → weight (f64)
+#   expected_*            — expected component values
+#   expected_total        — expected total score (f32)
+#
+# Per-signal caps: topic≤30, media≤25, access≤15, source_tier≤10, people≤10,
+# completeness≤10.
+#
+# Source-tier map (fixed in harness):
+#   "s-tier-src" → S (10), "a-tier-src" → A (7), "b-tier-src" → B (4),
+#   "unknown-src" → Unknown (0).
+
+# --- RANK-001: topic component -----------------------------------------------
+
+[[cases]]
+id = "RANK-001a"
+description = "2 topics, no interests"
+topics = ["arithmetic_geometry", "number_theory"]
+media = []
+access_online = "unknown"
+source_tiers = []
+people = []
+has_description = false
+has_abstract = false
+has_location = false
+talk_count = 0
+expected_topic = 30
+expected_media = 0
+expected_access = 0
+expected_source_tier = 0
+expected_people = 0
+expected_completeness = 0
+expected_total = 30.0
+
+[[cases]]
+id = "RANK-001b"
+description = "2 topics, one with zero interest weight"
+topics = ["arithmetic_geometry", "number_theory"]
+media = []
+access_online = "unknown"
+source_tiers = []
+people = []
+has_description = false
+has_abstract = false
+has_location = false
+talk_count = 0
+interests = {arithmetic_geometry = 0.0}
+expected_topic = 23
+expected_media = 0
+expected_access = 0
+expected_source_tier = 0
+expected_people = 0
+expected_completeness = 0
+expected_total = 23.0
+
+[[cases]]
+id = "RANK-001c"
+description = "1 topic, no interests"
+topics = ["number_theory"]
+media = []
+access_online = "unknown"
+source_tiers = []
+people = []
+has_description = false
+has_abstract = false
+has_location = false
+talk_count = 0
+expected_topic = 15
+expected_media = 0
+expected_access = 0
+expected_source_tier = 0
+expected_people = 0
+expected_completeness = 0
+expected_total = 15.0
+
+[[cases]]
+id = "RANK-001d"
+description = "3 topics, no interests (capped at 30)"
+topics = ["arithmetic_geometry", "number_theory", "algebraic_geometry"]
+media = []
+access_online = "unknown"
+source_tiers = []
+people = []
+has_description = false
+has_abstract = false
+has_location = false
+talk_count = 0
+expected_topic = 30
+expected_media = 0
+expected_access = 0
+expected_source_tier = 0
+expected_people = 0
+expected_completeness = 0
+expected_total = 30.0
+
+[[cases]]
+id = "RANK-001e"
+description = "2 topics, one with weight 2.0 (capped at 30)"
+topics = ["arithmetic_geometry", "number_theory"]
+media = []
+access_online = "unknown"
+source_tiers = []
+people = []
+has_description = false
+has_abstract = false
+has_location = false
+talk_count = 0
+interests = {arithmetic_geometry = 2.0}
+expected_topic = 30
+expected_media = 0
+expected_access = 0
+expected_source_tier = 0
+expected_people = 0
+expected_completeness = 0
+expected_total = 30.0
+
+# --- RANK-002: media component -----------------------------------------------
+
+[[cases]]
+id = "RANK-002a"
+description = "open video → media=25"
+topics = []
+media = [{type = "video", access = "open"}]
+access_online = "unknown"
+source_tiers = []
+people = []
+has_description = false
+has_abstract = false
+has_location = false
+talk_count = 0
+expected_topic = 0
+expected_media = 25
+expected_access = 0
+expected_source_tier = 0
+expected_people = 0
+expected_completeness = 0
+expected_total = 25.0
+
+[[cases]]
+id = "RANK-002b"
+description = "registration-required video → media=18"
+topics = []
+media = [{type = "video", access = "registration_required"}]
+access_online = "unknown"
+source_tiers = []
+people = []
+has_description = false
+has_abstract = false
+has_location = false
+talk_count = 0
+expected_topic = 0
+expected_media = 18
+expected_access = 0
+expected_source_tier = 0
+expected_people = 0
+expected_completeness = 0
+expected_total = 18.0
+
+[[cases]]
+id = "RANK-002c"
+description = "open audio → media=15"
+topics = []
+media = [{type = "audio", access = "open"}]
+access_online = "unknown"
+source_tiers = []
+people = []
+has_description = false
+has_abstract = false
+has_location = false
+talk_count = 0
+expected_topic = 0
+expected_media = 15
+expected_access = 0
+expected_source_tier = 0
+expected_people = 0
+expected_completeness = 0
+expected_total = 15.0
+
+[[cases]]
+id = "RANK-002d"
+description = "slides → media=10"
+topics = []
+media = [{type = "slides", access = "open"}]
+access_online = "unknown"
+source_tiers = []
+people = []
+has_description = false
+has_abstract = false
+has_location = false
+talk_count = 0
+expected_topic = 0
+expected_media = 10
+expected_access = 0
+expected_source_tier = 0
+expected_people = 0
+expected_completeness = 0
+expected_total = 10.0
+
+[[cases]]
+id = "RANK-002e"
+description = "no media → media=0"
+topics = []
+media = []
+access_online = "unknown"
+source_tiers = []
+people = []
+has_description = false
+has_abstract = false
+has_location = false
+talk_count = 0
+expected_topic = 0
+expected_media = 0
+expected_access = 0
+expected_source_tier = 0
+expected_people = 0
+expected_completeness = 0
+expected_total = 0.0
+
+# --- RANK-003: people component ----------------------------------------------
+
+[[cases]]
+id = "RANK-003a"
+description = "TitleMention, important tags → people=0"
+topics = []
+media = []
+access_online = "unknown"
+source_tiers = []
+people = [{canonical = "Pierre Deligne", role = "title_mention", tags = ["fields", "wolf"]}]
+has_description = false
+has_abstract = false
+has_location = false
+talk_count = 0
+expected_topic = 0
+expected_media = 0
+expected_access = 0
+expected_source_tier = 0
+expected_people = 0
+expected_completeness = 0
+expected_total = 0.0
+
+[[cases]]
+id = "RANK-003b"
+description = "Speaker, important tags → people=10"
+topics = []
+media = []
+access_online = "unknown"
+source_tiers = []
+people = [{canonical = "Pierre Deligne", role = "speaker", tags = ["fields", "wolf"]}]
+has_description = false
+has_abstract = false
+has_location = false
+talk_count = 0
+expected_topic = 0
+expected_media = 0
+expected_access = 0
+expected_source_tier = 0
+expected_people = 10
+expected_completeness = 0
+expected_total = 10.0
+
+[[cases]]
+id = "RANK-003c"
+description = "Speaker, no important tags → people=3"
+topics = []
+media = []
+access_online = "unknown"
+source_tiers = []
+people = [{canonical = "Jane Doe", role = "speaker", tags = []}]
+has_description = false
+has_abstract = false
+has_location = false
+talk_count = 0
+expected_topic = 0
+expected_media = 0
+expected_access = 0
+expected_source_tier = 0
+expected_people = 3
+expected_completeness = 0
+expected_total = 3.0
+
+[[cases]]
+id = "RANK-003d"
+description = "Organizer, important tags → people=5"
+topics = []
+media = []
+access_online = "unknown"
+source_tiers = []
+people = [{canonical = "Pierre Deligne", role = "organizer", tags = ["fields", "wolf"]}]
+has_description = false
+has_abstract = false
+has_location = false
+talk_count = 0
+expected_topic = 0
+expected_media = 0
+expected_access = 0
+expected_source_tier = 0
+expected_people = 5
+expected_completeness = 0
+expected_total = 5.0
+
+# --- Access component --------------------------------------------------------
+
+[[cases]]
+id = "RANK-004a"
+description = "livestream → access=15"
+topics = []
+media = []
+access_online = "livestream"
+source_tiers = []
+people = []
+has_description = false
+has_abstract = false
+has_location = false
+talk_count = 0
+expected_topic = 0
+expected_media = 0
+expected_access = 15
+expected_source_tier = 0
+expected_people = 0
+expected_completeness = 0
+expected_total = 15.0
+
+[[cases]]
+id = "RANK-004b"
+description = "hybrid → access=12"
+topics = []
+media = []
+access_online = "hybrid"
+source_tiers = []
+people = []
+has_description = false
+has_abstract = false
+has_location = false
+talk_count = 0
+expected_topic = 0
+expected_media = 0
+expected_access = 12
+expected_source_tier = 0
+expected_people = 0
+expected_completeness = 0
+expected_total = 12.0
+
+[[cases]]
+id = "RANK-004c"
+description = "recording_expected → access=10"
+topics = []
+media = []
+access_online = "recording_expected"
+source_tiers = []
+people = []
+has_description = false
+has_abstract = false
+has_location = false
+talk_count = 0
+expected_topic = 0
+expected_media = 0
+expected_access = 10
+expected_source_tier = 0
+expected_people = 0
+expected_completeness = 0
+expected_total = 10.0
+
+# --- Source-tier component ---------------------------------------------------
+
+[[cases]]
+id = "RANK-005a"
+description = "S tier → source_tier=10"
+topics = []
+media = []
+access_online = "unknown"
+source_tiers = ["s-tier-src"]
+people = []
+has_description = false
+has_abstract = false
+has_location = false
+talk_count = 0
+expected_topic = 0
+expected_media = 0
+expected_access = 0
+expected_source_tier = 10
+expected_people = 0
+expected_completeness = 0
+expected_total = 10.0
+
+[[cases]]
+id = "RANK-005b"
+description = "A tier → source_tier=7"
+topics = []
+media = []
+access_online = "unknown"
+source_tiers = ["a-tier-src"]
+people = []
+has_description = false
+has_abstract = false
+has_location = false
+talk_count = 0
+expected_topic = 0
+expected_media = 0
+expected_access = 0
+expected_source_tier = 7
+expected_people = 0
+expected_completeness = 0
+expected_total = 7.0
+
+[[cases]]
+id = "RANK-005c"
+description = "B tier → source_tier=4"
+topics = []
+media = []
+access_online = "unknown"
+source_tiers = ["b-tier-src"]
+people = []
+has_description = false
+has_abstract = false
+has_location = false
+talk_count = 0
+expected_topic = 0
+expected_media = 0
+expected_access = 0
+expected_source_tier = 4
+expected_people = 0
+expected_completeness = 0
+expected_total = 4.0
+
+# --- Completeness component --------------------------------------------------
+
+[[cases]]
+id = "RANK-006a"
+description = "description only → completeness=3"
+topics = []
+media = []
+access_online = "unknown"
+source_tiers = []
+people = []
+has_description = true
+has_abstract = false
+has_location = false
+talk_count = 0
+expected_topic = 0
+expected_media = 0
+expected_access = 0
+expected_source_tier = 0
+expected_people = 0
+expected_completeness = 3
+expected_total = 3.0
+
+[[cases]]
+id = "RANK-006b"
+description = "description + abstract + location + 3 talks → completeness=10"
+topics = []
+media = []
+access_online = "unknown"
+source_tiers = []
+people = []
+has_description = true
+has_abstract = true
+has_location = true
+talk_count = 3
+expected_topic = 0
+expected_media = 0
+expected_access = 0
+expected_source_tier = 0
+expected_people = 0
+expected_completeness = 10
+expected_total = 10.0
+
+# --- Edge: empty event -------------------------------------------------------
+
+[[cases]]
+id = "RANK-007"
+description = "empty event → all 0"
+topics = []
+media = []
+access_online = "unknown"
+source_tiers = []
+people = []
+has_description = false
+has_abstract = false
+has_location = false
+talk_count = 0
+expected_topic = 0
+expected_media = 0
+expected_access = 0
+expected_source_tier = 0
+expected_people = 0
+expected_completeness = 0
+expected_total = 0.0
+
+# --- Combination: full event → total 100 -------------------------------------
+
+[[cases]]
+id = "RANK-008"
+description = "full event: topic(30) + media(25) + access(15) + source(10) + people(10) + completeness(10) = 100"
+topics = ["arithmetic_geometry", "number_theory"]
+media = [{type = "video", access = "open"}]
+access_online = "livestream"
+source_tiers = ["s-tier-src"]
+people = [{canonical = "Pierre Deligne", role = "speaker", tags = ["fields", "wolf"]}]
+has_description = true
+has_abstract = true
+has_location = true
+talk_count = 3
+expected_topic = 30
+expected_media = 25
+expected_access = 15
+expected_source_tier = 10
+expected_people = 10
+expected_completeness = 10
+expected_total = 100.0
+
+# --- Combination: topic + media ----------------------------------------------
+
+[[cases]]
+id = "RANK-009"
+description = "topic(30) + media(25) = 55"
+topics = ["arithmetic_geometry", "number_theory"]
+media = [{type = "video", access = "open"}]
+access_online = "unknown"
+source_tiers = []
+people = []
+has_description = false
+has_abstract = false
+has_location = false
+talk_count = 0
+expected_topic = 30
+expected_media = 25
+expected_access = 0
+expected_source_tier = 0
+expected_people = 0
+expected_completeness = 0
+expected_total = 55.0

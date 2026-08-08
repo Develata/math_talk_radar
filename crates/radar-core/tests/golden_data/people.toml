@@ -1,0 +1,618 @@
+# Golden test data for the scholar matcher (§6, §6.1, §6.2, M1).
+#
+# Schema:
+#   id                 — unique case identifier (PER-xxx for acceptance cases)
+#   input              — text fed to match_scholars
+#   context            — "structured_field_<role>" | "body_text" | "title_text"
+#   expected_match     — true if expected_canonical should be in the hits
+#   expected_canonical  — the scholar canonical name under test
+#   expected_role      — snake_case role if expected_match (else omitted)
+#   expected_confidence — confidence if expected_match (else omitted)
+#   extra_scholars     — optional: inline scholar ids to add (e.g. ["benedict-gross"])
+#   empty_scholars     — optional: if true, use an empty scholar list
+#   expected_hit_count — optional: assert total hits == this number
+#
+# Role protection (§P-2, §6.2): body text yields at most TitleMention, never
+# Speaker. Ambiguous surnames (li, wang, tao, yau, gross, wei, wu) in body text
+# require ≥2 tokens of the canonical name to also appear.
+
+# --- PER-001: scholar alias via StructuredField(Speaker) — all 10 seeded ------
+
+[[cases]]
+id = "PER-001-zagier"
+input = "Speaker: Don Zagier"
+context = "structured_field_speaker"
+expected_match = true
+expected_canonical = "Don Zagier"
+expected_role = "speaker"
+expected_confidence = 1.0
+
+[[cases]]
+id = "PER-001-zagier-alias"
+input = "Speaker: Zagier"
+context = "structured_field_speaker"
+expected_match = true
+expected_canonical = "Don Zagier"
+expected_role = "speaker"
+expected_confidence = 1.0
+
+[[cases]]
+id = "PER-001-deligne"
+input = "Speaker: Pierre Deligne"
+context = "structured_field_speaker"
+expected_match = true
+expected_canonical = "Pierre Deligne"
+expected_role = "speaker"
+expected_confidence = 1.0
+
+[[cases]]
+id = "PER-001-deligne-alias"
+input = "Speaker: Deligne"
+context = "structured_field_speaker"
+expected_match = true
+expected_canonical = "Pierre Deligne"
+expected_role = "speaker"
+expected_confidence = 1.0
+
+[[cases]]
+id = "PER-001-serre"
+input = "Speaker: Jean-Pierre Serre"
+context = "structured_field_speaker"
+expected_match = true
+expected_canonical = "Jean-Pierre Serre"
+expected_role = "speaker"
+expected_confidence = 1.0
+
+[[cases]]
+id = "PER-001-serre-alias"
+input = "Speaker: Serre"
+context = "structured_field_speaker"
+expected_match = true
+expected_canonical = "Jean-Pierre Serre"
+expected_role = "speaker"
+expected_confidence = 1.0
+
+[[cases]]
+id = "PER-001-witten"
+input = "Speaker: Edward Witten"
+context = "structured_field_speaker"
+expected_match = true
+expected_canonical = "Edward Witten"
+expected_role = "speaker"
+expected_confidence = 1.0
+
+[[cases]]
+id = "PER-001-witten-alias"
+input = "Speaker: Witten"
+context = "structured_field_speaker"
+expected_match = true
+expected_canonical = "Edward Witten"
+expected_role = "speaker"
+expected_confidence = 1.0
+
+[[cases]]
+id = "PER-001-wiles"
+input = "Speaker: Andrew Wiles"
+context = "structured_field_speaker"
+expected_match = true
+expected_canonical = "Andrew Wiles"
+expected_role = "speaker"
+expected_confidence = 1.0
+
+[[cases]]
+id = "PER-001-wiles-alias"
+input = "Speaker: Wiles"
+context = "structured_field_speaker"
+expected_match = true
+expected_canonical = "Andrew Wiles"
+expected_role = "speaker"
+expected_confidence = 1.0
+
+[[cases]]
+id = "PER-001-tao"
+input = "Speaker: Terence Tao"
+context = "structured_field_speaker"
+expected_match = true
+expected_canonical = "Terence Tao"
+expected_role = "speaker"
+expected_confidence = 1.0
+
+[[cases]]
+id = "PER-001-tao-alias"
+input = "Speaker: Tao"
+context = "structured_field_speaker"
+expected_match = true
+expected_canonical = "Terence Tao"
+expected_role = "speaker"
+expected_confidence = 1.0
+
+[[cases]]
+id = "PER-001-gowers"
+input = "Speaker: W. Timothy Gowers"
+context = "structured_field_speaker"
+expected_match = true
+expected_canonical = "W. Timothy Gowers"
+expected_role = "speaker"
+expected_confidence = 1.0
+
+[[cases]]
+id = "PER-001-gowers-alias"
+input = "Speaker: Gowers"
+context = "structured_field_speaker"
+expected_match = true
+expected_canonical = "W. Timothy Gowers"
+expected_role = "speaker"
+expected_confidence = 1.0
+
+[[cases]]
+id = "PER-001-yau"
+input = "Speaker: Shing-Tung Yau"
+context = "structured_field_speaker"
+expected_match = true
+expected_canonical = "Shing-Tung Yau"
+expected_role = "speaker"
+expected_confidence = 1.0
+
+[[cases]]
+id = "PER-001-yau-alias"
+input = "Speaker: Yau"
+context = "structured_field_speaker"
+expected_match = true
+expected_canonical = "Shing-Tung Yau"
+expected_role = "speaker"
+expected_confidence = 1.0
+
+[[cases]]
+id = "PER-001-kontsevich"
+input = "Speaker: Maxim Kontsevich"
+context = "structured_field_speaker"
+expected_match = true
+expected_canonical = "Maxim Kontsevich"
+expected_role = "speaker"
+expected_confidence = 1.0
+
+[[cases]]
+id = "PER-001-kontsevich-alias"
+input = "Speaker: Kontsevich"
+context = "structured_field_speaker"
+expected_match = true
+expected_canonical = "Maxim Kontsevich"
+expected_role = "speaker"
+expected_confidence = 1.0
+
+[[cases]]
+id = "PER-001-villani"
+input = "Speaker: Cédric Villani"
+context = "structured_field_speaker"
+expected_match = true
+expected_canonical = "Cédric Villani"
+expected_role = "speaker"
+expected_confidence = 1.0
+
+[[cases]]
+id = "PER-001-villani-alias"
+input = "Speaker: Villani"
+context = "structured_field_speaker"
+expected_match = true
+expected_canonical = "Cédric Villani"
+expected_role = "speaker"
+expected_confidence = 1.0
+
+# --- PER-002: multilingual CJK alias "陶哲轩" --------------------------------
+
+[[cases]]
+id = "PER-002-cjk"
+input = "主讲：陶哲轩"
+context = "structured_field_speaker"
+expected_match = true
+expected_canonical = "Terence Tao"
+expected_role = "speaker"
+expected_confidence = 1.0
+
+[[cases]]
+id = "PER-002-cjk-english-mix"
+input = "Speaker: 陶哲轩"
+context = "structured_field_speaker"
+expected_match = true
+expected_canonical = "Terence Tao"
+expected_role = "speaker"
+expected_confidence = 1.0
+
+[[cases]]
+id = "PER-002-cjk-body"
+input = "陶哲轩 will give a talk"
+context = "body_text"
+expected_match = true
+expected_canonical = "Terence Tao"
+expected_role = "title_mention"
+expected_confidence = 0.5
+
+[[cases]]
+id = "PER-002-cjk-title"
+input = "Lecture by 陶哲轩"
+context = "title_text"
+expected_match = true
+expected_canonical = "Terence Tao"
+expected_role = "title_mention"
+expected_confidence = 0.5
+
+# --- PER-003: concept names → TitleMention, NEVER Speaker --------------------
+
+[[cases]]
+id = "PER-003-gross-zagier-body-zagier"
+input = "The Gross-Zagier formula"
+context = "body_text"
+expected_match = true
+expected_canonical = "Don Zagier"
+expected_role = "title_mention"
+expected_confidence = 0.5
+extra_scholars = ["benedict-gross"]
+
+[[cases]]
+id = "PER-003-gross-zagier-body-gross"
+input = "The Gross-Zagier formula"
+context = "body_text"
+expected_match = false
+expected_canonical = "Benedict Gross"
+extra_scholars = ["benedict-gross"]
+
+[[cases]]
+id = "PER-003-gross-zagier-title-zagier"
+input = "Gross-Zagier formula"
+context = "title_text"
+expected_match = true
+expected_canonical = "Don Zagier"
+expected_role = "title_mention"
+expected_confidence = 0.5
+extra_scholars = ["benedict-gross"]
+
+[[cases]]
+id = "PER-003-gross-zagier-title-gross"
+input = "Gross-Zagier formula"
+context = "title_text"
+expected_match = true
+expected_canonical = "Benedict Gross"
+expected_role = "title_mention"
+expected_confidence = 0.5
+extra_scholars = ["benedict-gross"]
+
+[[cases]]
+id = "PER-003-deligne-periods-title"
+input = "Deligne periods of modular forms"
+context = "title_text"
+expected_match = true
+expected_canonical = "Pierre Deligne"
+expected_role = "title_mention"
+expected_confidence = 0.5
+
+[[cases]]
+id = "PER-003-deligne-periods-body"
+input = "Deligne periods of modular forms"
+context = "body_text"
+expected_match = true
+expected_canonical = "Pierre Deligne"
+expected_role = "title_mention"
+expected_confidence = 0.5
+
+[[cases]]
+id = "PER-003-ahlfors-title"
+input = "Ahlfors Lecture Series"
+context = "title_text"
+expected_match = false
+expected_canonical = "Don Zagier"
+expected_hit_count = 0
+
+[[cases]]
+id = "PER-003-ahlfors-body"
+input = "Ahlfors Lecture Series"
+context = "body_text"
+expected_match = false
+expected_canonical = "Don Zagier"
+expected_hit_count = 0
+
+[[cases]]
+id = "PER-003-zagier-formula-body"
+input = "the Zagier formula"
+context = "body_text"
+expected_match = true
+expected_canonical = "Don Zagier"
+expected_role = "title_mention"
+expected_confidence = 0.5
+
+[[cases]]
+id = "PER-003-deligne-periods-body-2"
+input = "we study Deligne periods in this paper"
+context = "body_text"
+expected_match = true
+expected_canonical = "Pierre Deligne"
+expected_role = "title_mention"
+expected_confidence = 0.5
+
+# --- Ambiguous surnames alone in body text → no match ------------------------
+
+[[cases]]
+id = "PER-004-tao-alone-body"
+input = "Tao proved a theorem"
+context = "body_text"
+expected_match = false
+expected_canonical = "Terence Tao"
+
+[[cases]]
+id = "PER-004-yau-alone-body"
+input = "Yau conjectured a result"
+context = "body_text"
+expected_match = false
+expected_canonical = "Shing-Tung Yau"
+
+[[cases]]
+id = "PER-004-gross-alone-body"
+input = "Gross is a mathematician"
+context = "body_text"
+expected_match = false
+expected_canonical = "Benedict Gross"
+extra_scholars = ["benedict-gross"]
+
+[[cases]]
+id = "PER-004-tao-alone-body-2"
+input = "the Tao of mathematics"
+context = "body_text"
+expected_match = false
+expected_canonical = "Terence Tao"
+
+[[cases]]
+id = "PER-004-yau-alone-body-2"
+input = "Yau's theorem is famous"
+context = "body_text"
+expected_match = false
+expected_canonical = "Shing-Tung Yau"
+
+# --- Full names in body text → TitleMention ---------------------------------
+
+[[cases]]
+id = "PER-005-terence-tao-body"
+input = "Terence Tao proved a theorem"
+context = "body_text"
+expected_match = true
+expected_canonical = "Terence Tao"
+expected_role = "title_mention"
+expected_confidence = 0.5
+
+[[cases]]
+id = "PER-005-shing-tung-yau-body"
+input = "Shing-Tung Yau conjectured"
+context = "body_text"
+expected_match = true
+expected_canonical = "Shing-Tung Yau"
+expected_role = "title_mention"
+expected_confidence = 0.5
+
+[[cases]]
+id = "PER-005-benedict-gross-body"
+input = "Benedict Gross proved a theorem"
+context = "body_text"
+expected_match = true
+expected_canonical = "Benedict Gross"
+expected_role = "title_mention"
+expected_confidence = 0.5
+extra_scholars = ["benedict-gross"]
+
+[[cases]]
+id = "PER-005-pierre-deligne-body"
+input = "Pierre Deligne proved"
+context = "body_text"
+expected_match = true
+expected_canonical = "Pierre Deligne"
+expected_role = "title_mention"
+expected_confidence = 0.5
+
+[[cases]]
+id = "PER-005-terry-tao-body"
+input = "Terry Tao proved"
+context = "body_text"
+expected_match = true
+expected_canonical = "Terence Tao"
+expected_role = "title_mention"
+expected_confidence = 0.5
+
+# --- StructuredField with different roles ------------------------------------
+
+[[cases]]
+id = "PER-006-zagier-organizer"
+input = "Organizer: Don Zagier"
+context = "structured_field_organizer"
+expected_match = true
+expected_canonical = "Don Zagier"
+expected_role = "organizer"
+expected_confidence = 1.0
+
+[[cases]]
+id = "PER-006-deligne-lecturer"
+input = "Lecturer: Pierre Deligne"
+context = "structured_field_lecturer"
+expected_match = true
+expected_canonical = "Pierre Deligne"
+expected_role = "lecturer"
+expected_confidence = 1.0
+
+[[cases]]
+id = "PER-006-tao-panelist"
+input = "Panelist: Terence Tao"
+context = "structured_field_panelist"
+expected_match = true
+expected_canonical = "Terence Tao"
+expected_role = "panelist"
+expected_confidence = 1.0
+
+[[cases]]
+id = "PER-006-witten-honoree"
+input = "Honoree: Edward Witten"
+context = "structured_field_honoree"
+expected_match = true
+expected_canonical = "Edward Witten"
+expected_role = "honoree"
+expected_confidence = 1.0
+
+[[cases]]
+id = "PER-006-wiles-series-namesake"
+input = "Series namesake: Andrew Wiles"
+context = "structured_field_series_namesake"
+expected_match = true
+expected_canonical = "Andrew Wiles"
+expected_role = "series_namesake"
+expected_confidence = 1.0
+
+[[cases]]
+id = "PER-006-villani-participant"
+input = "Participant: Cédric Villani"
+context = "structured_field_participant"
+expected_match = true
+expected_canonical = "Cédric Villani"
+expected_role = "participant"
+expected_confidence = 1.0
+
+# --- Empty scholars list -----------------------------------------------------
+
+[[cases]]
+id = "PER-007-empty-scholars"
+input = "Speaker: Don Zagier"
+context = "structured_field_speaker"
+expected_match = false
+expected_canonical = "Don Zagier"
+empty_scholars = true
+expected_hit_count = 0
+
+[[cases]]
+id = "PER-007-empty-scholars-body"
+input = "Terence Tao proved"
+context = "body_text"
+expected_match = false
+expected_canonical = "Terence Tao"
+empty_scholars = true
+expected_hit_count = 0
+
+# --- No match cases (text with no scholar names) -----------------------------
+
+[[cases]]
+id = "PER-008-no-match-1"
+input = "A conference on topology"
+context = "body_text"
+expected_match = false
+expected_canonical = "Don Zagier"
+expected_hit_count = 0
+
+[[cases]]
+id = "PER-008-no-match-2"
+input = "Workshop on probability"
+context = "title_text"
+expected_match = false
+expected_canonical = "Pierre Deligne"
+expected_hit_count = 0
+
+[[cases]]
+id = "PER-008-no-match-3"
+input = "Seminar on analysis"
+context = "structured_field_speaker"
+expected_match = false
+expected_canonical = "Edward Witten"
+expected_hit_count = 0
+
+[[cases]]
+id = "PER-008-no-match-4"
+input = "Colloquium next week"
+context = "body_text"
+expected_match = false
+expected_canonical = "Terence Tao"
+expected_hit_count = 0
+
+[[cases]]
+id = "PER-008-no-match-5"
+input = "Annual lecture series"
+context = "title_text"
+expected_match = false
+expected_canonical = "Maxim Kontsevich"
+expected_hit_count = 0
+
+# --- Title text cases --------------------------------------------------------
+
+[[cases]]
+id = "PER-009-zagier-title"
+input = "Zagier on modular forms"
+context = "title_text"
+expected_match = true
+expected_canonical = "Don Zagier"
+expected_role = "title_mention"
+expected_confidence = 0.5
+
+[[cases]]
+id = "PER-009-witten-title"
+input = "Witten and string theory"
+context = "title_text"
+expected_match = true
+expected_canonical = "Edward Witten"
+expected_role = "title_mention"
+expected_confidence = 0.5
+
+[[cases]]
+id = "PER-009-kontsevich-title"
+input = "Kontsevich and mirror symmetry"
+context = "title_text"
+expected_match = true
+expected_canonical = "Maxim Kontsevich"
+expected_role = "title_mention"
+expected_confidence = 0.5
+
+# --- Multi-scholar text ------------------------------------------------------
+
+[[cases]]
+id = "PER-010-multi-zagier-body"
+input = "Zagier and Deligne"
+context = "body_text"
+expected_match = true
+expected_canonical = "Don Zagier"
+expected_role = "title_mention"
+expected_confidence = 0.5
+
+[[cases]]
+id = "PER-010-multi-deligne-body"
+input = "Zagier and Deligne"
+context = "body_text"
+expected_match = true
+expected_canonical = "Pierre Deligne"
+expected_role = "title_mention"
+expected_confidence = 0.5
+
+[[cases]]
+id = "PER-010-multi-zagier-structured"
+input = "Speakers: Zagier, Deligne"
+context = "structured_field_speaker"
+expected_match = true
+expected_canonical = "Don Zagier"
+expected_role = "speaker"
+expected_confidence = 1.0
+
+[[cases]]
+id = "PER-010-multi-deligne-structured"
+input = "Speakers: Zagier, Deligne"
+context = "structured_field_speaker"
+expected_match = true
+expected_canonical = "Pierre Deligne"
+expected_role = "speaker"
+expected_confidence = 1.0
+
+# --- Edge cases --------------------------------------------------------------
+
+[[cases]]
+id = "PER-011-empty-text"
+input = ""
+context = "body_text"
+expected_match = false
+expected_canonical = "Don Zagier"
+expected_hit_count = 0
+
+[[cases]]
+id = "PER-011-whitespace-text"
+input = "   "
+context = "title_text"
+expected_match = false
+expected_canonical = "Don Zagier"
+expected_hit_count = 0
