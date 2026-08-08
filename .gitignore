@@ -11,6 +11,10 @@
 /.codegraph
 /.codegraph/
 
+# Orchestration / agent scratch (per-machine, not project truth)
+/.omo
+/.omo/
+
 # Coverage / xtask artifacts
 *.profraw
 /coverage
