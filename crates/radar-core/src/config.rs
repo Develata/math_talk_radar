@@ -39,6 +39,25 @@ pub enum AdapterKind {
     None,
 }
 
+/// CSS selectors for the configured HTML adapter (SRC-004, ADR-0005). Carried
+/// on `SourceSpec::selectors`; only consulted by `AdapterKind::HtmlConfig`.
+/// `list`/`list_link`/`detail_title`/`detail_date` are required when the
+/// adapter is in use; the `detail_*` optional fields default to `None` when
+/// absent from TOML.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct HtmlSelectors {
+    pub list: String,
+    pub list_link: String,
+    pub detail_title: String,
+    pub detail_date: String,
+    #[serde(default)]
+    pub detail_location: Option<String>,
+    #[serde(default)]
+    pub detail_description: Option<String>,
+    #[serde(default)]
+    pub detail_speaker: Option<String>,
+}
+
 /// A source entry loaded from `config/sources.toml` (§17). Adapters and the
 /// fetch coordinator consume this; it is the source registry's runtime shape.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -67,6 +86,8 @@ pub struct SourceSpec {
     pub enabled: bool,
     #[serde(default)]
     pub fixture: Option<String>,
+    #[serde(default)]
+    pub selectors: Option<HtmlSelectors>,
 }
 
 fn default_max_depth() -> u8 {
@@ -75,4 +96,95 @@ fn default_max_depth() -> u8 {
 
 fn default_request_budget() -> u32 {
     20
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SourceSpec;
+
+    const MINIMAL_TOML: &str = r#"
+id = "mpim-bonn"
+name = "MPIM Bonn"
+entrypoint = "https://www.mpim-bonn.mpg.de/events"
+"#;
+
+    #[test]
+    fn source_spec_deserializes_without_selectors_field() {
+        let source: SourceSpec = toml::from_str(MINIMAL_TOML).expect("minimal SourceSpec parses");
+        assert_eq!(source.id, "mpim-bonn");
+        assert_eq!(source.name, "MPIM Bonn");
+        assert!(source.fixture.is_none());
+    }
+
+    const SELECTORS_TOML: &str = r#"
+id = "mpim-bonn"
+name = "MPIM Bonn"
+entrypoint = "https://www.mpim-bonn.mpg.de/events"
+
+[selectors]
+list = ".event-list .event"
+list_link = "a.event-link"
+detail_title = "h1.event-title"
+detail_date = ".event-date"
+detail_location = ".event-location"
+detail_description = ".event-abstract"
+detail_speaker = ".event-speaker"
+"#;
+
+    #[test]
+    fn source_spec_deserializes_with_selectors_section() {
+        let source: SourceSpec =
+            toml::from_str(SELECTORS_TOML).expect("SourceSpec with selectors parses");
+        let selectors = source
+            .selectors
+            .as_ref()
+            .expect("selectors field is Some when [selectors] present");
+        assert_eq!(selectors.list, ".event-list .event");
+        assert_eq!(selectors.list_link, "a.event-link");
+        assert_eq!(selectors.detail_title, "h1.event-title");
+        assert_eq!(selectors.detail_date, ".event-date");
+        assert_eq!(
+            selectors.detail_location.as_deref(),
+            Some(".event-location")
+        );
+        assert_eq!(
+            selectors.detail_description.as_deref(),
+            Some(".event-abstract")
+        );
+        assert_eq!(selectors.detail_speaker.as_deref(), Some(".event-speaker"));
+    }
+
+    #[test]
+    fn source_spec_rejects_non_table_selectors_gracefully() {
+        let toml = r#"
+id = "mpim-bonn"
+name = "MPIM Bonn"
+selectors = "not_a_table"
+"#;
+        let result: Result<SourceSpec, toml::de::Error> = toml::from_str(toml);
+        assert!(
+            result.is_err(),
+            "non-table selectors must fail to deserialize, not panic or silently accept"
+        );
+    }
+
+    #[test]
+    fn source_spec_selectors_optional_fields_default_to_none() {
+        let toml = r#"
+id = "mpim-bonn"
+name = "MPIM Bonn"
+
+[selectors]
+list = "li.event"
+list_link = "a"
+detail_title = "h1"
+detail_date = "time"
+"#;
+        let source: SourceSpec = toml::from_str(toml).expect("minimal selectors parse");
+        let selectors = source.selectors.expect("selectors present");
+        assert_eq!(selectors.list, "li.event");
+        assert!(selectors.detail_location.is_none());
+        assert!(selectors.detail_description.is_none());
+        assert!(selectors.detail_speaker.is_none());
+    }
 }
