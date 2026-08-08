@@ -1,0 +1,68 @@
+# Scholar registry (§6.1). Decoupled from any parser. The matcher (M1) loads
+# this and enforces the §6.2 ambiguity rules: short/ambiguous surnames (Li, Wang,
+# Tao, Yau, Gross, ...) require a structured person field or strong
+# name-in-context evidence; a title mention (e.g. "Gross-Zagier formula") never
+# yields role `speaker`.
+#
+# M0 seeds a small accurate set of Fields/Abel/Wolf/Crafoord laureates. The full
+# baseline coverage is expanded in M1/M6.
+
+[[scholars]]
+id = "don-zagier"
+canonical_name = "Don Zagier"
+aliases = ["Zagier", "Don B. Zagier"]
+tags = ["wolf", "curated"]
+
+[[scholars]]
+id = "pierre-deligne"
+canonical_name = "Pierre Deligne"
+aliases = ["Deligne"]
+tags = ["fields", "wolf", "abel", "crafoord"]
+
+[[scholars]]
+id = "jean-pierre-serre"
+canonical_name = "Jean-Pierre Serre"
+aliases = ["Serre", "J.-P. Serre"]
+tags = ["fields", "abel", "wolf"]
+
+[[scholars]]
+id = "edward-witten"
+canonical_name = "Edward Witten"
+aliases = ["Witten", "Ed Witten"]
+tags = ["fields"]
+
+[[scholars]]
+id = "andrew-wiles"
+canonical_name = "Andrew Wiles"
+aliases = ["Wiles", "Sir Andrew Wiles"]
+tags = ["abel", "wolf"]
+
+[[scholars]]
+id = "terence-tao"
+canonical_name = "Terence Tao"
+aliases = ["Tao", "Terry Tao"]
+tags = ["fields"]
+
+[[scholars]]
+id = "timothy-gowers"
+canonical_name = "W. Timothy Gowers"
+aliases = ["Gowers", "Tim Gowers"]
+tags = ["fields"]
+
+[[scholars]]
+id = "shing-tung-yau"
+canonical_name = "Shing-Tung Yau"
+aliases = ["Yau", "S.-T. Yau"]
+tags = ["fields"]
+
+[[scholars]]
+id = "maxim-kontsevich"
+canonical_name = "Maxim Kontsevich"
+aliases = ["Kontsevich"]
+tags = ["fields"]
+
+[[scholars]]
+id = "cedric-villani"
+canonical_name = "Cédric Villani"
+aliases = ["Villani"]
+tags = ["fields", "abel"]

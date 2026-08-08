@@ -1,0 +1,19 @@
+[package]
+name = "radar-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Pure domain model for math_talk_radar: events, talks, people, topics, dates, dedup, ranking."
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[dependencies]
+thiserror.workspace = true
+serde.workspace = true
+chrono.workspace = true
+chrono-tz.workspace = true
+url.workspace = true
+blake3.workspace = true

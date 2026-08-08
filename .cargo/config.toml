@@ -1,0 +1,13 @@
+# Local cargo configuration for math_talk_radar.
+#
+# `cargo xtask <cmd>` is shorthand for `cargo run --package xtask -- <cmd>` so
+# the project-local dev tooling (acceptance-matrix validation, source-registry
+# validation, baseline orchestration, static-release checks) can be invoked the
+# way the engineering contract documents.
+[alias]
+xtask = "run --package xtask --"
+
+# Static release target (M7): x86_64-unknown-linux-musl. Uncomment after
+# `rustup target add x86_64-unknown-linux-musl` when release engineering lands.
+# [build]
+# target = "x86_64-unknown-linux-musl"

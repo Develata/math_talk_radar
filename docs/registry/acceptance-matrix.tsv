@@ -1,0 +1,66 @@
+case_id	requirement	plan_ref	test_surface	automation	gate	evidence	status
+CLI-001	--help complete	docs/plan/09_cli_output_contract.md	integration	cargo test --test integration	hard		pending
+CLI-002	--version zero network	docs/plan/09_cli_output_contract.md	integration	cargo test --test integration	hard		pending
+CLI-003	scan stdout pure JSON	docs/plan/09_cli_output_contract.md	integration	cargo test --test integration	hard		pending
+CLI-004	stderr/stdout separated	docs/plan/09_cli_output_contract.md	integration	cargo test --test integration	hard		pending
+CFG-001	embedded default config	docs/plan/03_architecture.md	unit	cargo test -p radar-core	hard		pending
+CFG-002	invalid config fails closed	docs/plan/03_architecture.md	integration	cargo test --test integration	hard		pending
+DATE-001	same-month range	docs/plan/02_domain_model.md	unit	cargo test -p radar-core	hard		pending
+DATE-002	cross-month range	docs/plan/02_domain_model.md	unit	cargo test -p radar-core	hard		pending
+DATE-003	US date format	docs/plan/02_domain_model.md	unit	cargo test -p radar-core	hard		pending
+DATE-004	interval overlap	docs/plan/02_domain_model.md	unit	cargo test -p radar-core	hard		pending
+DATE-005	unparsed date retained	docs/plan/02_domain_model.md	unit	cargo test -p radar-core	hard		pending
+SRC-001	RSS adapter	docs/plan/04_source_adapter_contract.md	fixture	cargo test -p radar-adapters	hard		pending
+SRC-002	ICS adapter	docs/plan/04_source_adapter_contract.md	fixture	cargo test -p radar-adapters	hard		pending
+SRC-003	JSON-LD adapter	docs/plan/04_source_adapter_contract.md	fixture	cargo test -p radar-adapters	hard		pending
+SRC-004	configured HTML adapter	docs/plan/04_source_adapter_contract.md	fixture	cargo test -p radar-adapters	hard		pending
+SRC-005	generic fallback	docs/plan/04_source_adapter_contract.md	fixture	cargo test -p radar-adapters	hard		pending
+SRC-006	detail depth <=2	docs/plan/04_source_adapter_contract.md	mock server	cargo test --test http_mock	hard		pending
+SRC-007	host allowlist	docs/plan/04_source_adapter_contract.md	mock server	cargo test --test http_mock	hard		pending
+SRC-008	request budget	docs/plan/04_source_adapter_contract.md	mock server	cargo test --test http_mock	hard		pending
+HTTP-001	timeout isolation	docs/plan/05_fetching_reliability.md	mock server	cargo test --test http_mock	hard		pending
+HTTP-002	retry transient once	docs/plan/05_fetching_reliability.md	mock server	cargo test --test http_mock	hard		pending
+HTTP-003	404 no retry	docs/plan/05_fetching_reliability.md	mock server	cargo test --test http_mock	hard		pending
+HTTP-004	partial source failure exit 0	docs/plan/05_fetching_reliability.md	integration	cargo test --test integration	hard		pending
+HTTP-005	zero usable source exit 4	docs/plan/05_fetching_reliability.md	integration	cargo test --test integration	hard		pending
+PER-001	scholar alias	docs/plan/06_normalization_matching.md	golden	cargo test --test golden	hard		pending
+PER-002	multilingual alias	docs/plan/06_normalization_matching.md	golden	cargo test --test golden	hard		pending
+PER-003	concept name not speaker	docs/plan/06_normalization_matching.md	golden	cargo test --test golden	hard		pending
+TOP-001	topic alias matching	docs/plan/06_normalization_matching.md	golden	cargo test --test golden	hard		pending
+TALK-001	talk + speaker extraction	docs/plan/02_domain_model.md	fixture	cargo test -p radar-adapters	hard		pending
+MED-001	video detection	docs/plan/04_source_adapter_contract.md	fixture	cargo test -p radar-adapters	hard		pending
+MED-002	slides detection	docs/plan/04_source_adapter_contract.md	fixture	cargo test -p radar-adapters	hard		pending
+MED-003	public access status	docs/plan/04_source_adapter_contract.md	fixture	cargo test -p radar-adapters	hard		pending
+DEDUP-001	identical event merge	docs/plan/06_normalization_matching.md	golden	cargo test --test golden	hard		pending
+DEDUP-002	distinct event not merge	docs/plan/06_normalization_matching.md	golden	cargo test --test golden	hard		pending
+RANK-001	topic score	docs/plan/08_ranking.md	golden	cargo test --test golden	hard		pending
+RANK-002	recording score	docs/plan/08_ranking.md	golden	cargo test --test golden	hard		pending
+RANK-003	title-only scholar no boost	docs/plan/08_ranking.md	golden	cargo test --test golden	hard		pending
+STATE-001	first_seen persisted	docs/plan/07_state_change_detection.md	integration	cargo test --test integration	hard		pending
+STATE-002	second scan unchanged	docs/plan/07_state_change_detection.md	integration	cargo test --test integration	hard		pending
+STATE-003	media_added	docs/plan/07_state_change_detection.md	integration	cargo test --test integration	hard		pending
+STATE-004	--no-state no write	docs/plan/07_state_change_detection.md	integration	cargo test --test integration	hard		pending
+UPD-001	update check no write	docs/plan/10_update_uninstall.md	mock release	cargo test --test lifecycle_sandbox	hard		pending
+UPD-002	checksum failure preserves binary	docs/plan/10_update_uninstall.md	sandbox	cargo test --test lifecycle_sandbox	hard		pending
+UPD-003	valid update replaces binary	docs/plan/10_update_uninstall.md	sandbox	cargo test --test lifecycle_sandbox	hard		pending
+UPD-004	broken candidate rollback	docs/plan/10_update_uninstall.md	sandbox	cargo test --test lifecycle_sandbox	hard		pending
+UNS-001	dry-run zero mutation	docs/plan/10_update_uninstall.md	sandbox	cargo test --test lifecycle_sandbox	hard		pending
+UNS-002	keep-data preserves only data	docs/plan/10_update_uninstall.md	sandbox	cargo test --test lifecycle_sandbox	hard		pending
+UNS-003	purge removes owned paths	docs/plan/10_update_uninstall.md	sandbox	cargo test --test lifecycle_sandbox	hard		pending
+UNS-004	unmanaged binary protection	docs/plan/10_update_uninstall.md	sandbox	cargo test --test lifecycle_sandbox	hard		pending
+SEC-001	no unsafe	docs/plan/11_security.md	lint	cargo clippy -D warnings	hard		pending
+SEC-002	cargo-deny	docs/plan/11_security.md	CI	cargo deny check	hard		pending
+SEC-003	no secret logging	docs/plan/11_security.md	review/test	cargo test + review	hard		pending
+PERF-001	offline RSS <=128 MiB	docs/plan/13_performance_budget.md	baseline	cargo xtask baseline	hard		pending
+PERF-002	binary <=30 MiB	docs/plan/12_release.md	release	release.yml	hard		pending
+REL-001	30% source failure isolation	docs/plan/05_fetching_reliability.md	fault injection	cargo test --test reliability	hard		pending
+REL-002	global deadline	docs/plan/05_fetching_reliability.md	mock server	cargo test --test http_mock	hard		pending
+REL-003	stable deterministic IDs	docs/plan/05_fetching_reliability.md	golden	cargo test --test golden	hard		pending
+DOC-001	every plan has acceptance mapping	docs/plan/00_engineering_constitution.md	xtask	cargo xtask check-matrix	hard		pending
+DOC-002	every hard case has automation	docs/plan/00_engineering_constitution.md	xtask	cargo xtask check-matrix	hard		pending
+RELS-001	static musl binary	docs/plan/12_release.md	container	release.yml (clean ubuntu)	hard		pending
+RELS-002	checksum asset	docs/plan/12_release.md	release	release.yml	hard		pending
+RELS-003	artifact provenance	docs/plan/12_release.md	release	release.yml	hard		pending
+LIVE-001	>=20 audited sources	docs/plan/01_product_scope.md	registry	cargo xtask check	hard		pending
+LIVE-002	>=10 enabled fixture-backed sources	docs/plan/01_product_scope.md	registry	cargo xtask check	hard		pending
+LIVE-003	live source health ratio	docs/plan/01_product_scope.md	scheduled	live-smoke.yml	advisory		pending

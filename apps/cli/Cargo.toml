@@ -1,0 +1,35 @@
+[package]
+name = "math_talk_radar"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Radar for discovering public mathematics conferences, talks, lecture series, and recordings."
+keywords.workspace = true
+categories.workspace = true
+
+[lib]
+name = "math_talk_radar_cli"
+
+[[bin]]
+name = "math_talk_radar"
+path = "src/main.rs"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[dependencies]
+radar-core.workspace = true
+radar-fetch.workspace = true
+radar-adapters.workspace = true
+radar-state.workspace = true
+clap.workspace = true
+tokio.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+url.workspace = true

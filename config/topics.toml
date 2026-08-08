@@ -1,0 +1,43 @@
+# Topic registry (§7). Canonical topic + aliases + phrases. MVP uses no semantic
+# model. User interest weights (config/interests.example.toml) alter ranking only
+# and never delete events.
+
+[[topics]]
+id = "arithmetic_geometry"
+name = "Arithmetic Geometry"
+aliases = ["arithmetic geometry", "Shimura varieties", "Diophantine geometry"]
+
+[[topics]]
+id = "number_theory"
+name = "Number Theory"
+aliases = ["number theory", "analytic number theory", "algebraic number theory"]
+
+[[topics]]
+id = "algebraic_geometry"
+name = "Algebraic Geometry"
+aliases = ["algebraic geometry", "schemes", "derived algebraic geometry"]
+
+[[topics]]
+id = "probability"
+name = "Probability Theory"
+aliases = ["probability", "stochastic processes", "random graphs"]
+
+[[topics]]
+id = "mathematical_physics"
+name = "Mathematical Physics"
+aliases = ["mathematical physics", "quantum field theory", "gauge theory"]
+
+[[topics]]
+id = "representation_theory"
+name = "Representation Theory"
+aliases = ["representation theory", "Lie theory", "vertex algebras"]
+
+[[topics]]
+id = "analysis"
+name = "Analysis"
+aliases = ["analysis", "harmonic analysis", "PDE", "partial differential equations"]
+
+[[topics]]
+id = "topology"
+name = "Topology"
+aliases = ["topology", "algebraic topology", "geometric topology", "homotopy theory"]

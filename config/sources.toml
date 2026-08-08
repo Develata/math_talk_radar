@@ -1,0 +1,26 @@
+# math_talk_radar runtime source config (§17).
+#
+# This is the runtime shape consumed by the CLI. The authoritative audit
+# registry — including pending_audit entries and per-source health — lives in
+# docs/registry/source-registry.tsv and is validated by `cargo xtask check`.
+#
+# M0 ships an empty source list. M6 promotes audited sources to enabled entries
+# here (or the CLI reads the registry directly; the binding is finalized in M4).
+# Each entry must declare allowed_hosts, max_depth, and request_budget (§14).
+#
+# Example shape (uncomment and fill after auditing the real entrypoint):
+#
+#   [[sources]]
+#   id = "clay"
+#   name = "Clay Mathematics Institute"
+#   tier = "S"
+#   kind = "institution_calendar"
+#   adapter = "html_config"
+#   entrypoint = "https://www.claymath.org/events"
+#   allowed_hosts = ["www.claymath.org", "claymath.org"]
+#   max_depth = 2
+#   request_budget = 20
+#   media_strategy = "follow_media_page"
+#   dynamic = false
+#   enabled = true
+#   fixture = "clay-list.html"

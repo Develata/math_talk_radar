@@ -1,0 +1,15 @@
+[package]
+name = "xtask"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Project-local dev tooling: acceptance-matrix + source-registry validation, baseline, static-release checks."
+publish = false
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[dependencies]
+anyhow.workspace = true

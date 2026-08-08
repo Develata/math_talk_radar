@@ -1,0 +1,17 @@
+[package]
+name = "radar-state"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Embedded local state for math_talk_radar: change detection, first/last seen, source health."
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[dependencies]
+radar-core.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+chrono.workspace = true

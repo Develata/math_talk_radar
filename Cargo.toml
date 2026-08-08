@@ -1,0 +1,79 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/radar-core",
+    "crates/radar-fetch",
+    "crates/radar-adapters",
+    "crates/radar-state",
+    "apps/cli",
+    "xtask",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT"
+authors = ["Deve and math_talk_radar contributors"]
+repository = "https://github.com/Develata/math_talk_radar"
+homepage = "https://github.com/Develata/math_talk_radar"
+documentation = "https://github.com/Develata/math_talk_radar#readme"
+description = "Radar for discovering public mathematics conferences, talks, lecture series, and recordings."
+keywords = ["mathematics", "conferences", "talks", "radar", "cli"]
+categories = ["command-line-utilities"]
+publish = false
+
+[workspace.dependencies]
+# Error / utility
+anyhow = "1.0"
+thiserror = "2.0"
+itertools = "0.13"
+once_cell = "1.20"
+regex = "1.10"
+
+# Serialization / config / schema
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_with = "3.0"
+toml = "0.8"
+schemars = "0.8"
+
+# Dates / identity / versioning
+chrono = { version = "0.4", features = ["serde"] }
+chrono-tz = { version = "0.10", features = ["serde"] }
+url = { version = "2.5", features = ["serde"] }
+blake3 = "1.5"
+sha2 = "0.10"
+semver = { version = "1.0", features = ["serde"] }
+
+# Async runtime / HTTP
+tokio = { version = "1.0", features = ["full"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "gzip", "json", "stream"] }
+
+# Parsing
+scraper = "0.22"
+feed-rs = "2.0"
+
+# State
+redb = "2.0"
+
+# CLI / diagnostics
+clap = { version = "4.5", features = ["derive", "env", "cargo"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "fmt"] }
+
+# Internal crates
+radar-core = { path = "crates/radar-core" }
+radar-fetch = { path = "crates/radar-fetch" }
+radar-adapters = { path = "crates/radar-adapters" }
+radar-state = { path = "crates/radar-state" }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
+
+[profile.dev]
+debug = 1

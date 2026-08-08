@@ -1,0 +1,44 @@
+name: Live Smoke
+
+# Advisory live-source health check (B5). Third-party outages must NOT fail CI
+# (LIVE-003 is `advisory`). Runs on a schedule and on manual dispatch.
+
+on:
+  schedule:
+    - cron: "0 6 * * *"   # 06:00 UTC daily
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  live-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        run: rustup show
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build CLI
+        run: cargo build --release
+
+      - name: Live smoke (advisory)
+        run: |
+          ./target/release/math_talk_radar sources check --json > live-smoke.json || true
+          ./target/release/math_talk_radar doctor --network --json > doctor.json || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: live-smoke-results
+          path: |
+            live-smoke.json
+            doctor.json

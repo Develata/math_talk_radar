@@ -1,0 +1,2 @@
+# Integration tests — assert_cmd CLI surface, mock-server fetch, redb state.
+# See docs/acceptance-cases/ for per-case specifications.

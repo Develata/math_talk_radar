@@ -1,0 +1,8 @@
+# Example user interest weights (§7). Copy to ~/.config/math_talk_radar/interests.toml
+# or pass via `--interests <path>`. Weights are in [0.0, 1.0] and alter ranking
+# ONLY — they never remove events from the output.
+
+[interests]
+arithmetic_geometry = 1.0
+number_theory = 0.8
+probability = 0.6

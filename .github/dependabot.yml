@@ -1,0 +1,36 @@
+version: 2
+updates:
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+    groups:
+      rust-core:
+        patterns:
+          - "serde"
+          - "serde_json"
+          - "toml"
+          - "thiserror"
+          - "anyhow"
+      reqwest:
+        patterns:
+          - "reqwest"
+          - "rustls*"
+          - "tokio"
+      redb:
+        patterns:
+          - "redb"
+      cli:
+        patterns:
+          - "clap"
+          - "tracing*"
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "dependencies"
+      - "ci"

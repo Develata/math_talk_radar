@@ -1,0 +1,25 @@
+id	name	tier	kind	adapter	entrypoint	allowed_hosts	max_depth	request_budget	media_strategy	dynamic	enabled	fixture	last_verified	status	notes
+clay	Clay Mathematics Institute	unknown	institution_calendar	none			2	20		false	false			pending_audit	M0 audit pending
+ihes	IHES	unknown	institution_calendar	none			2	20		false	false			pending_audit	M0 audit pending
+slmath	SLMath (MSRI)	unknown	institution_calendar	none			2	20		false	false			pending_audit	M0 audit pending
+ias-math	Institute for Advanced Study — Mathematics	unknown	institution_calendar	none			2	20		false	false			pending_audit	M0 audit pending
+fields	Fields Institute	unknown	institution_calendar	none			2	20		false	false			pending_audit	M0 audit pending
+birs	Banff International Research Station (BIRS)	unknown	institution_calendar	none			2	20		false	false			pending_audit	M0 audit pending
+ini	Isaac Newton Institute	unknown	institution_calendar	none			2	20		false	false			pending_audit	M0 audit pending
+oberwolfach	Oberwolfach (MFO)	unknown	institution_calendar	none			2	20		false	false			pending_audit	M0 audit pending
+cirm	CIRM Luminy	unknown	institution_calendar	none			2	20		false	false			pending_audit	M0 audit pending
+hcm	Hausdorff Center for Mathematics	unknown	institution_calendar	none			2	20		false	false			pending_audit	M0 audit pending
+mpim	Max Planck Institute for Mathematics Bonn	unknown	institution_calendar	none			2	20		false	false			pending_audit	M0 audit pending
+scgp	Simons Center for Geometry and Physics	unknown	institution_calendar	none			2	20		false	false			pending_audit	M0 audit pending
+mit-math	MIT Mathematics	unknown	institution_calendar	none			2	20		false	false			pending_audit	M0 audit pending
+princeton-math	Princeton Mathematics	unknown	institution_calendar	none			2	20		false	false			pending_audit	M0 audit pending
+harvard-math	Harvard Mathematics	unknown	institution_calendar	none			2	20		false	false			pending_audit	M0 audit pending
+stanford-math	Stanford Mathematics	unknown	institution_calendar	none			2	20		false	false			pending_audit	M0 audit pending
+berkeley-math	UC Berkeley Mathematics	unknown	institution_calendar	none			2	20		false	false			pending_audit	M0 audit pending
+oxford-math	Oxford Mathematical Institute	unknown	institution_calendar	none			2	20		false	false			pending_audit	M0 audit pending
+cambridge-dpmms	Cambridge DPMMS	unknown	institution_calendar	none			2	20		false	false			pending_audit	M0 audit pending
+eth-math	ETH Zurich Mathematics	unknown	institution_calendar	none			2	20		false	false			pending_audit	M0 audit pending
+ams-calendar	AMS Calendar	unknown	conference_series	none			2	20		false	false			pending_audit	M0 audit pending
+ems-calendar	EMS Calendar	unknown	conference_series	none			2	20		false	false			pending_audit	M0 audit pending
+mathmeetings	MathMeetings	unknown	conference_series	none			2	20		false	false			pending_audit	M0 audit pending
+icm	International Congress of Mathematicians	unknown	conference_series	none			2	20		false	false			pending_audit	M0 audit pending

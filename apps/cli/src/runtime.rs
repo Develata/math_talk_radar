@@ -1,0 +1,62 @@
+//! Runtime dispatch, logging setup, and exit-code mapping (§32).
+use std::process::ExitCode;
+
+use tracing_subscriber::EnvFilter;
+
+use crate::cli::{Cli, Command, LogFormat};
+use crate::commands;
+
+/// A command-level error carrying a stable exit code (§32).
+#[derive(Debug)]
+pub struct CliError {
+    pub code: u8,
+    pub message: String,
+}
+
+impl CliError {
+    pub fn not_implemented(cmd: &str) -> Self {
+        Self {
+            code: 1,
+            message: format!("{cmd}: not implemented in M0"),
+        }
+    }
+}
+
+pub fn init_logging(verbose: u8, log_format: Option<LogFormat>) {
+    let default_level = match verbose {
+        0 => "warn",
+        1 => "info",
+        _ => "debug",
+    };
+    let filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_level));
+    let subscriber = tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_writer(std::io::stderr);
+    match log_format {
+        Some(LogFormat::Json) => {
+            let _ = subscriber.json().try_init();
+        }
+        _ => {
+            let _ = subscriber.try_init();
+        }
+    }
+}
+
+pub async fn run(cli: Cli) -> ExitCode {
+    let result = match cli.command {
+        Command::Scan(a) => commands::scan::run(a).await,
+        Command::Sources(a) => commands::sources::run(a).await,
+        Command::Doctor(a) => commands::doctor::run(a).await,
+        Command::Update(a) => commands::update::run(a).await,
+        Command::Uninstall(a) => commands::uninstall::run(a).await,
+        Command::Schema(a) => commands::schema::run(a).await,
+    };
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("error: {}", e.message);
+            ExitCode::from(e.code)
+        }
+    }
+}
