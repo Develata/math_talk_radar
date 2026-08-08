@@ -362,10 +362,10 @@ fn validate_matrix(root: &Path) -> Vec<String> {
         let mut all_plans: HashSet<String> = HashSet::new();
         for entry in rd.flatten() {
             let p = entry.path();
-            if p.extension().and_then(|e| e.to_str()) == Some("md") {
-                if let Ok(rel) = p.strip_prefix(root) {
-                    all_plans.insert(rel.to_string_lossy().replace('\\', "/"));
-                }
+            if p.extension().and_then(|e| e.to_str()) == Some("md")
+                && let Ok(rel) = p.strip_prefix(root)
+            {
+                all_plans.insert(rel.to_string_lossy().replace('\\', "/"));
             }
         }
         for plan in &all_plans {

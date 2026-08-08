@@ -145,10 +145,10 @@ pub fn score_event(
         }
     }
     let people = people_score.min(MAX_PEOPLE);
-    if people >= 5 {
-        if let Some(name) = people_winner {
-            rank_reasons.push(format!("important_speaker: {}", name));
-        }
+    if people >= 5
+        && let Some(name) = people_winner
+    {
+        rank_reasons.push(format!("important_speaker: {}", name));
     }
 
     // 6. Completeness component (cap MAX_COMPLETENESS).

@@ -119,22 +119,22 @@ pub fn run(data: &str, seeded: &[ScholarRecord]) -> PeopleStats {
         }
 
         // Check expected_hit_count if specified.
-        if let Some(expected_count) = case.expected_hit_count {
-            if hits.len() != expected_count {
-                stats.failures.push(format!(
-                    "{}: expected {} hits, got {}",
-                    case.id,
-                    expected_count,
-                    hits.len()
-                ));
-                // Count as FP or FN depending on expected_match.
-                if case.expected_match {
-                    stats.fn_ += 1;
-                } else {
-                    stats.fp += 1;
-                }
-                continue;
+        if let Some(expected_count) = case.expected_hit_count
+            && hits.len() != expected_count
+        {
+            stats.failures.push(format!(
+                "{}: expected {} hits, got {}",
+                case.id,
+                expected_count,
+                hits.len()
+            ));
+            // Count as FP or FN depending on expected_match.
+            if case.expected_match {
+                stats.fn_ += 1;
+            } else {
+                stats.fp += 1;
             }
+            continue;
         }
 
         let found = hits
