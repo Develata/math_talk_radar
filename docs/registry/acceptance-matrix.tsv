@@ -5,11 +5,11 @@ CLI-003	scan stdout pure JSON	docs/plan/09_cli_output_contract.md	integration	ca
 CLI-004	stderr/stdout separated	docs/plan/09_cli_output_contract.md	integration	cargo test --test integration	hard		pending
 CFG-001	embedded default config	docs/plan/03_architecture.md	unit	cargo test -p radar-core	hard		pending
 CFG-002	invalid config fails closed	docs/plan/03_architecture.md	integration	cargo test --test integration	hard		pending
-DATE-001	same-month range	docs/plan/02_domain_model.md	unit	cargo test -p radar-core	hard		pending
-DATE-002	cross-month range	docs/plan/02_domain_model.md	unit	cargo test -p radar-core	hard		pending
-DATE-003	US date format	docs/plan/02_domain_model.md	unit	cargo test -p radar-core	hard		pending
-DATE-004	interval overlap	docs/plan/02_domain_model.md	unit	cargo test -p radar-core	hard		pending
-DATE-005	unparsed date retained	docs/plan/02_domain_model.md	unit	cargo test -p radar-core	hard		pending
+DATE-001	same-month range	docs/plan/02_domain_model.md	unit	cargo test -p radar-core	hard		pass
+DATE-002	cross-month range	docs/plan/02_domain_model.md	unit	cargo test -p radar-core	hard		pass
+DATE-003	US date format	docs/plan/02_domain_model.md	unit	cargo test -p radar-core	hard		pass
+DATE-004	interval overlap	docs/plan/02_domain_model.md	unit	cargo test -p radar-core	hard		pass
+DATE-005	unparsed date retained	docs/plan/02_domain_model.md	unit	cargo test -p radar-core	hard		pass
 SRC-001	RSS adapter	docs/plan/04_source_adapter_contract.md	fixture	cargo test -p radar-adapters	hard		pending
 SRC-002	ICS adapter	docs/plan/04_source_adapter_contract.md	fixture	cargo test -p radar-adapters	hard		pending
 SRC-003	JSON-LD adapter	docs/plan/04_source_adapter_contract.md	fixture	cargo test -p radar-adapters	hard		pending
@@ -23,19 +23,19 @@ HTTP-002	retry transient once	docs/plan/05_fetching_reliability.md	mock server	c
 HTTP-003	404 no retry	docs/plan/05_fetching_reliability.md	mock server	cargo test --test http_mock	hard		pending
 HTTP-004	partial source failure exit 0	docs/plan/05_fetching_reliability.md	integration	cargo test --test integration	hard		pending
 HTTP-005	zero usable source exit 4	docs/plan/05_fetching_reliability.md	integration	cargo test --test integration	hard		pending
-PER-001	scholar alias	docs/plan/06_normalization_matching.md	golden	cargo test --test golden	hard		pending
-PER-002	multilingual alias	docs/plan/06_normalization_matching.md	golden	cargo test --test golden	hard		pending
-PER-003	concept name not speaker	docs/plan/06_normalization_matching.md	golden	cargo test --test golden	hard		pending
-TOP-001	topic alias matching	docs/plan/06_normalization_matching.md	golden	cargo test --test golden	hard		pending
+PER-001	scholar alias	docs/plan/06_normalization_matching.md	golden	cargo test --test golden	hard		pass
+PER-002	multilingual alias	docs/plan/06_normalization_matching.md	golden	cargo test --test golden	hard		pass
+PER-003	concept name not speaker	docs/plan/06_normalization_matching.md	golden	cargo test --test golden	hard		pass
+TOP-001	topic alias matching	docs/plan/06_normalization_matching.md	golden	cargo test --test golden	hard		pass
 TALK-001	talk + speaker extraction	docs/plan/02_domain_model.md	fixture	cargo test -p radar-adapters	hard		pending
 MED-001	video detection	docs/plan/04_source_adapter_contract.md	fixture	cargo test -p radar-adapters	hard		pending
 MED-002	slides detection	docs/plan/04_source_adapter_contract.md	fixture	cargo test -p radar-adapters	hard		pending
 MED-003	public access status	docs/plan/04_source_adapter_contract.md	fixture	cargo test -p radar-adapters	hard		pending
 DEDUP-001	identical event merge	docs/plan/06_normalization_matching.md	golden	cargo test --test golden	hard		pending
 DEDUP-002	distinct event not merge	docs/plan/06_normalization_matching.md	golden	cargo test --test golden	hard		pending
-RANK-001	topic score	docs/plan/08_ranking.md	golden	cargo test --test golden	hard		pending
-RANK-002	recording score	docs/plan/08_ranking.md	golden	cargo test --test golden	hard		pending
-RANK-003	title-only scholar no boost	docs/plan/08_ranking.md	golden	cargo test --test golden	hard		pending
+RANK-001	topic score	docs/plan/08_ranking.md	golden	cargo test --test golden	hard		pass
+RANK-002	recording score	docs/plan/08_ranking.md	golden	cargo test --test golden	hard		pass
+RANK-003	title-only scholar no boost	docs/plan/08_ranking.md	golden	cargo test --test golden	hard		pass
 STATE-001	first_seen persisted	docs/plan/07_state_change_detection.md	integration	cargo test --test integration	hard		pending
 STATE-002	second scan unchanged	docs/plan/07_state_change_detection.md	integration	cargo test --test integration	hard		pending
 STATE-003	media_added	docs/plan/07_state_change_detection.md	integration	cargo test --test integration	hard		pending

@@ -9,7 +9,7 @@
 
 - 69 cases total.
 - 68 `hard` gate, 1 `advisory` (LIVE-003).
-- All `pending` as of M0.
+- 12 `pass` (M1: DATE-001..005, PER-001..003, TOP-001, RANK-001..003), 57 `pending`.
 
 ## By group
 

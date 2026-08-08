@@ -6,18 +6,27 @@
 
 ## B1 Functional
 
-_(not run until M1)_
+| Suite | M1 result |
+|---|---|
+| `cargo test -p radar-core` (unit) | 42 passed |
+| `cargo test -p radar-core --test golden` | 5 passed (147 golden cases) |
+| `cargo test --workspace` | all pass |
+| Date parser accuracy (§47) | 1.000 (56/56) |
+| Scholar precision (§47) | 1.000 |
+| Scholar recall (§47) | 1.000 |
+| Role-protection FP (§47) | 0 |
 
 ## B2 Quality
 
-| Check | M0 result |
+| Check | M1 result |
 |---|---|
 | `cargo fmt --check` | clean |
-| `cargo clippy --workspace --all-targets -- -D warnings` | clean |
-| `cargo test --workspace` | 4 passed (normalize×2, retry×2) |
+| `cargo clippy --workspace --all-targets --all-features -- -D warnings` | clean |
+| `cargo test --workspace` | 42 unit + 5 golden, all pass |
 | `cargo xtask check` | ok |
 | `cargo xtask check-matrix` | ok |
 | `forbid(unsafe_code)` | enforced in every crate |
+| Acceptance cases `pass` | 12 (DATE×5, PER×3, TOP×1, RANK×3) |
 
 ## B3 Performance
 
