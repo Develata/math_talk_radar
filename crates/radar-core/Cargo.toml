@@ -17,3 +17,9 @@ chrono.workspace = true
 chrono-tz.workspace = true
 url.workspace = true
 blake3.workspace = true
+regex.workspace = true
+unicode-normalization.workspace = true
+unicode-segmentation.workspace = true
+
+[dev-dependencies]
+toml.workspace = true
