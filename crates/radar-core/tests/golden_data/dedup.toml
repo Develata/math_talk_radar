@@ -3,8 +3,8 @@
 # Schema:
 #   id              — unique case identifier (DEDUP-xxx for acceptance)
 #   should_merge    — whether the pair should be detected as duplicates
-#   expected_signal — which signal is expected to match (informational only;
-#                     the test checks should_merge, not the specific signal)
+#   expected_signal — which signal is expected to match (asserted when
+#                     should_merge = true; must match DedupSignal priority)
 #   [a] / [b]       — the two events to compare
 #     title         — event title
 #     url           — optional canonical URL

@@ -201,7 +201,7 @@ pub fn duplicate_signal(a: &Event, b: &Event) -> Option<DedupSignal> {
 /// The returned event keeps the earliest `first_seen_at` and the latest
 /// `last_seen_at`.
 pub fn merge_events(primary: Event, secondary: Event) -> Event {
-    let (mut keep, other) = if primary.score >= other_score(&primary, &secondary) {
+    let (mut keep, other) = if primary.score >= secondary.score {
         (primary, secondary)
     } else {
         (secondary, primary)
@@ -216,11 +216,6 @@ pub fn merge_events(primary: Event, secondary: Event) -> Event {
     keep.last_seen_at = latest(keep.last_seen_at, other.last_seen_at);
 
     keep
-}
-
-fn other_score(a: &Event, b: &Event) -> f32 {
-    let _ = a;
-    b.score
 }
 
 fn union_sources(a: Vec<SourceEvidence>, b: Vec<SourceEvidence>) -> Vec<SourceEvidence> {

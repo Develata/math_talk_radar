@@ -21,7 +21,6 @@ pub(crate) struct DedupPair {
     id: String,
     should_merge: bool,
     #[serde(default)]
-    #[allow(dead_code)]
     expected_signal: Option<String>,
     a: EventSpec,
     b: EventSpec,
@@ -119,6 +118,15 @@ fn parse_date(s: &str) -> Option<NaiveDate> {
     NaiveDate::parse_from_str(s, "%Y-%m-%d").ok()
 }
 
+fn signal_name(signal: dedup::DedupSignal) -> &'static str {
+    match signal {
+        dedup::DedupSignal::CanonicalUrl => "CanonicalUrl",
+        dedup::DedupSignal::SourceCanonicalId => "SourceCanonicalId",
+        dedup::DedupSignal::TitleDateOrganizer => "TitleDateOrganizer",
+        dedup::DedupSignal::TitleDateLocation => "TitleDateLocation",
+    }
+}
+
 pub fn run(data: &str) -> DedupStats {
     let parsed: Pairs = toml::from_str(data).expect("dedup.toml parses");
     let total = parsed.pairs.len();
@@ -130,9 +138,21 @@ pub fn run(data: &str) -> DedupStats {
     for pair in &parsed.pairs {
         let a = build_event(&pair.a, "a");
         let b = build_event(&pair.b, "b");
-        let detected = dedup::duplicate_signal(&a, &b).is_some();
+        let signal = dedup::duplicate_signal(&a, &b);
+        let detected = signal.is_some();
         match (pair.should_merge, detected) {
-            (true, true) => stats.true_positives += 1,
+            (true, true) => {
+                stats.true_positives += 1;
+                if let Some(expected) = &pair.expected_signal {
+                    let actual = signal_name(signal.expect("checked is_some above"));
+                    if expected != actual {
+                        stats.failures.push(format!(
+                            "{}: expected signal {} but got {}",
+                            pair.id, expected, actual
+                        ));
+                    }
+                }
+            }
             (true, false) => {
                 stats.false_negatives += 1;
                 stats
