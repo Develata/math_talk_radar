@@ -290,3 +290,33 @@ Perf baseline (PERF-001/002), supply chain (SEC-002), static musl release
 Run the full baseline; review matrix, registry, baseline-latest, README. Tag
 `v0.1.0` and release only when all hard gates pass. All 65 acceptance cases
 now pass; M8 is the final review + tag gate.
+
+## M8 — Final Acceptance (review complete; v0.1.0 ready to tag)
+
+- [x] README polished for v0.1.0: Status ("v0.1.0 ready. M0–M7 complete;
+      65/65 acceptance cases pass"), Quick start (added `update --check` +
+      `uninstall --dry-run`), Configuration ("15 audited sources enabled:
+      2 RSS, 1 JSON-LD, 12 HTML-config"), Development (added
+      `cargo xtask baseline` + `cargo deny check`), Documentation (added
+      source-registry.tsv link).
+- [x] Full baseline run: `cargo xtask baseline` — functional (220 tests),
+      quality (fmt + clippy -D warnings), perf (RSS peak 5.8 MiB ≤ 128 MiB).
+      All three legs pass.
+- [x] Final matrix review: 65/65 pass, 0 pending. acceptance-matrix.md
+      summary matches TSV (65 cases total, 64 hard + 1 advisory).
+      implementation-status.md current through M7.
+- [x] Registry review: 0 pending_audit rows, 15 enabled+fixture, 3 adapter
+      kinds (rss, json_ld, html_config). Enforced by `cargo xtask check`.
+- [x] M8 gate: `cargo fmt --check`, `cargo clippy --workspace --all-targets
+      --all-features -- -D warnings`, `cargo test --workspace` (220 tests),
+      `cargo xtask check`, `cargo xtask check-matrix`, `cargo xtask baseline`,
+      `cargo deny check` — all pass.
+- [ ] v0.1.0 tag: pending Deve explicit authorization (AGENTS.md §12 —
+      tagging = creating a Release). release.yml is wired: tag-version check,
+      musl build, static-linkage verify, size ≤30 MiB gate, SHA-256 checksum,
+      build-provenance attestation, GitHub Release creation.
+
+## Project status
+
+All 8 milestones (M0–M8) complete. 65/65 acceptance cases pass. The codebase
+is ready for `v0.1.0` release pending Deve's explicit authorization to tag.
