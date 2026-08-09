@@ -2,9 +2,9 @@
 
 | ID | Requirement | Gate | Status |
 |---|---|---|---|
-| SEC-001 | no `unsafe` (`forbid(unsafe_code)`) | hard | pending |
-| SEC-002 | `cargo deny check` passes | hard | pending |
-| SEC-003 | no secret logging | hard | pending |
+| SEC-001 | no `unsafe` (`forbid(unsafe_code)`) | hard | pass |
+| SEC-002 | `cargo deny check` passes | hard | pass |
+| SEC-003 | no secret logging | hard | pass |
 | PERF-001 | offline RSS scan peak RSS ≤ 128 MiB | hard | pending |
 | PERF-002 | release binary ≤ 30 MiB | hard | pending |
 | REL-001 | 30% source failure isolation | hard | pending |
