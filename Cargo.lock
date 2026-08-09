@@ -1276,6 +1276,7 @@ dependencies = [
  "radar-core",
  "scraper",
  "serde_json",
+ "url",
 ]
 
 [[package]]

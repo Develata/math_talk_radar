@@ -16,3 +16,4 @@ scraper.workspace = true
 feed-rs.workspace = true
 serde_json.workspace = true
 icalendar.workspace = true
+url.workspace = true

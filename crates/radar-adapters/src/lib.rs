@@ -5,6 +5,7 @@
 //! JSON-LD Event → site-specific HTML selectors → generic HTML fallback.
 #![forbid(unsafe_code)]
 
+pub mod helpers;
 pub mod html_config;
 pub mod html_generic;
 pub mod ics;
