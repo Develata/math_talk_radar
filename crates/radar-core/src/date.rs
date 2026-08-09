@@ -146,8 +146,14 @@ fn re_day_month_year_single() -> &'static Regex {
 pub fn parse_date(text: &str) -> Result<EventDate, DateError> {
     let trimmed = text.trim();
 
-    // 1. ISO 8601 single date: "2026-08-08".
-    if let Ok(d) = NaiveDate::parse_from_str(trimmed, "%Y-%m-%d") {
+    // 1. ISO 8601 single date: "2026-08-08" or "2026-08-08T10:00:00".
+    //    Time-bearing variants (RFC 3339 / schema.org `datetime` attributes) are
+    //    truncated at the first 'T' or space to extract the date component.
+    let iso_date_part = trimmed
+        .find(['T', ' '])
+        .map(|i| &trimmed[..i])
+        .unwrap_or(trimmed);
+    if let Ok(d) = NaiveDate::parse_from_str(iso_date_part, "%Y-%m-%d") {
         return Ok(EventDate {
             start: Some(DateTimeOrDate::Date(d)),
             end: None,
@@ -186,6 +192,9 @@ fn try_same_month_range(trimmed: &str, original: &str) -> Option<EventDate> {
     let year: i32 = caps[4].parse().ok()?;
     let start = NaiveDate::from_ymd_opt(year, month, d1)?;
     let end = NaiveDate::from_ymd_opt(year, month, d2)?;
+    if start > end {
+        return None;
+    }
     Some(EventDate {
         start: Some(DateTimeOrDate::Date(start)),
         end: Some(DateTimeOrDate::Date(end)),
@@ -205,6 +214,9 @@ fn try_cross_month_range(trimmed: &str, original: &str) -> Option<EventDate> {
     let year: i32 = caps[5].parse().ok()?;
     let start = NaiveDate::from_ymd_opt(year, m1, d1)?;
     let end = NaiveDate::from_ymd_opt(year, m2, d2)?;
+    if start > end {
+        return None;
+    }
     Some(EventDate {
         start: Some(DateTimeOrDate::Date(start)),
         end: Some(DateTimeOrDate::Date(end)),
@@ -223,6 +235,9 @@ fn try_us_range(trimmed: &str, original: &str) -> Option<EventDate> {
     let year: i32 = caps[4].parse().ok()?;
     let start = NaiveDate::from_ymd_opt(year, month, d1)?;
     let end = NaiveDate::from_ymd_opt(year, month, d2)?;
+    if start > end {
+        return None;
+    }
     Some(EventDate {
         start: Some(DateTimeOrDate::Date(start)),
         end: Some(DateTimeOrDate::Date(end)),
