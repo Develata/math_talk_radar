@@ -260,8 +260,14 @@ fn s67_xxe_attack_does_not_panic() {
     let result = RssAdapter.discover(&doc, &source);
     match result {
         Ok(stubs) => {
-            // XXE-safe parser: entity not expanded; at most the literal item.
-            let _ = stubs;
+            for s in &stubs {
+                let title = s.title.to_ascii_lowercase();
+                assert!(
+                    !title.contains("root:") && !title.contains("/etc/passwd"),
+                    "XXE entity was expanded into title: {:?}",
+                    s.title
+                );
+            }
         }
         Err(AdapterError::Parse { .. }) => {}
         Err(other) => panic!("expected Ok or Parse error, got {other:?}"),

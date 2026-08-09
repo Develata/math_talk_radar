@@ -1,8 +1,10 @@
 //! iCalendar (ICS) feed adapter (§P-5 structured-source priority #3).
 //!
 //! Parses VEVENT entries from an ICS feed into [`EventStub`]s. A nesting-depth
-//! guard (§67) rejects feeds with more than 32 `BEGIN:` lines before parsing to
-//! prevent a stack-overflow DoS in `icalendar`'s nom recursive-descent parser.
+//! guard (§67) rejects feeds with nesting deeper than 8 levels before parsing
+//! to prevent a stack-overflow DoS in `icalendar`'s nom recursive-descent
+//! parser. The guard tracks actual BEGIN/END nesting depth (not flat component
+//! count) so legitimate calendars with many flat VEVENTs are not rejected.
 use radar_core::{
     AccessInfo, AdapterError, DatePrecision, Event, EventCandidate, EventDate, EventId,
     EventStatus, EventStub, FetchPlan, FetchedDocument, Location, OnlineAvailability, PublicAccess,
@@ -12,8 +14,11 @@ use url::Url;
 
 use crate::helpers;
 
-/// Maximum `BEGIN:` lines before a feed is rejected as a potential DoS (§67).
-const MAX_BEGIN_LINES: usize = 32;
+/// Maximum nesting depth before a feed is rejected as a potential DoS (§67).
+/// Legitimate ICS nesting is at most 3 (VCALENDAR > VEVENT > VALARM or
+/// VCALENDAR > VTIMEZONE > STANDARD). 8 gives ample headroom while staying far
+/// below stack-overflow territory for `icalendar`'s nom parser.
+const MAX_NESTING_DEPTH: usize = 8;
 
 #[derive(Debug, Default)]
 pub struct IcsAdapter;
@@ -24,13 +29,11 @@ impl SourceAdapter for IcsAdapter {
         document: &FetchedDocument,
         source: &SourceSpec,
     ) -> Result<Vec<EventStub>, AdapterError> {
-        // §67 nesting-depth guard: count BEGIN: lines (case-insensitive,
-        // line-start) before parsing to prevent a stack-overflow DoS.
-        let begin_count = count_begin_lines(&document.body);
-        if begin_count > MAX_BEGIN_LINES {
+        let depth = max_nesting_depth(&document.body);
+        if depth > MAX_NESTING_DEPTH {
             return Err(AdapterError::Parse {
                 source_id: source.id.clone(),
-                message: "ICS nesting depth >32, possible DoS".into(),
+                message: format!("ICS nesting depth {depth} > {MAX_NESTING_DEPTH}, possible DoS"),
             });
         }
 
@@ -159,16 +162,31 @@ impl SourceAdapter for IcsAdapter {
     }
 }
 
-/// Count lines starting with `BEGIN:` (case-insensitive) in the raw body.
-/// Used by the §67 nesting-depth guard before parsing.
-fn count_begin_lines(body: &[u8]) -> usize {
+/// Track the maximum nesting depth of BEGIN:/END: blocks (case-insensitive).
+/// Used by the §67 depth guard: flat calendars with many VEVENTs have depth 2
+/// (VCALENDAR > VEVENT), while a malicious deeply nested payload has depth
+/// proportional to the nesting.
+fn max_nesting_depth(body: &[u8]) -> usize {
     let text = std::str::from_utf8(body).unwrap_or("");
-    text.lines()
-        .filter(|line| {
-            line.get(..6)
-                .is_some_and(|p| p.eq_ignore_ascii_case("BEGIN:"))
-        })
-        .count()
+    let mut depth: usize = 0;
+    let mut max_depth: usize = 0;
+    for line in text.lines() {
+        if line
+            .get(..6)
+            .is_some_and(|p| p.eq_ignore_ascii_case("BEGIN:"))
+        {
+            depth += 1;
+            if depth > max_depth {
+                max_depth = depth;
+            }
+        } else if line
+            .get(..4)
+            .is_some_and(|p| p.eq_ignore_ascii_case("END:"))
+        {
+            depth = depth.saturating_sub(1);
+        }
+    }
+    max_depth
 }
 
 /// Parse an ICS DTSTART value into an [`EventDate`]. Only the date portion is
@@ -325,7 +343,7 @@ END:VCALENDAR
 
     #[test]
     fn discover_depth_guard_rejects_deep_nesting() {
-        // 33 BEGIN: lines → exceeds the 32 limit → Err(Parse), no crash.
+        // 33 levels of nested BEGIN: → depth 33 > 8 → Err(Parse), no crash.
         let mut body = String::new();
         for _ in 0..33 {
             body.push_str("BEGIN:VCALENDAR\n");
@@ -338,15 +356,15 @@ END:VCALENDAR
         let result = IcsAdapter.discover(&doc, &source);
         assert!(
             matches!(result, Err(AdapterError::Parse { .. })),
-            "depth guard should reject >32 BEGIN: lines"
+            "depth guard should reject nesting depth >8"
         );
     }
 
     #[test]
-    fn discover_depth_guard_allows_boundary() {
-        // Exactly 32 BEGIN: lines (1 VCALENDAR + 31 VEVENTs) → allowed.
+    fn discover_depth_guard_allows_many_flat_events() {
+        // 100 flat VEVENTs → nesting depth 2 (VCALENDAR > VEVENT) → allowed.
         let mut body = String::from("BEGIN:VCALENDAR\nVERSION:2.0\n");
-        for i in 0..31 {
+        for i in 0..100 {
             body.push_str(&format!(
                 "BEGIN:VEVENT\nUID:e{i}\nSUMMARY:Event {i}\nURL:https://example.com/e{i}\nDTSTART:20260808\nEND:VEVENT\n"
             ));
@@ -356,8 +374,8 @@ END:VCALENDAR
         let source = make_source();
         let stubs = IcsAdapter
             .discover(&doc, &source)
-            .expect("32 BEGIN: lines should be allowed");
-        assert_eq!(stubs.len(), 31);
+            .expect("flat calendar with depth 2 should be allowed");
+        assert_eq!(stubs.len(), 100);
     }
 
     #[test]
@@ -475,18 +493,25 @@ END:VCALENDAR
     }
 
     #[test]
-    fn count_begin_lines_cases() {
-        assert_eq!(count_begin_lines(b"BEGIN:VCALENDAR\n"), 1);
+    fn max_nesting_depth_cases() {
+        assert_eq!(max_nesting_depth(b"BEGIN:VCALENDAR\nEND:VCALENDAR\n"), 1);
         assert_eq!(
-            count_begin_lines(b"BEGIN:VCALENDAR\nBEGIN:VEVENT\nEND:VEVENT\nEND:VCALENDAR\n"),
+            max_nesting_depth(b"BEGIN:VCALENDAR\nBEGIN:VEVENT\nEND:VEVENT\nEND:VCALENDAR\n"),
             2
         );
-        assert_eq!(count_begin_lines(b"begin:vcalendar\n"), 1);
-        assert_eq!(count_begin_lines(b"Begin:VCALENDAR\n"), 1);
-        assert_eq!(count_begin_lines(b"X-FOO:bar\n"), 0);
-        assert_eq!(count_begin_lines(b""), 0);
-        // folded continuation line (starts with space) should not count
-        assert_eq!(count_begin_lines(b" BEGIN:foo\n"), 0);
+        assert_eq!(
+            max_nesting_depth(b"BEGIN:VCALENDAR\nBEGIN:VEVENT\nBEGIN:VALARM\nEND:VALARM\nEND:VEVENT\nEND:VCALENDAR\n"),
+            3
+        );
+        assert_eq!(max_nesting_depth(b"begin:vcalendar\n"), 1);
+        assert_eq!(max_nesting_depth(b"Begin:VCALENDAR\n"), 1);
+        assert_eq!(max_nesting_depth(b"X-FOO:bar\n"), 0);
+        assert_eq!(max_nesting_depth(b""), 0);
+        assert_eq!(max_nesting_depth(b" BEGIN:foo\n"), 0);
+        // Many flat VEVENTs → depth 2, not 33.
+        let flat =
+            b"BEGIN:VCALENDAR\nBEGIN:VEVENT\nEND:VEVENT\nBEGIN:VEVENT\nEND:VEVENT\nEND:VCALENDAR\n";
+        assert_eq!(max_nesting_depth(flat), 2);
     }
 
     #[test]
