@@ -47,18 +47,30 @@ pub struct Event {
     pub event_type: EventType,
     pub status: EventStatus,
     pub date: EventDate,
+    #[serde(default)]
     pub location: Option<Location>,
+    #[serde(default)]
     pub description: Option<String>,
+    #[serde(default)]
     pub topics: Vec<TopicMatch>,
+    #[serde(default)]
     pub people: Vec<PersonHit>,
+    #[serde(default)]
     pub talks: Vec<Talk>,
+    #[serde(default)]
     pub media: Vec<MediaResource>,
     pub access: AccessInfo,
+    #[serde(default)]
     pub sources: Vec<SourceEvidence>,
+    #[serde(default)]
     pub score: f32,
+    #[serde(default)]
     pub score_components: ScoreComponents,
+    #[serde(default)]
     pub rank_reasons: Vec<String>,
+    #[serde(default)]
     pub first_seen_at: Option<DateTime<Utc>>,
+    #[serde(default)]
     pub last_seen_at: Option<DateTime<Utc>>,
 }
 
