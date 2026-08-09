@@ -25,7 +25,7 @@ impl FetchClient {
         let inner = reqwest::Client::builder()
             .timeout(policy.request_timeout)
             .connect_timeout(policy.connect_timeout)
-            .redirect(reqwest::redirect::Policy::limited(policy.redirect_limit))
+            .redirect(reqwest::redirect::Policy::none())
             .user_agent(concat!(
                 "math_talk_radar/",
                 env!("CARGO_PKG_VERSION"),

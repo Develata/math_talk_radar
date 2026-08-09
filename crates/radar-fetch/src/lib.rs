@@ -7,12 +7,18 @@
 
 pub mod budget;
 pub mod client;
+pub mod engine;
+pub mod error;
+pub mod fetch_policy;
 pub mod policy;
 pub mod retry;
 pub mod robots;
 
 pub use budget::RequestBudget;
 pub use client::{FetchBuildError, FetchClient};
+pub use engine::{SourceFetchResult, fetch_all, fetch_source, past_deadline};
+pub use error::FetchError;
+pub use fetch_policy::FetchPolicy;
 pub use policy::HttpPolicy;
 pub use retry::{RetryDecision, retry_for_status};
-pub use robots::RobotsPolicy;
+pub use robots::{RobotsCache, RobotsPolicy};
