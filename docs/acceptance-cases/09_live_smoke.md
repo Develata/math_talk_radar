@@ -2,8 +2,8 @@
 
 | ID | Requirement | Gate | Status |
 |---|---|---|---|
-| LIVE-001 | ≥ 20 audited sources in the registry | hard | pending |
-| LIVE-002 | ≥ 10 enabled, fixture-backed sources | hard | pending |
+| LIVE-001 | ≥ 20 audited sources in the registry | hard | pass |
+| LIVE-002 | ≥ 10 enabled, fixture-backed sources | hard | pass |
 | LIVE-003 | live source health ratio (success/total) | advisory | pending |
 
 Plan ref: `docs/plan/01_product_scope.md`. LIVE-001/002 are registry counts

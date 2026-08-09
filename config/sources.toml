@@ -1,26 +1,299 @@
 # math_talk_radar runtime source config (§17).
 #
-# This is the runtime shape consumed by the CLI. The authoritative audit
-# registry — including pending_audit entries and per-source health — lives in
-# docs/registry/source-registry.tsv and is validated by `cargo xtask check`.
+# The authoritative audit registry — including pending_audit entries and
+# per-source health — lives in docs/registry/source-registry.tsv and is
+# validated by `cargo xtask check`. This file is the embedded default
+# (CFG-001): the 15 audited, fixture-backed, enabled sources promoted after
+# the M6 live audit. Disabled / dynamic_unsupported / audited-no-fixture
+# sources remain in the registry TSV only.
+
+# --- RSS (2) ---
+
+[[sources]]
+id = "clay"
+name = "Clay Mathematics Institute"
+tier = "a"
+kind = "conference_series"
+adapter = "rss"
+entrypoint = "https://www.claymath.org/events/feed/"
+allowed_hosts = ["www.claymath.org", "claymath.org"]
+max_depth = 2
+request_budget = 20
+dynamic = false
+enabled = true
+fixture = "sites/clay-list.xml"
+
+[[sources]]
+id = "ihes"
+name = "IHES"
+tier = "a"
+kind = "institution_calendar"
+adapter = "rss"
+entrypoint = "https://www.ihes.fr/en/category/event/feed/"
+allowed_hosts = ["www.ihes.fr", "ihes.fr"]
+max_depth = 2
+request_budget = 20
+dynamic = false
+enabled = true
+fixture = "sites/ihes-list.xml"
+
+# --- JSON-LD (1) ---
+
+[[sources]]
+id = "stanford-math"
+name = "Stanford Mathematics"
+tier = "a"
+kind = "institution_calendar"
+adapter = "json_ld"
+entrypoint = "https://events.stanford.edu/"
+allowed_hosts = ["events.stanford.edu", "www.stanford.edu"]
+max_depth = 2
+request_budget = 20
+dynamic = false
+enabled = true
+fixture = "sites/stanford-math-list.html"
+
+# --- HTML-config (12) ---
 #
-# M0 ships an empty source list. M6 promotes audited sources to enabled entries
-# here (or the CLI reads the registry directly; the binding is finalized in M4).
-# Each entry must declare allowed_hosts, max_depth, and request_budget (§14).
-#
-# Example shape (uncomment and fill after auditing the real entrypoint):
-#
-#   [[sources]]
-#   id = "clay"
-#   name = "Clay Mathematics Institute"
-#   tier = "S"
-#   kind = "institution_calendar"
-#   adapter = "html_config"
-#   entrypoint = "https://www.claymath.org/events"
-#   allowed_hosts = ["www.claymath.org", "claymath.org"]
-#   max_depth = 2
-#   request_budget = 20
-#   media_strategy = "follow_media_page"
-#   dynamic = false
-#   enabled = true
-#   fixture = "clay-list.html"
+# Selectors use a permissive default (body → all links) that yields ≥1 stub
+# from each fixture. Site-specific selector tuning is post-M6 work (§P-5).
+
+[[sources]]
+id = "fields"
+name = "Fields Institute"
+tier = "a"
+kind = "institution_calendar"
+adapter = "html_config"
+entrypoint = "https://www.fields.utoronto.ca/activities"
+allowed_hosts = ["www.fields.utoronto.ca", "fields.utoronto.ca"]
+max_depth = 2
+request_budget = 20
+dynamic = false
+enabled = true
+fixture = "sites/fields-list.html"
+
+[sources.selectors]
+list = "body"
+list_link = "a"
+detail_title = "h1"
+detail_date = "time"
+
+[[sources]]
+id = "ini"
+name = "Isaac Newton Institute"
+tier = "a"
+kind = "institution_calendar"
+adapter = "html_config"
+entrypoint = "https://www.newton.ac.uk/events/"
+allowed_hosts = ["www.newton.ac.uk", "newton.ac.uk"]
+max_depth = 2
+request_budget = 20
+dynamic = false
+enabled = true
+fixture = "sites/newton-list.html"
+
+[sources.selectors]
+list = "body"
+list_link = "a"
+detail_title = "h1"
+detail_date = "time"
+
+[[sources]]
+id = "cirm"
+name = "CIRM Luminy"
+tier = "b"
+kind = "institution_calendar"
+adapter = "html_config"
+entrypoint = "https://www.cirm-math.com/"
+allowed_hosts = ["www.cirm-math.com", "cirm-math.com"]
+max_depth = 2
+request_budget = 20
+dynamic = false
+enabled = true
+fixture = "sites/cirm-list.html"
+
+[sources.selectors]
+list = "body"
+list_link = "a"
+detail_title = "h1"
+detail_date = "time"
+
+[[sources]]
+id = "hcm"
+name = "Hausdorff Center for Mathematics"
+tier = "a"
+kind = "institution_calendar"
+adapter = "html_config"
+entrypoint = "https://www.hcm.uni-bonn.de/events/"
+allowed_hosts = ["www.hcm.uni-bonn.de", "hcm.uni-bonn.de"]
+max_depth = 2
+request_budget = 20
+dynamic = false
+enabled = true
+fixture = "sites/hcm-list.html"
+
+[sources.selectors]
+list = "body"
+list_link = "a"
+detail_title = "h1"
+detail_date = "time"
+
+[[sources]]
+id = "mpim"
+name = "Max Planck Institute for Mathematics Bonn"
+tier = "a"
+kind = "institution_calendar"
+adapter = "html_config"
+entrypoint = "https://www.mpim-bonn.mpg.de/calendar"
+allowed_hosts = ["www.mpim-bonn.mpg.de", "mpim-bonn.mpg.de"]
+max_depth = 2
+request_budget = 20
+dynamic = false
+enabled = true
+fixture = "sites/mpim-list.html"
+
+[sources.selectors]
+list = "body"
+list_link = "a"
+detail_title = "h1"
+detail_date = "time"
+
+[[sources]]
+id = "mit-math"
+name = "MIT Mathematics"
+tier = "b"
+kind = "institution_calendar"
+adapter = "html_config"
+entrypoint = "https://math.mit.edu/news/conferences"
+allowed_hosts = ["math.mit.edu"]
+max_depth = 2
+request_budget = 20
+dynamic = false
+enabled = true
+fixture = "sites/mit-math-list.html"
+
+[sources.selectors]
+list = "body"
+list_link = "a"
+detail_title = "h1"
+detail_date = "time"
+
+[[sources]]
+id = "princeton-math"
+name = "Princeton Mathematics"
+tier = "a"
+kind = "institution_calendar"
+adapter = "html_config"
+entrypoint = "https://www.math.princeton.edu/events"
+allowed_hosts = ["www.math.princeton.edu", "math.princeton.edu"]
+max_depth = 2
+request_budget = 20
+dynamic = false
+enabled = true
+fixture = "sites/princeton-math-list.html"
+
+[sources.selectors]
+list = "body"
+list_link = "a"
+detail_title = "h1"
+detail_date = "time"
+
+[[sources]]
+id = "oxford-math"
+name = "Oxford Mathematical Institute"
+tier = "a"
+kind = "institution_calendar"
+adapter = "html_config"
+entrypoint = "https://www.maths.ox.ac.uk/events"
+allowed_hosts = ["www.maths.ox.ac.uk", "maths.ox.ac.uk"]
+max_depth = 2
+request_budget = 20
+dynamic = false
+enabled = true
+fixture = "sites/oxford-math-list.html"
+
+[sources.selectors]
+list = "body"
+list_link = "a"
+detail_title = "h1"
+detail_date = "time"
+
+[[sources]]
+id = "cambridge-dpmms"
+name = "Cambridge DPMMS"
+tier = "a"
+kind = "institution_calendar"
+adapter = "html_config"
+entrypoint = "https://www.dpmms.cam.ac.uk/seminars/"
+allowed_hosts = ["www.dpmms.cam.ac.uk", "dpmms.cam.ac.uk"]
+max_depth = 2
+request_budget = 20
+dynamic = false
+enabled = true
+fixture = "sites/cambridge-dpmms-list.html"
+
+[sources.selectors]
+list = "body"
+list_link = "a"
+detail_title = "h1"
+detail_date = "time"
+
+[[sources]]
+id = "eth-math"
+name = "ETH Zurich Mathematics"
+tier = "a"
+kind = "institution_calendar"
+adapter = "html_config"
+entrypoint = "https://math.ethz.ch/news-and-events/events.html"
+allowed_hosts = ["math.ethz.ch", "www.math.ethz.ch"]
+max_depth = 2
+request_budget = 20
+dynamic = false
+enabled = true
+fixture = "sites/eth-math-list.html"
+
+[sources.selectors]
+list = "body"
+list_link = "a"
+detail_title = "h1"
+detail_date = "time"
+
+[[sources]]
+id = "ams-calendar"
+name = "AMS Calendar"
+tier = "a"
+kind = "conference_series"
+adapter = "html_config"
+entrypoint = "https://www.ams.org/mathcal"
+allowed_hosts = ["www.ams.org", "ams.org"]
+max_depth = 2
+request_budget = 20
+dynamic = false
+enabled = true
+fixture = "sites/ams-calendar-list.html"
+
+[sources.selectors]
+list = "body"
+list_link = "a"
+detail_title = "h1"
+detail_date = "time"
+
+[[sources]]
+id = "icm"
+name = "International Congress of Mathematicians"
+tier = "s"
+kind = "conference_series"
+adapter = "html_config"
+entrypoint = "https://www.icm2026.org/"
+allowed_hosts = ["www.icm2026.org", "icm2026.org"]
+max_depth = 2
+request_budget = 20
+dynamic = false
+enabled = true
+fixture = "sites/icm-list.html"
+
+[sources.selectors]
+list = "body"
+list_link = "a"
+detail_title = "h1"
+detail_date = "time"

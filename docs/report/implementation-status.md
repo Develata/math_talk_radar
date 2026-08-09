@@ -200,3 +200,41 @@ only) per `docs/plan/10_update_uninstall.md`.
 
 Audit ≥ 20 sources, enable ≥ 10 with fixtures + golden + live smoke per
 `docs/plan/` source-registry sections. Gate: LIVE-001/002.
+
+## M6 — Live Source Audit (complete)
+
+- [x] xtask LIVE-001/002 count validation in `validate_source_registry`
+      (`xtask/src/main.rs`): counts `audited`+`enabled` rows (LIVE-001 ≥ 20),
+      `enabled = true` + non-empty `fixture` rows (LIVE-002 ≥ 10), distinct
+      adapter kinds among enabled (≥ 3). Fires only when `pending_audit_count
+      == 0` so the gate doesn't fail during an in-progress audit.
+- [x] 24 sources audited via direct HTTP probing. Findings recorded in
+      `docs/registry/source-registry.tsv`:
+      - 15 enabled + fixture-backed (2 RSS, 1 JSON-LD, 12 HTML-config).
+      - 5 dynamic_unsupported (slmath, ias-math, birs, oberwolfach, scgp).
+      - 1 broken (mathmeetings — DNS failure).
+      - 3 audited-no-fixture (harvard-math, berkeley-math, ems-calendar).
+      - 0 pending_audit rows remain.
+- [x] 15 sanitized fixtures under `crates/radar-adapters/tests/fixtures/sites/`
+      (scripts/styles/SVGs stripped, JSON-LD blocks preserved for stanford-math
+      and cirm).
+- [x] Golden tests (`crates/radar-adapters/tests/site_audits.rs`): 8 tests
+      covering all 3 adapter kinds — RSS (clay, ihes), JSON-LD (stanford-math),
+      HTML-config (fields, eth-math, mpim, oxford, princeton). HTML-config
+      uses permissive `list: "body", list_link: "a"` selectors that yield ≥ 1
+      stub from each fixture; site-specific selector tuning is post-M6 (§P-5).
+- [x] `config/sources.toml` promoted from empty M0 skeleton to 15 enabled
+      entries with real entrypoints, allowed_hosts, adapter kinds, and fixture
+      paths. Tier values lowercase (`s`/`a`/`b`) to match serde
+      `rename_all = "snake_case"` on `SourceTier`. HTML-config sources carry
+      `[sources.selectors]` blocks with body→a link extraction.
+- [x] M6 gate: `cargo fmt --check`, `cargo clippy --workspace --all-targets
+      --all-features -- -D warnings`, `cargo test --workspace` (220 tests),
+      `cargo xtask check`, `cargo xtask check-matrix` — all pass.
+- [x] 2 acceptance cases flipped to `pass`: LIVE-001, LIVE-002. Total 54 pass
+      / 15 pending.
+
+## Next: M7 — Performance & Release
+
+Perf baseline (PERF-001/002), supply chain (SEC-002), static musl release
+(RELS-001..003), live-smoke workflow (LIVE-003, advisory).

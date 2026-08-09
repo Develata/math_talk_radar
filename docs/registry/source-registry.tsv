@@ -1,25 +1,25 @@
 id	name	tier	kind	adapter	entrypoint	allowed_hosts	max_depth	request_budget	media_strategy	dynamic	enabled	fixture	last_verified	status	notes
-clay	Clay Mathematics Institute	unknown	institution_calendar	none			2	20		false	false			pending_audit	M0 audit pending
-ihes	IHES	unknown	institution_calendar	none			2	20		false	false			pending_audit	M0 audit pending
-slmath	SLMath (MSRI)	unknown	institution_calendar	none			2	20		false	false			pending_audit	M0 audit pending
-ias-math	Institute for Advanced Study — Mathematics	unknown	institution_calendar	none			2	20		false	false			pending_audit	M0 audit pending
-fields	Fields Institute	unknown	institution_calendar	none			2	20		false	false			pending_audit	M0 audit pending
-birs	Banff International Research Station (BIRS)	unknown	institution_calendar	none			2	20		false	false			pending_audit	M0 audit pending
-ini	Isaac Newton Institute	unknown	institution_calendar	none			2	20		false	false			pending_audit	M0 audit pending
-oberwolfach	Oberwolfach (MFO)	unknown	institution_calendar	none			2	20		false	false			pending_audit	M0 audit pending
-cirm	CIRM Luminy	unknown	institution_calendar	none			2	20		false	false			pending_audit	M0 audit pending
-hcm	Hausdorff Center for Mathematics	unknown	institution_calendar	none			2	20		false	false			pending_audit	M0 audit pending
-mpim	Max Planck Institute for Mathematics Bonn	unknown	institution_calendar	none			2	20		false	false			pending_audit	M0 audit pending
-scgp	Simons Center for Geometry and Physics	unknown	institution_calendar	none			2	20		false	false			pending_audit	M0 audit pending
-mit-math	MIT Mathematics	unknown	institution_calendar	none			2	20		false	false			pending_audit	M0 audit pending
-princeton-math	Princeton Mathematics	unknown	institution_calendar	none			2	20		false	false			pending_audit	M0 audit pending
-harvard-math	Harvard Mathematics	unknown	institution_calendar	none			2	20		false	false			pending_audit	M0 audit pending
-stanford-math	Stanford Mathematics	unknown	institution_calendar	none			2	20		false	false			pending_audit	M0 audit pending
-berkeley-math	UC Berkeley Mathematics	unknown	institution_calendar	none			2	20		false	false			pending_audit	M0 audit pending
-oxford-math	Oxford Mathematical Institute	unknown	institution_calendar	none			2	20		false	false			pending_audit	M0 audit pending
-cambridge-dpmms	Cambridge DPMMS	unknown	institution_calendar	none			2	20		false	false			pending_audit	M0 audit pending
-eth-math	ETH Zurich Mathematics	unknown	institution_calendar	none			2	20		false	false			pending_audit	M0 audit pending
-ams-calendar	AMS Calendar	unknown	conference_series	none			2	20		false	false			pending_audit	M0 audit pending
-ems-calendar	EMS Calendar	unknown	conference_series	none			2	20		false	false			pending_audit	M0 audit pending
-mathmeetings	MathMeetings	unknown	conference_series	none			2	20		false	false			pending_audit	M0 audit pending
-icm	International Congress of Mathematicians	unknown	conference_series	none			2	20		false	false			pending_audit	M0 audit pending
+clay	Clay Mathematics Institute	A	conference_series	rss	https://www.claymath.org/events/feed/	www.claymath.org	2	20		false	true	sites/clay-list.xml	2026-08-09	enabled	RSS events feed; 10 items
+ihes	IHES	A	institution_calendar	rss	https://www.ihes.fr/en/category/event/feed/	www.ihes.fr	2	20		false	true	sites/ihes-list.xml	2026-08-09	enabled	RSS event category feed; 10 items
+slmath	SLMath (MSRI)	S	institution_calendar	none	https://www.slmath.org/activities	www.slmath.org	2	20		true	false		2026-08-09	dynamic_unsupported	JS SPA (Vue); no static event HTML
+ias-math	Institute for Advanced Study — Mathematics	S	institution_calendar	none	https://www.math.ias.edu/events	www.math.ias.edu	2	20		false	false		2026-08-09	dynamic_unsupported	HTTP 403 on all event pages
+fields	Fields Institute	A	institution_calendar	html_config	https://www.fields.utoronto.ca/activities	www.fields.utoronto.ca	2	20		false	true	sites/fields-list.html	2026-08-09	enabled	HTML activity list
+birs	Banff International Research Station (BIRS)	A	institution_calendar	none	https://www.birs.ca/events	www.birs.ca	2	20		false	false		2026-08-09	dynamic_unsupported	HTTP 410/blocked on events page
+ini	Isaac Newton Institute	A	institution_calendar	html_config	https://www.newton.ac.uk/events/	www.newton.ac.uk	2	20		false	true	sites/newton-list.html	2026-08-09	enabled	HTML events list; empty RSS feed
+oberwolfach	Oberwolfach (MFO)	A	institution_calendar	none	https://www.mfo.de/occasion	www.mfo.de	2	20		true	false		2026-08-09	dynamic_unsupported	Angular SPA; <app-root> shell only
+cirm	CIRM Luminy	B	institution_calendar	html_config	https://www.cirm-math.com/	www.cirm-math.com	2	20		false	true	sites/cirm-list.html	2026-08-09	enabled	HTML homepage with JSON-LD
+hcm	Hausdorff Center for Mathematics	A	institution_calendar	html_config	https://www.hcm.uni-bonn.de/events/	www.hcm.uni-bonn.de	2	20		false	true	sites/hcm-list.html	2026-08-09	enabled	HTML events list
+mpim	Max Planck Institute for Mathematics Bonn	A	institution_calendar	html_config	https://www.mpim-bonn.mpg.de/calendar	www.mpim-bonn.mpg.de	2	20		false	true	sites/mpim-list.html	2026-08-09	enabled	HTML calendar with event/seminar/talk entries
+scgp	Simons Center for Geometry and Physics	B	institution_calendar	none	https://scgp.stonybrook.edu/events	scgp.stonybrook.edu	2	20		true	false		2026-08-09	dynamic_unsupported	HTTP 500 on events pages
+mit-math	MIT Mathematics	B	institution_calendar	html_config	https://math.mit.edu/news/conferences	math.mit.edu	2	20		false	true	sites/mit-math-list.html	2026-08-09	enabled	HTML conferences list (redirected from /events/)
+princeton-math	Princeton Mathematics	A	institution_calendar	html_config	https://www.math.princeton.edu/events	www.math.princeton.edu	2	20		false	true	sites/princeton-math-list.html	2026-08-09	enabled	HTML events + seminars list
+harvard-math	Harvard Mathematics	A	institution_calendar	none	https://www.math.harvard.edu/events/	www.math.harvard.edu	2	20		false	false		2026-08-09	audited	HTML events page; no fixture (connection issues in audit)
+stanford-math	Stanford Mathematics	A	institution_calendar	jsonld	https://events.stanford.edu/	events.stanford.edu	2	20		false	true	sites/stanford-math-list.html	2026-08-09	enabled	JSON-LD Event blocks; 24 blocks with @type:Event
+berkeley-math	UC Berkeley Mathematics	B	institution_calendar	none	https://events.berkeley.edu/math	events.berkeley.edu	2	20		false	false		2026-08-09	audited	HTML events page; no fixture captured
+oxford-math	Oxford Mathematical Institute	A	institution_calendar	html_config	https://www.maths.ox.ac.uk/events	www.maths.ox.ac.uk	2	20		false	true	sites/oxford-math-list.html	2026-08-09	enabled	HTML events list
+cambridge-dpmms	Cambridge DPMMS	A	institution_calendar	html_config	https://www.dpmms.cam.ac.uk/seminars/	www.dpmms.cam.ac.uk	2	20		false	true	sites/cambridge-dpmms-list.html	2026-08-09	enabled	HTML seminars list
+eth-math	ETH Zurich Mathematics	A	institution_calendar	html_config	https://math.ethz.ch/news-and-events/events.html	math.ethz.ch	2	20		false	true	sites/eth-math-list.html	2026-08-09	enabled	HTML events list
+ams-calendar	AMS Calendar	A	conference_series	html_config	https://www.ams.org/mathcal	www.ams.org	2	20		false	true	sites/ams-calendar-list.html	2026-08-09	enabled	HTML math calendar
+ems-calendar	EMS Calendar	B	conference_series	none	https://euromathsoc.org/events	euromathsoc.org	2	20		false	false		2026-08-09	audited	HTML events page; no fixture captured
+mathmeetings	MathMeetings	B	conference_series	none			2	20		false	false		2026-08-09	broken	DNS resolution failure; site unreachable
+icm	International Congress of Mathematicians	S	conference_series	html_config	https://www.icm2026.org/	www.icm2026.org	2	20		false	true	sites/icm-list.html	2026-08-09	enabled	HTML conference site with JSON-LD
