@@ -117,6 +117,9 @@ pub async fn fetch_one(
             if !policy.is_host_allowed(&new_url) {
                 return Err(FetchError::RedirectDisallowed);
             }
+            if current_url.scheme() == "https" && new_url.scheme() == "http" {
+                return Err(FetchError::RedirectDisallowed);
+            }
             current_url = new_url;
             continue;
         }
@@ -177,12 +180,18 @@ pub async fn fetch_one(
             .and_then(|v| v.to_str().ok())
             .map(|s| s.to_string());
 
-        let body = resp.bytes().await.map_err(FetchError::from)?;
-        if body.len() > http_policy.max_response_body {
-            return Err(FetchError::BodyTooLarge {
-                limit: http_policy.max_response_body,
-            });
-        }
+        let body = {
+            let mut buf = Vec::new();
+            while let Some(chunk) = resp.chunk().await.map_err(FetchError::from)? {
+                if buf.len() + chunk.len() > http_policy.max_response_body {
+                    return Err(FetchError::BodyTooLarge {
+                        limit: http_policy.max_response_body,
+                    });
+                }
+                buf.extend_from_slice(&chunk);
+            }
+            buf
+        };
 
         let final_url = current_url.clone();
         return Ok(make_document(
@@ -298,6 +307,7 @@ pub async fn fetch_source(
     };
 
     let mut candidates = Vec::new();
+    let mut enrichment_failures = 0u32;
     for stub in stubs {
         let plans = adapter.plan_enrichment(&stub, source);
         let mut docs = Vec::new();
@@ -317,21 +327,32 @@ pub async fn fetch_source(
             .await
             {
                 Ok(d) => docs.push(d),
-                Err(_) => continue, // skip failed detail fetch
+                Err(_) => {
+                    enrichment_failures += 1;
+                    continue;
+                }
             }
         }
         match adapter.enrich(stub, &docs, source) {
             Ok(candidate) => candidates.push(candidate),
-            Err(_) => continue, // skip failed enrichment
+            Err(_) => {
+                enrichment_failures += 1;
+                continue;
+            }
         }
     }
 
     let events = candidates.len() as u32;
+    let status = if enrichment_failures > 0 {
+        SourceStatus::Partial
+    } else {
+        SourceStatus::Ok
+    };
     SourceFetchResult {
         candidates,
         health: SourceHealth {
             source: source.id.clone(),
-            status: SourceStatus::Ok,
+            status,
             duration_ms: start.elapsed().as_millis() as u64,
             requests: source.request_budget - budget.remaining,
             events,

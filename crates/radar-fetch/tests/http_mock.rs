@@ -224,7 +224,7 @@ async fn src006_depth_boundary_skips_deep_plans() {
         !hit_path(&reqs, "/depth3"),
         "depth-3 plan exceeds max_depth and must not be fetched"
     );
-    assert_eq!(result.health.status, SourceStatus::Ok);
+    assert_eq!(result.health.status, SourceStatus::Partial);
 }
 
 // ---- SRC-007: host allowlist / redirect to disallowed host -----------------
@@ -298,7 +298,7 @@ async fn src008_request_budget_caps_fetches() {
         "content requests ({content}) must be <= budget ({})",
         source.request_budget
     );
-    assert_eq!(result.health.status, SourceStatus::Ok);
+    assert_eq!(result.health.status, SourceStatus::Partial);
 }
 
 // ---- HTTP-001: per-request timeout -----------------------------------------
