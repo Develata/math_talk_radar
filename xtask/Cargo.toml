@@ -12,4 +12,3 @@ publish = false
 unsafe_code = "forbid"
 
 [dependencies]
-anyhow.workspace = true
