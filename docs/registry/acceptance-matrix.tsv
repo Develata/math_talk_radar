@@ -10,27 +10,28 @@ DATE-002	cross-month range	docs/plan/02_domain_model.md	unit	cargo test -p radar
 DATE-003	US date format	docs/plan/02_domain_model.md	unit	cargo test -p radar-core	hard		pass
 DATE-004	interval overlap	docs/plan/02_domain_model.md	unit	cargo test -p radar-core	hard		pass
 DATE-005	unparsed date retained	docs/plan/02_domain_model.md	unit	cargo test -p radar-core	hard		pass
-SRC-001	RSS adapter	docs/plan/04_source_adapter_contract.md	fixture	cargo test -p radar-adapters	hard		pending
-SRC-002	ICS adapter	docs/plan/04_source_adapter_contract.md	fixture	cargo test -p radar-adapters	hard		pending
-SRC-003	JSON-LD adapter	docs/plan/04_source_adapter_contract.md	fixture	cargo test -p radar-adapters	hard		pending
-SRC-004	configured HTML adapter	docs/plan/04_source_adapter_contract.md	fixture	cargo test -p radar-adapters	hard		pending
-SRC-005	generic fallback	docs/plan/04_source_adapter_contract.md	fixture	cargo test -p radar-adapters	hard		pending
-SRC-006	detail depth <=2	docs/plan/04_source_adapter_contract.md	mock server	cargo test --test http_mock	hard		pending
-SRC-007	host allowlist	docs/plan/04_source_adapter_contract.md	mock server	cargo test --test http_mock	hard		pending
-SRC-008	request budget	docs/plan/04_source_adapter_contract.md	mock server	cargo test --test http_mock	hard		pending
-HTTP-001	timeout isolation	docs/plan/05_fetching_reliability.md	mock server	cargo test --test http_mock	hard		pending
-HTTP-002	retry transient once	docs/plan/05_fetching_reliability.md	mock server	cargo test --test http_mock	hard		pending
-HTTP-003	404 no retry	docs/plan/05_fetching_reliability.md	mock server	cargo test --test http_mock	hard		pending
+SRC-001	RSS adapter	docs/plan/04_source_adapter_contract.md	fixture	cargo test -p radar-adapters --test adapters	hard		pass
+
+SRC-002	ICS adapter	docs/plan/04_source_adapter_contract.md	fixture	cargo test -p radar-adapters --test adapters	hard		pass
+SRC-003	JSON-LD adapter	docs/plan/04_source_adapter_contract.md	fixture	cargo test -p radar-adapters --test adapters	hard		pass
+SRC-004	configured HTML adapter	docs/plan/04_source_adapter_contract.md	fixture	cargo test -p radar-adapters --test adapters	hard		pass
+SRC-005	generic fallback	docs/plan/04_source_adapter_contract.md	fixture	cargo test -p radar-adapters --test adapters	hard		pass
+SRC-006	detail depth <=2	docs/plan/04_source_adapter_contract.md	mock server	cargo test -p radar-fetch --test http_mock	hard		pass
+SRC-007	host allowlist	docs/plan/04_source_adapter_contract.md	mock server	cargo test -p radar-fetch --test http_mock	hard		pass
+SRC-008	request budget	docs/plan/04_source_adapter_contract.md	mock server	cargo test -p radar-fetch --test http_mock	hard		pass
+HTTP-001	timeout isolation	docs/plan/05_fetching_reliability.md	mock server	cargo test -p radar-fetch --test http_mock	hard		pass
+HTTP-002	retry transient once	docs/plan/05_fetching_reliability.md	mock server	cargo test -p radar-fetch --test http_mock	hard		pass
+HTTP-003	404 no retry	docs/plan/05_fetching_reliability.md	mock server	cargo test -p radar-fetch --test http_mock	hard		pass
 HTTP-004	partial source failure exit 0	docs/plan/05_fetching_reliability.md	integration	cargo test --test integration	hard		pending
 HTTP-005	zero usable source exit 4	docs/plan/05_fetching_reliability.md	integration	cargo test --test integration	hard		pending
 PER-001	scholar alias	docs/plan/06_normalization_matching.md	golden	cargo test --test golden	hard		pass
 PER-002	multilingual alias	docs/plan/06_normalization_matching.md	golden	cargo test --test golden	hard		pass
 PER-003	concept name not speaker	docs/plan/06_normalization_matching.md	golden	cargo test --test golden	hard		pass
 TOP-001	topic alias matching	docs/plan/06_normalization_matching.md	golden	cargo test --test golden	hard		pass
-TALK-001	talk + speaker extraction	docs/plan/02_domain_model.md	fixture	cargo test -p radar-adapters	hard		pending
-MED-001	video detection	docs/plan/04_source_adapter_contract.md	fixture	cargo test -p radar-adapters	hard		pending
-MED-002	slides detection	docs/plan/04_source_adapter_contract.md	fixture	cargo test -p radar-adapters	hard		pending
-MED-003	public access status	docs/plan/04_source_adapter_contract.md	fixture	cargo test -p radar-adapters	hard		pending
+TALK-001	talk + speaker extraction	docs/plan/02_domain_model.md	fixture	cargo test -p radar-adapters --test adapters	hard		pass
+MED-001	video detection	docs/plan/04_source_adapter_contract.md	fixture	cargo test -p radar-adapters --test adapters	hard		pass
+MED-002	slides detection	docs/plan/04_source_adapter_contract.md	fixture	cargo test -p radar-adapters --test adapters	hard		pass
+MED-003	public access status	docs/plan/04_source_adapter_contract.md	fixture	cargo test -p radar-adapters --test adapters	hard		pass
 DEDUP-001	identical event merge	docs/plan/06_normalization_matching.md	golden	cargo test --test golden	hard		pending
 DEDUP-002	distinct event not merge	docs/plan/06_normalization_matching.md	golden	cargo test --test golden	hard		pending
 RANK-001	topic score	docs/plan/08_ranking.md	golden	cargo test --test golden	hard		pass
@@ -53,8 +54,8 @@ SEC-002	cargo-deny	docs/plan/11_security.md	CI	cargo deny check	hard		pending
 SEC-003	no secret logging	docs/plan/11_security.md	review/test	cargo test + review	hard		pending
 PERF-001	offline RSS <=128 MiB	docs/plan/13_performance_budget.md	baseline	cargo xtask baseline	hard		pending
 PERF-002	binary <=30 MiB	docs/plan/12_release.md	release	release.yml	hard		pending
-REL-001	30% source failure isolation	docs/plan/05_fetching_reliability.md	fault injection	cargo test --test reliability	hard		pending
-REL-002	global deadline	docs/plan/05_fetching_reliability.md	mock server	cargo test --test http_mock	hard		pending
+REL-001	30% source failure isolation	docs/plan/05_fetching_reliability.md	fault injection	cargo test -p radar-fetch --test reliability	hard		pass
+REL-002	global deadline	docs/plan/05_fetching_reliability.md	mock server	cargo test -p radar-fetch --test http_mock	hard		pass
 REL-003	stable deterministic IDs	docs/plan/05_fetching_reliability.md	golden	cargo test --test golden	hard		pending
 DOC-001	every plan has acceptance mapping	docs/plan/00_engineering_constitution.md	xtask	cargo xtask check-matrix	hard		pending
 DOC-002	every hard case has automation	docs/plan/00_engineering_constitution.md	xtask	cargo xtask check-matrix	hard		pending
