@@ -159,10 +159,20 @@ fn self_test(binary: &Path) -> Result<(), CliError> {
     Ok(())
 }
 
-/// `update`: full algorithm (§34.2). Download -> verify SHA-256 -> self-test ->
+/// `update`: full algorithm (§34.2). Refuse unmanaged binary unless
+/// `force_unmanaged`. Download -> verify SHA-256 -> fsync -> self-test ->
 /// rollback copy -> atomic replace -> self-test -> cleanup. Any failure leaves
 /// the current binary usable.
-pub async fn run() -> Result<String, CliError> {
+pub async fn run(force_unmanaged: bool) -> Result<String, CliError> {
+    let current_binary = paths::binary_path(&paths::data_dir())
+        .ok_or_else(|| CliError::update("cannot resolve current binary path"))?;
+    if !force_unmanaged && paths::is_unmanaged_binary(&current_binary) {
+        return Err(CliError::update(format!(
+            "refusing to update unmanaged binary: {} (use --force-unmanaged to override)",
+            current_binary.display()
+        )));
+    }
+
     let release = fetch_latest_release().await?;
     let latest = parse_tag(&release.tag_name)?;
     let current = Version::parse(CURRENT_VERSION).expect("CARGO_PKG_VERSION is valid semver");
@@ -185,13 +195,12 @@ pub async fn run() -> Result<String, CliError> {
         )));
     }
 
-    let current_binary = paths::binary_path(&paths::data_dir())
-        .ok_or_else(|| CliError::update("cannot resolve current binary path"))?;
     let temp_path = paths::temp_dir_for_binary(&current_binary);
 
     std::fs::write(&temp_path, &binary_bytes)
         .map_err(|e| CliError::update(format!("write temp binary failed: {e}")))?;
     set_executable(&temp_path)?;
+    fsync_file(&temp_path)?;
 
     // Self-test the candidate before touching the working binary.
     if let Err(e) = self_test(&temp_path) {
@@ -203,6 +212,7 @@ pub async fn run() -> Result<String, CliError> {
     let rollback_path = rollback_path(&current_binary);
     std::fs::copy(&current_binary, &rollback_path)
         .map_err(|e| CliError::update(format!("create rollback failed: {e}")))?;
+    fsync_file(&rollback_path)?;
 
     // Atomic replace. On Unix, rename over an existing file is atomic.
     if let Err(e) = std::fs::rename(&temp_path, &current_binary) {
@@ -210,6 +220,7 @@ pub async fn run() -> Result<String, CliError> {
         let _ = std::fs::remove_file(&rollback_path);
         return Err(CliError::update(format!("atomic replace failed: {e}")));
     }
+    fsync_parent_dir(&current_binary)?;
 
     // Self-test the replaced binary; restore rollback on failure.
     if let Err(e) = self_test(&current_binary) {
@@ -226,7 +237,9 @@ pub async fn run() -> Result<String, CliError> {
         "self-update",
         latest.to_string(),
     );
-    let _ = manifest.save(&data_dir);
+    manifest
+        .save(&data_dir)
+        .map_err(|e| CliError::update(format!("manifest save failed: {e}")))?;
 
     Ok(format!(
         "updated: {} -> {}",
@@ -240,6 +253,32 @@ fn set_executable(path: &Path) -> Result<(), CliError> {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))
             .map_err(|e| CliError::update(format!("chmod failed: {e}")))?;
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
+    Ok(())
+}
+
+fn fsync_file(path: &Path) -> Result<(), CliError> {
+    let file = std::fs::File::open(path)
+        .map_err(|e| CliError::update(format!("fsync open {}: {e}", path.display())))?;
+    file.sync_all()
+        .map_err(|e| CliError::update(format!("fsync {}: {e}", path.display())))?;
+    Ok(())
+}
+
+fn fsync_parent_dir(path: &Path) -> Result<(), CliError> {
+    #[cfg(unix)]
+    {
+        if let Some(parent) = path.parent() {
+            let dir = std::fs::File::open(parent).map_err(|e| {
+                CliError::update(format!("fsync dir open {}: {e}", parent.display()))
+            })?;
+            dir.sync_all()
+                .map_err(|e| CliError::update(format!("fsync dir {}: {e}", parent.display())))?;
+        }
     }
     #[cfg(not(unix))]
     {

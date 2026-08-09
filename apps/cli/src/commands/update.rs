@@ -6,7 +6,7 @@ pub async fn run(args: UpdateArgs) -> Result<(), CliError> {
     let message = if args.check {
         lifecycle::update::check().await?
     } else {
-        lifecycle::update::run().await?
+        lifecycle::update::run(args.force_unmanaged).await?
     };
     println!("{message}");
     Ok(())

@@ -151,6 +151,9 @@ pub struct UpdateArgs {
     /// Only check for a newer release; do not modify any file.
     #[arg(long)]
     pub check: bool,
+    /// Allow updating an unmanaged/development binary.
+    #[arg(long)]
+    pub force_unmanaged: bool,
 }
 
 #[derive(Debug, Args)]
