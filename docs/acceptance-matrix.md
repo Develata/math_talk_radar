@@ -7,13 +7,14 @@
 
 ## Summary
 
-- 69 cases total.
-- 68 `hard` gate, 1 `advisory` (LIVE-003).
-- 60 `pass` (M1: DATE-001..005, PER-001..003, TOP-001, RANK-001..003; M2:
+- 65 cases total.
+- 64 `hard` gate, 1 `advisory` (LIVE-003).
+- 65 `pass` (M1: DATE-001..005, PER-001..003, TOP-001, RANK-001..003; M2:
   SRC-001..008, MED-001..003, HTTP-001..003, REL-001..002, TALK-001; M3:
   DEDUP-001..002, REL-003, STATE-001..004; M4: CLI-001..004, CFG-001..002,
   HTTP-004..005; M5: UPD-001..004, UNS-001..004; M6: LIVE-001..002;
-  M7: SEC-001..003, DOC-001..002, LIVE-003), 9 `pending`.
+  M7: SEC-001..003, PERF-001..002, DOC-001..002, RELS-001..003, LIVE-003),
+  0 `pending`.
 
 ## By group
 

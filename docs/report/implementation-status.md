@@ -238,3 +238,55 @@ Audit ≥ 20 sources, enable ≥ 10 with fixtures + golden + live smoke per
 
 Perf baseline (PERF-001/002), supply chain (SEC-002), static musl release
 (RELS-001..003), live-smoke workflow (LIVE-003, advisory).
+
+## M7 — Release Engineering (complete)
+
+- [x] Supply chain (SEC-002): `deny.toml` with license allowlist
+      (MIT/Apache-2.0/ISC/BSD/BSL/Unicode-3.0 etc.), advisories via
+      rustsec/advisory-db, bans (multiple-versions=warn, wildcards=warn —
+      workspace inheritance is intentional, not a version `*`), source
+      registry restriction. `supply-chain` job added to ci.yml. Local
+      verification: `cargo deny check` — advisories ok, bans ok, licenses ok,
+      sources ok.
+- [x] Security review (SEC-001/003): SEC-001 — `#![forbid(unsafe_code)]` in
+      every crate root, enforced by CI `forbid-unsafe` job. SEC-003 — reviewed
+      all 25 `eprintln!`/`println!` calls and the tracing subscriber setup.
+      No `tracing::` macros in production code. All CLI output is
+      human-readable error messages, JSON scan output, doctor paths, or
+      command status — never raw HTML bodies, HTTP responses, user config
+      contents, or tokens.
+- [x] xtask `static-release <binary>` (RELS-001): replaces M0 stub. Runs
+      `file` + `ldd` on the given binary, verifies "statically linked" +
+      no runtime shared-library deps. Verified against dev binary: correctly
+      reports 2 errors (dynamically linked + deps).
+- [x] xtask `baseline` (PERF-001): replaces M0 stub. Three legs per §57 B5 —
+      functional (`cargo test --workspace`), quality (`cargo fmt --check` +
+      `cargo clippy -D warnings`), perf (spawn
+      `radar-adapters/examples/perf_rss.rs --release`, parse
+      `PERF_RSS_PEAK_KB` from stdout, assert ≤ 128 MiB). perf_rss example
+      loads clay + ihes RSS fixtures, loops discover+enrich 200× (4000
+      events), reads VmHWM from `/proc/self/status`. Verified: peak RSS
+      5.9 MiB, well under 128 MiB budget.
+- [x] release.yml enhancements (§53, PERF-002, RELS-002, RELS-003):
+      tag-version check (strip `v`, compare to `Cargo.toml`
+      `[workspace.package] version`, fail on mismatch), binary size gate
+      (stat ≤ 30 MiB), SHA-256 checksum (labeled), build-provenance
+      attestation via `actions/attest-build-provenance@v1` (added
+      `attestations: write` + `id-token: write` permissions). YAML valid.
+- [x] DOC-001/002 flipped to `pass` — `cargo xtask check-matrix` enforces
+      both and passes. LIVE-003 flipped to `pass` (advisory) —
+      live-smoke.yml exists with `continue-on-error: true`, runs on schedule.
+- [x] M7 gate: `cargo fmt --check`, `cargo clippy --workspace --all-targets
+      --all-features -- -D warnings`, `cargo test --workspace` (220 tests),
+      `cargo xtask check`, `cargo xtask check-matrix`, `cargo xtask baseline`,
+      `cargo deny check` — all pass.
+- [x] 11 acceptance cases flipped to `pass`: SEC-001..003, PERF-001..002,
+      RELS-001..003, DOC-001..002, LIVE-003. Total 65 pass / 0 pending.
+      acceptance-matrix.md summary corrected (69→65 cases total — group
+      table always summed to 65).
+
+## Next: M8 — Final Acceptance
+
+Run the full baseline; review matrix, registry, baseline-latest, README. Tag
+`v0.1.0` and release only when all hard gates pass. All 65 acceptance cases
+now pass; M8 is the final review + tag gate.

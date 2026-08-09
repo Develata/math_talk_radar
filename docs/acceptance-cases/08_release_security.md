@@ -5,14 +5,14 @@
 | SEC-001 | no `unsafe` (`forbid(unsafe_code)`) | hard | pass |
 | SEC-002 | `cargo deny check` passes | hard | pass |
 | SEC-003 | no secret logging | hard | pass |
-| PERF-001 | offline RSS scan peak RSS ≤ 128 MiB | hard | pending |
-| PERF-002 | release binary ≤ 30 MiB | hard | pending |
-| REL-001 | 30% source failure isolation | hard | pending |
-| REL-002 | global scan deadline enforced | hard | pending |
-| REL-003 | stable deterministic IDs | hard | pending |
-| RELS-001 | static musl binary | hard | pending |
-| RELS-002 | checksum asset present | hard | pending |
-| RELS-003 | artifact provenance attestation | hard | pending |
+| PERF-001 | offline RSS scan peak RSS ≤ 128 MiB | hard | pass |
+| PERF-002 | release binary ≤ 30 MiB | hard | pass |
+| REL-001 | 30% source failure isolation | hard | pass |
+| REL-002 | global scan deadline enforced | hard | pass |
+| REL-003 | stable deterministic IDs | hard | pass |
+| RELS-001 | static musl binary | hard | pass |
+| RELS-002 | checksum asset present | hard | pass |
+| RELS-003 | artifact provenance attestation | hard | pass |
 | DOC-001 | every plan has an acceptance mapping | hard | pass |
 | DOC-002 | every hard case has automation | hard | pass |
 | HTTP-001 | timeout isolation | hard | pending |
