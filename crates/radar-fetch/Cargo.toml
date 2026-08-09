@@ -18,3 +18,7 @@ url.workspace = true
 chrono.workspace = true
 tokio.workspace = true
 futures.workspace = true
+
+[dev-dependencies]
+wiremock.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
