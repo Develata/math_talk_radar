@@ -21,10 +21,7 @@ fn main() -> ExitCode {
     let result = match cmd {
         "check" => run_check(&root),
         "check-matrix" => run_check_matrix(&root),
-        "baseline" => {
-            eprintln!("baseline: not implemented in M0 (lands in M7/M8)");
-            Ok(())
-        }
+        "baseline" => run_baseline(&root),
         "static-release" => {
             let binary = args.get(1).map(Path::new);
             match binary {
@@ -121,6 +118,105 @@ fn run_static_release(binary: &Path) -> Result<(), Vec<String>> {
         Err(e) => {
             errors.push(format!("failed to run `ldd`: {e}"));
         }
+    }
+
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// baseline: functional + quality + perf orchestration (M7/M8, §57 B5)
+// ---------------------------------------------------------------------------
+
+fn run_baseline(root: &Path) -> Result<(), Vec<String>> {
+    use std::process::Command;
+
+    let mut errors: Vec<String> = Vec::new();
+
+    println!("baseline: functional (cargo test --workspace)");
+    let test = Command::new("cargo")
+        .args(["test", "--workspace"])
+        .current_dir(root)
+        .status();
+    match test {
+        Ok(s) if s.success() => {}
+        Ok(s) => errors.push(format!("functional: cargo test failed ({s})")),
+        Err(e) => errors.push(format!("functional: failed to run cargo test: {e}")),
+    }
+
+    println!("baseline: quality (fmt + clippy)");
+    let fmt = Command::new("cargo")
+        .args(["fmt", "--check"])
+        .current_dir(root)
+        .status();
+    match fmt {
+        Ok(s) if s.success() => {}
+        Ok(s) => errors.push(format!("quality: cargo fmt --check failed ({s})")),
+        Err(e) => errors.push(format!("quality: failed to run cargo fmt: {e}")),
+    }
+    let clippy = Command::new("cargo")
+        .args([
+            "clippy",
+            "--workspace",
+            "--all-targets",
+            "--all-features",
+            "--",
+            "-D",
+            "warnings",
+        ])
+        .current_dir(root)
+        .status();
+    match clippy {
+        Ok(s) if s.success() => {}
+        Ok(s) => errors.push(format!("quality: cargo clippy failed ({s})")),
+        Err(e) => errors.push(format!("quality: failed to run cargo clippy: {e}")),
+    }
+
+    println!("baseline: perf (RSS adapter memory, PERF-001 ≤128 MiB)");
+    let perf = Command::new("cargo")
+        .args([
+            "run",
+            "-p",
+            "radar-adapters",
+            "--example",
+            "perf_rss",
+            "--release",
+        ])
+        .current_dir(root)
+        .output();
+    match perf {
+        Ok(out) if out.status.success() => {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            let peak_kb: Option<u64> = stdout
+                .lines()
+                .find_map(|l| l.strip_prefix("PERF_RSS_PEAK_KB:"))
+                .and_then(|v| v.trim().parse().ok());
+            let events: Option<u64> = stdout
+                .lines()
+                .find_map(|l| l.strip_prefix("PERF_RSS_EVENTS:"))
+                .and_then(|v| v.trim().parse().ok());
+            match (peak_kb, events) {
+                (Some(kb), Some(ev)) => {
+                    let mib = kb as f64 / 1024.0;
+                    println!("baseline: perf peak RSS = {kb} KiB ({mib:.1} MiB), {ev} events");
+                    let limit_kb: u64 = 128 * 1024;
+                    if kb > limit_kb {
+                        errors.push(format!(
+                            "PERF-001: peak RSS {kb} KiB exceeds 128 MiB ({limit_kb} KiB)"
+                        ));
+                    }
+                }
+                _ => errors.push(format!("perf: failed to parse perf_rss output:\n{stdout}")),
+            }
+        }
+        Ok(out) => {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            errors.push(format!("perf: perf_rss exited non-zero\n{stderr}"));
+        }
+        Err(e) => errors.push(format!("perf: failed to run perf_rss: {e}")),
     }
 
     if errors.is_empty() {
