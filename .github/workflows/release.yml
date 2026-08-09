@@ -6,6 +6,8 @@ on:
 
 permissions:
   contents: write
+  attestations: write
+  id-token: write
 
 env:
   CARGO_TERM_COLOR: always
@@ -24,18 +26,48 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      - name: Verify tag version matches Cargo.toml (§53)
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          CARGO=$(grep '^version' Cargo.toml | head -1 | sed -E 's/.*"([0-9.]+)".*/\1/')
+          echo "tag version: $TAG"
+          echo "Cargo.toml version: $CARGO"
+          if [ "$TAG" != "$CARGO" ]; then
+            echo "error: tag version ($TAG) != Cargo.toml version ($CARGO)" >&2
+            exit 1
+          fi
+
       - name: Build static release binary
         run: cargo build --release --target x86_64-unknown-linux-musl
 
-      - name: Verify static linkage
+      - name: Verify static linkage (RELS-001)
         run: |
           file target/x86_64-unknown-linux-musl/release/math_talk_radar
           ldd target/x86_64-unknown-linux-musl/release/math_talk_radar || true
 
-      - name: Generate SHA-256 checksum
+      - name: Verify binary size ≤30 MiB (PERF-002)
+        run: |
+          BIN=target/x86_64-unknown-linux-musl/release/math_talk_radar
+          SIZE=$(stat --format=%s "$BIN")
+          LIMIT=$((30 * 1024 * 1024))
+          echo "binary size: $SIZE bytes ($(( SIZE / 1024 / 1024 )) MiB)"
+          echo "limit: $LIMIT bytes (30 MiB)"
+          if [ "$SIZE" -gt "$LIMIT" ]; then
+            echo "error: binary size $SIZE exceeds 30 MiB ($LIMIT)" >&2
+            exit 1
+          fi
+
+      - name: Generate SHA-256 checksum (RELS-002)
         run: |
           cd target/x86_64-unknown-linux-musl/release
           sha256sum math_talk_radar > math_talk_radar.sha256
+
+      - name: Attest build provenance (RELS-003)
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-path: |
+            target/x86_64-unknown-linux-musl/release/math_talk_radar
+            target/x86_64-unknown-linux-musl/release/math_talk_radar.sha256
 
       - uses: actions/upload-artifact@v4
         with:
