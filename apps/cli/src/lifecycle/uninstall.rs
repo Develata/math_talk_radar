@@ -92,13 +92,18 @@ pub async fn run(args: UninstallArgs) -> Result<String, CliError> {
 }
 
 fn delete_path(path: &Path) -> Result<(), CliError> {
-    let canonical = paths::safe_canonicalize(path).map_err(CliError::uninstall)?;
-    if canonical.is_dir() {
-        std::fs::remove_dir_all(&canonical)
-            .map_err(|e| CliError::uninstall(format!("delete {}: {e}", canonical.display())))?;
+    // Canonicalize validates safety (rejects /, $HOME, empty) but we delete the
+    // original path: symlink_metadata does not follow symlinks, so a symlink is
+    // unlinked rather than its target (§35.5).
+    paths::safe_canonicalize(path).map_err(CliError::uninstall)?;
+    let meta = std::fs::symlink_metadata(path)
+        .map_err(|e| CliError::uninstall(format!("stat {}: {e}", path.display())))?;
+    if meta.is_dir() {
+        std::fs::remove_dir_all(path)
+            .map_err(|e| CliError::uninstall(format!("delete {}: {e}", path.display())))?;
     } else {
-        std::fs::remove_file(&canonical)
-            .map_err(|e| CliError::uninstall(format!("delete {}: {e}", canonical.display())))?;
+        std::fs::remove_file(path)
+            .map_err(|e| CliError::uninstall(format!("delete {}: {e}", path.display())))?;
     }
     Ok(())
 }
