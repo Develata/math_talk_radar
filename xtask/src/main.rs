@@ -6,8 +6,8 @@
 //!   cargo xtask baseline       — functional/quality/perf baseline orchestration (M7/M8)
 //!   cargo xtask static-release <binary> — musl/static-link checks (M7)
 //!
-//! M0 ships `check` and `check-matrix` with real validation; `baseline` and
-//! `static-release` are stubs that land with their milestones.
+//! M0 ships `check` and `check-matrix`; M7 ships `baseline` and
+//! `static-release`.
 #![forbid(unsafe_code)]
 
 use std::collections::HashSet;
@@ -26,8 +26,11 @@ fn main() -> ExitCode {
             Ok(())
         }
         "static-release" => {
-            eprintln!("static-release: not implemented in M0 (lands in M7)");
-            Ok(())
+            let binary = args.get(1).map(Path::new);
+            match binary {
+                Some(p) => run_static_release(p),
+                None => Err(vec!["usage: cargo xtask static-release <binary>".into()]),
+            }
         }
         other => {
             eprintln!("unknown xtask command: {other}");
@@ -57,6 +60,74 @@ fn workspace_root() -> PathBuf {
         .parent()
         .expect("xtask must live directly under the workspace root")
         .to_path_buf()
+}
+
+// ---------------------------------------------------------------------------
+// static-release: verify a release binary is statically linked (RELS-001, §51)
+// ---------------------------------------------------------------------------
+
+fn run_static_release(binary: &Path) -> Result<(), Vec<String>> {
+    use std::process::Command;
+
+    let mut errors: Vec<String> = Vec::new();
+
+    if !binary.exists() {
+        return Err(vec![format!("binary not found: {}", binary.display())]);
+    }
+
+    let file_out = Command::new("file")
+        .arg(binary)
+        .output()
+        .map_err(|e| vec![format!("failed to run `file`: {e}")])?;
+    let file_text = String::from_utf8_lossy(&file_out.stdout);
+    println!("file: {file_text}");
+
+    let statically_linked = file_text.contains("statically linked");
+    if !statically_linked {
+        errors.push(format!(
+            "RELS-001: `file` does not report 'statically linked'.\n\
+             Output: {file_text}"
+        ));
+    }
+
+    let ldd = Command::new("ldd").arg(binary).output();
+    match ldd {
+        Ok(out) => {
+            let ldd_text = String::from_utf8_lossy(&out.stdout);
+            let ldd_err = String::from_utf8_lossy(&out.stderr);
+            if out.status.success() {
+                println!("ldd: {ldd_text}");
+                let has_deps = ldd_text
+                    .lines()
+                    .any(|l| !l.trim().is_empty() && !l.contains("not a dynamic executable"));
+                if has_deps {
+                    errors.push(format!(
+                        "RELS-001: `ldd` reports runtime shared-library dependencies.\n\
+                         Output: {ldd_text}"
+                    ));
+                }
+            } else {
+                let combined = format!("{ldd_text}{ldd_err}");
+                let not_dynamic = combined.contains("not a dynamic executable");
+                println!("ldd: {combined}");
+                if !not_dynamic {
+                    errors.push(format!(
+                        "RELS-001: `ldd` failed without 'not a dynamic executable'.\n\
+                         Output: {combined}"
+                    ));
+                }
+            }
+        }
+        Err(e) => {
+            errors.push(format!("failed to run `ldd`: {e}"));
+        }
+    }
+
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
+    }
 }
 
 // ---------------------------------------------------------------------------
