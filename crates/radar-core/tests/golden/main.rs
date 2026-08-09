@@ -8,6 +8,7 @@
 //! FP = 0).
 
 mod dates;
+mod dedup;
 mod people;
 mod ranking;
 mod topics;
@@ -21,6 +22,7 @@ use serde::Deserialize;
 const SCHOLARS_TOML: &str = include_str!("../../../../config/scholars.toml");
 const TOPICS_TOML: &str = include_str!("../../../../config/topics.toml");
 const DATES_TOML: &str = include_str!("../golden_data/dates.toml");
+const DEDUP_TOML: &str = include_str!("../golden_data/dedup.toml");
 const PEOPLE_TOML: &str = include_str!("../golden_data/people.toml");
 const RANKING_TOML: &str = include_str!("../golden_data/ranking.toml");
 
@@ -105,6 +107,40 @@ fn ranking_golden() {
         "ranking golden failures:\n{}",
         stats.failures.join("\n")
     );
+}
+
+#[test]
+fn dedup_golden() {
+    let stats = dedup::run(DEDUP_TOML);
+    assert!(
+        stats.total >= 30,
+        "need >= 30 dedup pairs, got {}",
+        stats.total
+    );
+    // §47: precision = 100% (no wrong merges — a wrong merge is a release blocker).
+    assert_eq!(
+        stats.false_positives,
+        0,
+        "dedup precision < 100%: {} wrong merge(s)\n{}",
+        stats.false_positives,
+        stats.failures.join("\n")
+    );
+    // §47: recall ≥ 90%.
+    let recall_denom = stats.true_positives + stats.false_negatives;
+    if recall_denom > 0 {
+        let recall = stats.true_positives as f64 / recall_denom as f64;
+        assert!(recall >= 0.90, "dedup recall {recall:.4} < 0.90");
+    }
+    assert!(
+        stats.failures.is_empty(),
+        "dedup golden failures:\n{}",
+        stats.failures.join("\n")
+    );
+}
+
+#[test]
+fn rel_003_stable_deterministic_ids() {
+    dedup::run_rel003();
 }
 
 // --- §47 aggregate metrics --------------------------------------------------

@@ -1,0 +1,257 @@
+# Golden test data for dedup (§25, §47, M3).
+#
+# Schema:
+#   id              — unique case identifier (DEDUP-xxx for acceptance)
+#   should_merge    — whether the pair should be detected as duplicates
+#   expected_signal — which signal is expected to match (informational only;
+#                     the test checks should_merge, not the specific signal)
+#   [a] / [b]       — the two events to compare
+#     title         — event title
+#     url           — optional canonical URL
+#     start_date    — optional "YYYY-MM-DD"
+#     organizer     — optional organizer name (mapped to PersonHit role=Organizer)
+#     location      — optional location name (mapped to Location.name)
+#     source_id     — source identifier
+#     source_url    — source URL
+#     native_id     — optional source-declared canonical event id
+#
+# §47 baselines: precision = 100% (no wrong merges), recall ≥ 90%.
+
+# ===== DEDUP-001: identical event merge (positive, 18 pairs) =====
+
+# --- CanonicalUrl (5) ---
+
+
+[[pairs]]
+id = "DEDUP-001a"
+should_merge = true
+expected_signal = "CanonicalUrl"
+a = { title = "Algebraic Geometry Conference", url = "https://math.mit.edu/events/42", start_date = "2026-08-09", source_id = "s1", source_url = "https://math.mit.edu/feed" }
+b = { title = "Algebraic Geometry Conference", url = "https://math.mit.edu/events/42#top", start_date = "2026-08-09", source_id = "s2", source_url = "https://other.com/feed" }
+
+[[pairs]]
+id = "DEDUP-001b"
+should_merge = true
+expected_signal = "CanonicalUrl"
+a = { title = "Number Theory Workshop", url = "https://msri.org/programs/123", start_date = "2026-09-15", source_id = "s1", source_url = "https://msri.org/feed" }
+b = { title = "Number Theory Workshop", url = "https://msri.org/programs/123/", start_date = "2026-09-15", source_id = "s2", source_url = "https://other.com/feed" }
+
+[[pairs]]
+id = "DEDUP-001c"
+should_merge = true
+expected_signal = "CanonicalUrl"
+a = { title = "Topology Seminar", url = "https://MATH.HARVARD.EDU/seminars/7", start_date = "2026-10-03", source_id = "s1", source_url = "https://math.harvard.edu/feed" }
+b = { title = "Topology Seminar", url = "https://math.harvard.edu/seminars/7", start_date = "2026-10-03", source_id = "s2", source_url = "https://other.com/feed" }
+
+[[pairs]]
+id = "DEDUP-001d"
+should_merge = true
+expected_signal = "CanonicalUrl"
+a = { title = "PDE Conference", url = "https://math.berkeley.edu:443/events/9", start_date = "2026-11-20", source_id = "s1", source_url = "https://math.berkeley.edu/feed" }
+b = { title = "PDE Conference", url = "https://math.berkeley.edu/events/9", start_date = "2026-11-20", source_id = "s2", source_url = "https://other.com/feed" }
+
+[[pairs]]
+id = "DEDUP-001e"
+should_merge = true
+expected_signal = "CanonicalUrl"
+a = { title = "Combinatorics Colloquium", url = "https://math.stanford.edu/talks/55?session=abc", start_date = "2026-08-30", source_id = "s1", source_url = "https://math.stanford.edu/feed" }
+b = { title = "Combinatorics Colloquium", url = "https://math.stanford.edu/talks/55", start_date = "2026-08-30", source_id = "s2", source_url = "https://other.com/feed" }
+
+[[pairs]]
+id = "DEDUP-001f"
+should_merge = true
+expected_signal = "SourceCanonicalId"
+a = { title = "Indico Conference", start_date = "2026-08-09", source_id = "indico", source_url = "https://indico.cern.ch/api", native_id = "12345" }
+b = { title = "Indico Conference", start_date = "2026-08-09", source_id = "indico", source_url = "https://mirror.cern.ch/api", native_id = "12345" }
+
+[[pairs]]
+id = "DEDUP-001g"
+should_merge = true
+expected_signal = "SourceCanonicalId"
+a = { title = "ICS Workshop", start_date = "2026-09-10", source_id = "ics-cal", source_url = "https://math.mit.edu/cal.ics", native_id = "uid-67890@mit.edu" }
+b = { title = "ICS Workshop", start_date = "2026-09-10", source_id = "ics-cal", source_url = "https://math.mit.edu/calendar.ics", native_id = "uid-67890@mit.edu" }
+
+[[pairs]]
+id = "DEDUP-001h"
+should_merge = true
+expected_signal = "SourceCanonicalId"
+a = { title = "Seminar on Analysis", start_date = "2026-10-15", source_id = "indico", source_url = "https://indico.mit.edu/api", native_id = "event-99" }
+b = { title = "Seminar on Analysis", url = "https://indico.mit.edu/event/99", start_date = "2026-10-15", source_id = "indico", source_url = "https://indico.mit.edu/page", native_id = "event-99" }
+
+[[pairs]]
+id = "DEDUP-001i"
+should_merge = true
+expected_signal = "TitleDateOrganizer"
+a = { title = "Algebraic Geometry Conference", start_date = "2026-08-09", source_id = "s1", source_url = "https://math.mit.edu/events" }
+b = { title = "algebraic geometry conference", start_date = "2026-08-09", source_id = "s2", source_url = "https://math.mit.edu/calendar" }
+
+[[pairs]]
+id = "DEDUP-001j"
+should_merge = true
+expected_signal = "TitleDateOrganizer"
+a = { title = "Number Theory  Workshop", start_date = "2026-09-15", source_id = "s1", source_url = "https://msri.org/programs" }
+b = { title = "Number Theory Workshop", start_date = "2026-09-15", source_id = "s2", source_url = "https://msri.org/calendar" }
+
+[[pairs]]
+id = "DEDUP-001k"
+should_merge = true
+expected_signal = "TitleDateOrganizer"
+a = { title = "Representation Theory Seminar", start_date = "2026-10-03", organizer = "IAS", source_id = "s1", source_url = "https://math.ias.edu/feed" }
+b = { title = "Representation Theory Seminar", start_date = "2026-10-03", organizer = "ias", source_id = "s2", source_url = "https://other.edu/feed" }
+
+[[pairs]]
+id = "DEDUP-001l"
+should_merge = true
+expected_signal = "TitleDateOrganizer"
+a = { title = "Geometric Analysis Conference", start_date = "2026-11-20", source_id = "s1", source_url = "https://math.mit.edu/events/2026" }
+b = { title = "Geometric Analysis Conference", start_date = "2026-11-20", source_id = "s2", source_url = "https://calendar.mit.edu/fall" }
+
+[[pairs]]
+id = "DEDUP-001m"
+should_merge = true
+expected_signal = "TitleDateOrganizer"
+a = { title = "Cohomology Workshop", start_date = "2026-08-30", source_id = "s1", source_url = "https://www.math.stanford.edu/talks" }
+b = { title = "Cohomology Workshop", start_date = "2026-08-30", source_id = "s2", source_url = "https://math.stanford.edu/events" }
+
+[[pairs]]
+id = "DEDUP-001n"
+should_merge = true
+expected_signal = "TitleDateLocation"
+a = { title = "Probability Theory Summer School", start_date = "2026-07-15", location = "Boston", source_id = "s1", source_url = "https://math.bu.edu/feed" }
+b = { title = "Probability Theory Summer School", start_date = "2026-07-15", location = "boston", source_id = "s2", source_url = "https://math.harvard.edu/feed" }
+
+[[pairs]]
+id = "DEDUP-001o"
+should_merge = true
+expected_signal = "TitleDateLocation"
+a = { title = "Ergodic Theory Workshop", start_date = "2026-08-22", location = "Berkeley", source_id = "s1", source_url = "https://math.mit.edu/feed" }
+b = { title = "Ergodic Theory Workshop", start_date = "2026-08-22", location = "berkeley", source_id = "s2", source_url = "https://math.princeton.edu/feed" }
+
+[[pairs]]
+id = "DEDUP-001p"
+should_merge = true
+expected_signal = "TitleDateLocation"
+a = { title = "Mirror Symmetry Conference", start_date = "2026-09-10", location = "Simons Center", source_id = "s1", source_url = "https://math.mit.edu/feed" }
+b = { title = "Mirror Symmetry Conference", start_date = "2026-09-10", location = "simons center", source_id = "s2", source_url = "https://math.uchicago.edu/feed" }
+
+[[pairs]]
+id = "DEDUP-001q"
+should_merge = true
+expected_signal = "TitleDateLocation"
+a = { title = "Arithmetic Geometry Workshop", start_date = "2026-10-05", location = "Banff International Research Station", source_id = "s1", source_url = "https://math.mit.edu/feed" }
+b = { title = "Arithmetic Geometry Workshop", start_date = "2026-10-05", location = "Banff  International  Research Station", source_id = "s2", source_url = "https://math.columbia.edu/feed" }
+
+[[pairs]]
+id = "DEDUP-001r"
+should_merge = true
+expected_signal = "TitleDateLocation"
+a = { title = "Quantum Field Theory Seminar", start_date = "2026-11-12", location = "Institute for Advanced Study", source_id = "s1", source_url = "https://math.bu.edu/feed" }
+b = { title = "Quantum Field Theory Seminar", start_date = "2026-11-12", location = "institute for advanced study", source_id = "s2", source_url = "https://math.yale.edu/feed" }
+
+[[pairs]]
+id = "DEDUP-002a"
+should_merge = false
+a = { title = "Algebraic Geometry Conference", start_date = "2026-08-09", source_id = "s1", source_url = "https://math.mit.edu/events" }
+b = { title = "Algebraic Geometry Conference", start_date = "2026-09-09", source_id = "s2", source_url = "https://math.mit.edu/calendar" }
+
+[[pairs]]
+id = "DEDUP-002b"
+should_merge = false
+a = { title = "Number Theory Workshop", start_date = "2026-08-15", source_id = "s1", source_url = "https://msri.org/programs" }
+b = { title = "Number Theory Workshop", start_date = "2026-09-15", source_id = "s2", source_url = "https://msri.org/calendar" }
+
+[[pairs]]
+id = "DEDUP-002c"
+should_merge = false
+a = { title = "Topology Seminar", url = "https://math.harvard.edu/seminars/fall", start_date = "2026-10-03", source_id = "s1", source_url = "https://math.harvard.edu/feed" }
+b = { title = "Topology Seminar", url = "https://math.harvard.edu/seminars/spring", start_date = "2027-03-03", source_id = "s2", source_url = "https://math.harvard.edu/calendar" }
+
+[[pairs]]
+id = "DEDUP-002d"
+should_merge = false
+a = { title = "PDE Conference", start_date = "2026-11-20", location = "Berkeley", source_id = "s1", source_url = "https://math.mit.edu/feed" }
+b = { title = "PDE Conference", start_date = "2026-12-20", location = "Berkeley", source_id = "s2", source_url = "https://math.princeton.edu/feed" }
+
+[[pairs]]
+id = "DEDUP-002e"
+should_merge = false
+a = { title = "Combinatorics Colloquium", start_date = "2026-08-30", source_id = "s1", source_url = "https://math.stanford.edu/feed" }
+b = { title = "Combinatorics Colloquium", start_date = "2026-09-30", source_id = "s2", source_url = "https://math.stanford.edu/calendar" }
+
+[[pairs]]
+id = "DEDUP-002f"
+should_merge = false
+a = { title = "Geometric Analysis Conference", start_date = "2026-01-15", organizer = "MIT", source_id = "s1", source_url = "https://math.mit.edu/feed" }
+b = { title = "Geometric Analysis Conference", start_date = "2026-06-15", organizer = "MIT", source_id = "s2", source_url = "https://other.edu/feed" }
+
+[[pairs]]
+id = "DEDUP-002g"
+should_merge = false
+a = { title = "Algebraic Geometry Conference", start_date = "2026-08-09", source_id = "s1", source_url = "https://math.mit.edu/events" }
+b = { title = "Number Theory Conference", start_date = "2026-08-09", source_id = "s2", source_url = "https://math.mit.edu/calendar" }
+
+[[pairs]]
+id = "DEDUP-002h"
+should_merge = false
+a = { title = "Topology Workshop", start_date = "2026-09-15", source_id = "s1", source_url = "https://msri.org/programs" }
+b = { title = "Geometry Workshop", start_date = "2026-09-15", source_id = "s2", source_url = "https://msri.org/calendar" }
+
+[[pairs]]
+id = "DEDUP-002i"
+should_merge = false
+a = { title = "Probability Summer School", start_date = "2026-07-15", location = "Boston", source_id = "s1", source_url = "https://math.bu.edu/feed" }
+b = { title = "Statistics Summer School", start_date = "2026-07-15", location = "Boston", source_id = "s2", source_url = "https://math.harvard.edu/feed" }
+
+[[pairs]]
+id = "DEDUP-002j"
+should_merge = false
+a = { title = "Mirror Symmetry Conference", url = "https://scgp.stonybrook.edu/event/1", start_date = "2026-09-10", source_id = "s1", source_url = "https://scgp.stonybrook.edu/feed" }
+b = { title = "Homological Mirror Symmetry Workshop", url = "https://scgp.stonybrook.edu/event/2", start_date = "2026-09-10", source_id = "s2", source_url = "https://scgp.stonybrook.edu/calendar" }
+
+[[pairs]]
+id = "DEDUP-002k"
+should_merge = false
+a = { title = "Algebraic Geometry Conference", start_date = "2026-08-09", location = "Boston", source_id = "s1", source_url = "https://math.mit.edu/feed" }
+b = { title = "Algebraic Geometry Conference", start_date = "2026-08-09", location = "Berkeley", source_id = "s2", source_url = "https://math.stanford.edu/feed" }
+
+[[pairs]]
+id = "DEDUP-002l"
+should_merge = false
+a = { title = "Number Theory Workshop", start_date = "2026-09-15", organizer = "MIT", source_id = "s1", source_url = "https://math.mit.edu/feed" }
+b = { title = "Number Theory Workshop", start_date = "2026-09-15", organizer = "Stanford", location = "Stanford", source_id = "s2", source_url = "https://math.stanford.edu/feed" }
+
+[[pairs]]
+id = "DEDUP-002m"
+should_merge = false
+a = { title = "Representation Theory Seminar", start_date = "2026-10-03", organizer = "IAS", source_id = "s1", source_url = "https://math.ias.edu/feed" }
+b = { title = "Representation Theory Seminar", start_date = "2026-10-03", organizer = "MSRI", location = "Berkeley", source_id = "s2", source_url = "https://msri.org/feed" }
+
+[[pairs]]
+id = "DEDUP-002n"
+should_merge = false
+a = { title = "PDE Conference", start_date = "2026-11-20", source_id = "s1", source_url = "https://math.bu.edu/feed" }
+b = { title = "PDE Conference", start_date = "2026-11-20", source_id = "s2", source_url = "https://math.yale.edu/feed" }
+
+[[pairs]]
+id = "DEDUP-002o"
+should_merge = false
+a = { title = "Geometric Analysis Conference", start_date = "2026-08-30", organizer = "Princeton", source_id = "s1", source_url = "https://math.princeton.edu/feed" }
+b = { title = "Geometric Analysis Conference", start_date = "2026-08-30", organizer = "Chicago", source_id = "s2", source_url = "https://math.uchicago.edu/feed" }
+
+[[pairs]]
+id = "DEDUP-002p"
+should_merge = false
+a = { title = "Algebraic Geometry Conference", url = "https://math.mit.edu/events/42", start_date = "2026-08-09", source_id = "s1", source_url = "https://math.mit.edu/feed" }
+b = { title = "Algebraic Geometry Conference", start_date = "2026-08-09", location = "Boston", source_id = "s2", source_url = "https://math.stanford.edu/feed" }
+
+[[pairs]]
+id = "DEDUP-002q"
+should_merge = false
+a = { title = "Indico Conference", start_date = "2026-08-09", source_id = "indico", source_url = "https://indico.cern.ch/api", native_id = "12345" }
+b = { title = "Indico Conference", start_date = "2026-08-09", source_id = "other", source_url = "https://other.com/api", native_id = "12345" }
+
+[[pairs]]
+id = "DEDUP-002r"
+should_merge = false
+a = { title = "Seminar on Analysis", start_date = "2026-10-15", source_id = "indico", source_url = "https://indico.mit.edu/api", native_id = "event-99" }
+b = { title = "Seminar on Analysis", start_date = "2026-10-15", source_id = "indico", source_url = "https://indico.stanford.edu/page" }
