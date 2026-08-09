@@ -13,7 +13,7 @@ use radar_core::{Event, EventId, SourceHealth};
 use redb::ReadableTable;
 
 use crate::migrations::run_migrations;
-use crate::schema::{EVENTS, SCHEMA_VERSION, SOURCE_HEALTH};
+use crate::schema::{EVENTS, SCHEMA_VERSION, SOURCE_HEALTH, STATE_SCHEMA_VERSION};
 
 #[derive(Debug, thiserror::Error)]
 pub enum StateError {
@@ -98,6 +98,20 @@ impl Repository {
     /// is never created or modified. Used by the `--no-state` path (STATE-004).
     pub fn open_read_only(path: &Path) -> Result<Self, StateError> {
         let db = redb::Database::open(path)?;
+        let version = {
+            let txn = db.begin_read()?;
+            txn.open_table(SCHEMA_VERSION)
+                .ok()
+                .and_then(|table| table.get("version").ok())
+                .and_then(|opt| opt.map(|g| g.value()))
+                .unwrap_or(0)
+        };
+        if version != STATE_SCHEMA_VERSION {
+            return Err(StateError::Schema {
+                expected: STATE_SCHEMA_VERSION,
+                found: version,
+            });
+        }
         Ok(Self {
             db,
             path: path.to_path_buf(),
@@ -126,10 +140,13 @@ impl Repository {
         {
             let mut table = txn.open_table(EVENTS)?;
             let key = event.id.0.as_str();
-            let prev_first = table
-                .get(key)?
-                .and_then(|g| serde_json::from_slice::<Event>(g.value()).ok())
-                .and_then(|p| p.first_seen_at);
+            let prev_first = match table.get(key)? {
+                Some(g) => {
+                    let prev: Event = serde_json::from_slice(g.value())?;
+                    prev.first_seen_at
+                }
+                None => None,
+            };
             stored.first_seen_at = Some(prev_first.unwrap_or(now));
             stored.last_seen_at = Some(now);
             let bytes = serde_json::to_vec(&stored)?;

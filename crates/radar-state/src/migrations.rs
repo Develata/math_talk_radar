@@ -15,6 +15,12 @@ pub fn run_migrations(db: &Database) -> Result<u32, MigrateError> {
         let mut vtable = txn.open_table(SCHEMA_VERSION)?;
         let existing = vtable.get("version")?.map(|g| g.value());
         match existing {
+            Some(v) if v != STATE_SCHEMA_VERSION => {
+                return Err(MigrateError::UnsupportedVersion {
+                    found: v,
+                    expected: STATE_SCHEMA_VERSION,
+                });
+            }
             Some(v) => v,
             None => {
                 vtable.insert("version", STATE_SCHEMA_VERSION)?;
@@ -22,18 +28,9 @@ pub fn run_migrations(db: &Database) -> Result<u32, MigrateError> {
             }
         }
     };
-    // Open-for-create the domain tables so they exist after v1. Opening under a
-    // write transaction creates the table if absent and is a no-op otherwise.
     let _ = txn.open_table(EVENTS)?;
     let _ = txn.open_table(SOURCE_HEALTH)?;
     txn.commit()?;
-
-    if version != STATE_SCHEMA_VERSION {
-        return Err(MigrateError::UnsupportedVersion {
-            found: version,
-            expected: STATE_SCHEMA_VERSION,
-        });
-    }
     Ok(version)
 }
 
