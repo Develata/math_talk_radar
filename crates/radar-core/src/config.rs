@@ -98,6 +98,36 @@ fn default_request_budget() -> u32 {
     20
 }
 
+/// Wrapper for the `sources.toml` file shape: a top-level `[[sources]]` array.
+/// Loaded by the CLI at startup (§33). The embedded default (CFG-001) ships
+/// with the binary so the CLI works without a user config file.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SourcesConfig {
+    #[serde(default)]
+    pub sources: Vec<SourceSpec>,
+}
+
+impl SourcesConfig {
+    /// Parse a `sources.toml` document. Returns a config with an empty source
+    /// list for empty input — the caller decides whether zero sources is an
+    /// error (it is, for `scan`: HTTP-005 exit 4).
+    pub fn parse(toml_str: &str) -> Result<Self, toml::de::Error> {
+        toml::from_str(toml_str)
+    }
+
+    /// The embedded default source registry shipped with the binary (CFG-001).
+    /// M0 ships an empty list; M6 promotes audited sources here.
+    pub fn embedded() -> Self {
+        Self::parse(include_str!("../../../config/sources.toml"))
+            .expect("embedded sources.toml must parse at compile time")
+    }
+
+    /// Only sources with `enabled = true`.
+    pub fn enabled(&self) -> Vec<&SourceSpec> {
+        self.sources.iter().filter(|s| s.enabled).collect()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::SourceSpec;
@@ -186,5 +216,41 @@ detail_date = "time"
         assert!(selectors.detail_location.is_none());
         assert!(selectors.detail_description.is_none());
         assert!(selectors.detail_speaker.is_none());
+    }
+
+    // CFG-001: embedded default config exists and parses.
+    #[test]
+    fn cfg_001_embedded_default_config_parses() {
+        let config = super::SourcesConfig::embedded();
+        // M0 ships an empty list; M6 promotes audited sources. The contract
+        // is that the embedded file parses without error, not that it has
+        // a minimum source count.
+        let _ = config.sources.len();
+    }
+
+    #[test]
+    fn sources_config_parses_empty_as_zero_sources() {
+        let config = super::SourcesConfig::parse("").expect("empty TOML parses");
+        assert!(config.sources.is_empty());
+    }
+
+    #[test]
+    fn sources_config_parses_array_of_sources() {
+        let toml = r#"
+[[sources]]
+id = "s1"
+name = "Source 1"
+enabled = true
+
+[[sources]]
+id = "s2"
+name = "Source 2"
+enabled = false
+"#;
+        let config = super::SourcesConfig::parse(toml).expect("two-source TOML parses");
+        assert_eq!(config.sources.len(), 2);
+        let enabled = config.enabled();
+        assert_eq!(enabled.len(), 1);
+        assert_eq!(enabled[0].id, "s1");
     }
 }
