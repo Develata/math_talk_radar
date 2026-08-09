@@ -39,6 +39,11 @@ pub fn deterministic_id(parts: &[&str]) -> String {
 pub struct Event {
     pub id: EventId,
     pub title: String,
+    /// Event's canonical detail-page URL (from the discovering stub). Used by
+    /// the §25 `CanonicalUrl` dedup signal. Per §64, adding an optional field
+    /// is schema-compatible in v0.x.
+    #[serde(default)]
+    pub url: Option<Url>,
     pub event_type: EventType,
     pub status: EventStatus,
     pub date: EventDate,
@@ -187,6 +192,12 @@ pub struct SourceEvidence {
     pub evidence: Option<String>,
     #[serde(default)]
     pub captured_at: Option<DateTime<Utc>>,
+    /// Source-declared canonical event id (e.g. Indico event id, ICS UID). Used
+    /// by the §25 `SourceCanonicalId` dedup signal. Optional: most sources do
+    /// not declare one. Per §64, adding an optional field is schema-compatible
+    /// in v0.x (no `schema_version` bump).
+    #[serde(default)]
+    pub native_id: Option<String>,
 }
 
 // ---- Source health (§43) -------------------------------------------------

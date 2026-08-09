@@ -55,6 +55,7 @@ impl SourceAdapter for HtmlConfigAdapter {
                         source_url: document.url.clone(),
                         evidence: None,
                         captured_at: Some(document.fetched_at),
+                        native_id: None,
                     },
                 });
             }
@@ -157,6 +158,7 @@ impl SourceAdapter for HtmlConfigAdapter {
         let enriched = Event {
             id,
             title,
+            url: Some(stub_url.clone()),
             event_type,
             status: EventStatus::Unknown,
             date: event_date,
@@ -291,6 +293,7 @@ fn build_minimal_event(stub: &EventStub) -> Event {
     Event {
         id: EventId(deterministic_id(&[&stub.title, stub.url.as_str()])),
         title: stub.title.clone(),
+        url: Some(stub.url.clone()),
         event_type: detect_event_type(&stub.title),
         status: EventStatus::Unknown,
         date: stub
@@ -468,6 +471,7 @@ mod tests {
                 source_url: Url::parse("https://example.com/").unwrap(),
                 evidence: None,
                 captured_at: None,
+                native_id: None,
             },
         };
         let source = make_source("test", None);
@@ -490,6 +494,7 @@ mod tests {
                 source_url: Url::parse("https://example.com/events").unwrap(),
                 evidence: None,
                 captured_at: None,
+                native_id: None,
             },
         }
     }

@@ -268,6 +268,7 @@ fn make_source_evidence(base_url: &Url) -> SourceEvidence {
         source_url: base_url.clone(),
         evidence: None,
         captured_at: None,
+        native_id: None,
     }
 }
 

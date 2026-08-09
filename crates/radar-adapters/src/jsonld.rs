@@ -60,6 +60,7 @@ impl SourceAdapter for JsonLdAdapter {
                         source_url: document.url.clone(),
                         evidence: None,
                         captured_at: Some(document.fetched_at),
+                        native_id: None,
                     },
                 });
             }
@@ -108,6 +109,7 @@ impl SourceAdapter for JsonLdAdapter {
                         source_url: doc.url.clone(),
                         evidence: None,
                         captured_at: Some(doc.fetched_at),
+                        native_id: None,
                     };
                     // TALK-001: performer → one Talk with all performers as
                     // co-speakers (schema.org co-presenters).
@@ -159,6 +161,7 @@ impl SourceAdapter for JsonLdAdapter {
         let event = Event {
             id: EventId(deterministic_id(&[&stub.title, &source.id])),
             title: stub.title.clone(),
+            url: Some(stub.url.clone()),
             event_type: helpers::detect_event_type(&stub.title),
             status: EventStatus::Unknown,
             date,
@@ -500,6 +503,7 @@ mod tests {
                 source_url: Url::parse("https://example.com/page").unwrap(),
                 evidence: None,
                 captured_at: None,
+                native_id: None,
             },
         };
         let spec = make_spec();

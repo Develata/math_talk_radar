@@ -102,6 +102,7 @@ impl SourceAdapter for DepthAdapter {
                 source_url: self.base.clone(),
                 evidence: None,
                 captured_at: None,
+                native_id: None,
             },
         }])
     }
@@ -162,6 +163,7 @@ impl SourceAdapter for MultiStubAdapter {
                     source_url: self.base.clone(),
                     evidence: None,
                     captured_at: None,
+                    native_id: None,
                 },
             })
             .collect())

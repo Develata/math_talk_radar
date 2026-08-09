@@ -87,6 +87,7 @@ fn empty_source_evidence() -> SourceEvidence {
         source_url: Url::parse("https://example.com").expect("static URL"),
         evidence: None,
         captured_at: None,
+        native_id: None,
     }
 }
 
@@ -94,6 +95,7 @@ fn empty_event() -> Event {
     Event {
         id: EventId(String::new()),
         title: String::new(),
+        url: None,
         event_type: EventType::Unknown,
         status: EventStatus::Unknown,
         date: EventDate {
@@ -245,6 +247,7 @@ fn build_event(case: &RankingCase) -> Event {
             source_url: Url::parse("https://example.com").expect("static URL"),
             evidence: None,
             captured_at: None,
+            native_id: None,
         })
         .collect();
     event.people = case.people.iter().map(make_person).collect();

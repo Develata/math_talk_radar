@@ -77,6 +77,7 @@ impl SourceAdapter for IcsAdapter {
                     source_url: document.url.clone(),
                     evidence: Some("ics".into()),
                     captured_at: Some(document.fetched_at),
+                    native_id: None,
                 },
             });
         }
@@ -129,6 +130,7 @@ impl SourceAdapter for IcsAdapter {
         let full_event = Event {
             id,
             title: event.title.clone(),
+            url: Some(event.url.clone()),
             event_type,
             status: EventStatus::Announced,
             date,
@@ -399,6 +401,7 @@ END:VCALENDAR
                 source_url: Url::parse("https://example.com/cal.ics").unwrap(),
                 evidence: None,
                 captured_at: None,
+                native_id: None,
             },
         };
         let source = make_source();
@@ -420,6 +423,7 @@ END:VCALENDAR
                 source_url: Url::parse("https://example.com/cal.ics").unwrap(),
                 evidence: Some("ics".into()),
                 captured_at: None,
+                native_id: None,
             },
         };
         let source = make_source();
@@ -445,6 +449,7 @@ END:VCALENDAR
                 source_url: Url::parse("https://example.com/cal.ics").unwrap(),
                 evidence: None,
                 captured_at: None,
+                native_id: None,
             },
         };
         let html_doc = FetchedDocument {

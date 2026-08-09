@@ -168,6 +168,7 @@ fn minimal_event_from_stub(stub: &EventStub) -> Event {
     Event {
         id: EventId(deterministic_id(&[&stub.title, stub.url.as_str()])),
         title: stub.title.clone(),
+        url: Some(stub.url.clone()),
         event_type: helpers::detect_event_type(&stub.title),
         status: EventStatus::Unknown,
         date,
@@ -240,6 +241,7 @@ impl SourceAdapter for HtmlGenericAdapter {
                     source_url: base_url.clone(),
                     evidence: Some(evidence),
                     captured_at: None,
+                    native_id: None,
                 },
             });
         }
@@ -292,6 +294,7 @@ impl SourceAdapter for HtmlGenericAdapter {
                 Event {
                     id: EventId(deterministic_id(&[&stub.title, stub.url.as_str()])),
                     title,
+                    url: Some(stub.url.clone()),
                     event_type,
                     status: EventStatus::Unknown,
                     date,
@@ -452,6 +455,7 @@ mod tests {
                 source_url: Url::parse("https://example.com/events").unwrap(),
                 evidence: None,
                 captured_at: None,
+                native_id: None,
             },
         };
         let source = test_source();
@@ -474,6 +478,7 @@ mod tests {
                 source_url: Url::parse("https://example.com/events").unwrap(),
                 evidence: None,
                 captured_at: None,
+                native_id: None,
             },
         };
         let source = test_source();

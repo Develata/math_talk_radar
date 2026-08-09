@@ -252,6 +252,7 @@ mod tests {
             source_url: Url::parse("https://example.com").unwrap(),
             evidence: None,
             captured_at: None,
+            native_id: None,
         }
     }
 
@@ -259,6 +260,7 @@ mod tests {
         Event {
             id: EventId(String::new()),
             title: String::new(),
+            url: None,
             event_type: EventType::Unknown,
             status: EventStatus::Unknown,
             date: EventDate {

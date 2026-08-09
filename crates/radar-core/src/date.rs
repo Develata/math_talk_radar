@@ -17,6 +17,15 @@ pub struct EventDate {
     pub precision: DatePrecision,
 }
 
+impl EventDate {
+    /// Best-effort calendar-date extraction of the start. Returns `None` when
+    /// `start` is absent. Used by dedup signatures (§25) and interval overlap
+    /// (§8) which compare on the date component regardless of time.
+    pub fn start_date(&self) -> Option<NaiveDate> {
+        self.start.as_ref().map(to_naive_date)
+    }
+}
+
 /// A date that may be a calendar date or an exact instant. Serialized
 /// untagged so consumers can branch on shape.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
