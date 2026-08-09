@@ -174,7 +174,13 @@ fn validate_source_registry(root: &Path) -> Vec<String> {
     let i_en = idx("enabled");
     let i_status = idx("status");
 
+    let i_fixture = idx("fixture");
+
     let mut seen = HashSet::new();
+    let mut audited_count: usize = 0;
+    let mut enabled_fixture_count: usize = 0;
+    let mut pending_audit_count: usize = 0;
+    let mut enabled_adapter_kinds: HashSet<&str> = HashSet::new();
     for (i, line) in lines.iter().enumerate().skip(1) {
         let row: Vec<&str> = line.split('\t').collect();
         let cell = |ri: Option<usize>| ri.and_then(|x| row.get(x)).copied().unwrap_or("");
@@ -228,13 +234,55 @@ fn validate_source_registry(root: &Path) -> Vec<String> {
                 ));
             }
         }
-        if !VALID_SRC_STATUS.contains(&cell(i_status)) {
+        let status = cell(i_status);
+        if !VALID_SRC_STATUS.contains(&status) {
             errors.push(format!(
                 "source-registry row {i} ({id}): invalid status '{}'",
-                cell(i_status)
+                status
+            ));
+        }
+
+        if status == "pending_audit" {
+            pending_audit_count += 1;
+        } else {
+            audited_count += 1;
+        }
+        if cell(i_en) == "true" {
+            let fixture = cell(i_fixture);
+            if !fixture.is_empty() {
+                enabled_fixture_count += 1;
+            }
+            enabled_adapter_kinds.insert(cell(i_adapter));
+        }
+    }
+
+    // LIVE-001/002 coverage baseline (§18). Only enforced once the audit is
+    // complete — while any row is still pending_audit, the counts are not
+    // checked so the gate doesn't fail during an in-progress audit.
+    if pending_audit_count == 0 {
+        if audited_count < 20 {
+            errors.push(format!(
+                "LIVE-001: need >=20 audited sources, got {audited_count}"
+            ));
+        }
+        if enabled_fixture_count < 10 {
+            errors.push(format!(
+                "LIVE-002: need >=10 enabled fixture-backed sources, got {enabled_fixture_count}"
+            ));
+        }
+        if enabled_adapter_kinds.len() < 3 {
+            errors.push(format!(
+                "coverage: need >=3 distinct adapter kinds among enabled sources, got {} ({})",
+                enabled_adapter_kinds.len(),
+                enabled_adapter_kinds
+                    .iter()
+                    .copied()
+                    .collect::<Vec<_>>()
+                    .join(", ")
             ));
         }
     }
+
     errors
 }
 
