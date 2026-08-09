@@ -4,6 +4,7 @@
 pub mod cli;
 pub mod commands;
 pub mod config_loader;
+pub mod lifecycle;
 pub mod output;
 pub mod runtime;
 pub mod scan_engine;

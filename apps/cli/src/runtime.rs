@@ -52,6 +52,22 @@ impl CliError {
             message: message.into(),
         }
     }
+
+    /// §32 exit 10: update fatal.
+    pub fn update(message: impl Into<String>) -> Self {
+        Self {
+            code: 10,
+            message: message.into(),
+        }
+    }
+
+    /// §32 exit 11: uninstall fatal.
+    pub fn uninstall(message: impl Into<String>) -> Self {
+        Self {
+            code: 11,
+            message: message.into(),
+        }
+    }
 }
 
 pub fn init_logging(verbose: u8, log_format: Option<LogFormat>) {
