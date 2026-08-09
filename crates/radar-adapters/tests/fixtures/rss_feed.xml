@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+<channel>
+<title>Math Conferences</title>
+<link>https://example.com</link>
+<description>Math events</description>
+<item><title>Conference on Algebra</title><link>https://example.com/algebra</link><pubDate>Mon, 01 Sep 2026 00:00:00 +0000</pubDate></item>
+<item><title>Workshop on Graph Theory</title><link>https://example.com/graph</link><pubDate>Tue, 02 Sep 2026 00:00:00 +0000</pubDate></item>
+<item><title>Seminar on Number Theory</title><link>https://example.com/number</link><pubDate>Wed, 03 Sep 2026 00:00:00 +0000</pubDate></item>
+<item><title>Summer School on Topology</title><link>https://example.com/topology</link><pubDate>Thu, 04 Sep 2026 00:00:00 +0000</pubDate></item>
+<item><title>Colloquium Talk on Geometry</title><link>https://example.com/geometry</link><pubDate>Fri, 05 Sep 2026 00:00:00 +0000</pubDate></item>
+<item><title>Panel Discussion on Math Education</title><link>https://example.com/panel</link><pubDate>Sat, 06 Sep 2026 00:00:00 +0000</pubDate></item>
+<item><title>Mini Course on Category Theory</title><link>https://example.com/category</link><pubDate>Sun, 07 Sep 2026 00:00:00 +0000</pubDate></item>
+<item><title>Award Lecture in Honor of Prof. X</title><link>https://example.com/award</link><pubDate>Mon, 08 Sep 2026 00:00:00 +0000</pubDate></item>
+<item><title>Memorial Conference for John Doe</title><link>https://example.com/memorial</link><pubDate>Tue, 09 Sep 2026 00:00:00 +0000</pubDate></item>
+<item><title>Research Program on Random Graphs</title><link>https://example.com/program</link><pubDate>Wed, 10 Sep 2026 00:00:00 +0000</pubDate></item>
+<item><title>Symposium on Probability Theory</title><link>https://example.com/symposium</link><pubDate>Thu, 11 Sep 2026 00:00:00 +0000</pubDate></item>
+<item><title>Meeting on Algebraic Geometry</title><link>https://example.com/meeting</link><pubDate>Fri, 12 Sep 2026 00:00:00 +0000</pubDate></item>
+</channel>
+</rss>

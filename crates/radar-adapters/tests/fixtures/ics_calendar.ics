@@ -1,0 +1,76 @@
+BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//Test//Test//EN
+BEGIN:VEVENT
+UID:event-1
+SUMMARY:Algebra Conference 2026
+URL:https://example.com/algebra
+DTSTART:20260901T090000Z
+END:VEVENT
+BEGIN:VEVENT
+UID:event-2
+SUMMARY:Workshop on Graph Theory
+URL:https://example.com/graph
+DTSTART:20260902T100000Z
+END:VEVENT
+BEGIN:VEVENT
+UID:event-3
+SUMMARY:Seminar on Number Theory
+URL:https://example.com/number
+DTSTART:20260903T110000Z
+END:VEVENT
+BEGIN:VEVENT
+UID:event-4
+SUMMARY:Summer School on Topology
+URL:https://example.com/topology
+DTSTART:20260904T090000Z
+END:VEVENT
+BEGIN:VEVENT
+UID:event-5
+SUMMARY:Colloquium Talk on Geometry
+URL:https://example.com/geometry
+DTSTART:20260905T140000Z
+END:VEVENT
+BEGIN:VEVENT
+UID:event-6
+SUMMARY:Panel Discussion on Math Education
+URL:https://example.com/panel
+DTSTART:20260906T130000Z
+END:VEVENT
+BEGIN:VEVENT
+UID:event-7
+SUMMARY:Mini Course on Category Theory
+URL:https://example.com/category
+DTSTART:20260907T090000Z
+END:VEVENT
+BEGIN:VEVENT
+UID:event-8
+SUMMARY:Award Lecture in Honor of Prof. X
+URL:https://example.com/award
+DTSTART:20260908T160000Z
+END:VEVENT
+BEGIN:VEVENT
+UID:event-9
+SUMMARY:Memorial Conference for John Doe
+URL:https://example.com/memorial
+DTSTART:20260909T090000Z
+END:VEVENT
+BEGIN:VEVENT
+UID:event-10
+SUMMARY:Research Program on Random Graphs
+URL:https://example.com/program
+DTSTART:20260910T090000Z
+END:VEVENT
+BEGIN:VEVENT
+UID:event-11
+SUMMARY:Symposium on Probability Theory
+URL:https://example.com/symposium
+DTSTART:20260911T090000Z
+END:VEVENT
+BEGIN:VEVENT
+UID:event-12
+SUMMARY:Meeting on Algebraic Geometry
+URL:https://example.com/meeting
+DTSTART:20260912T090000Z
+END:VEVENT
+END:VCALENDAR
