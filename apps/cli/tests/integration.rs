@@ -48,12 +48,12 @@ async fn mount_rss_feed(server: &MockServer) {
         .await;
     Mock::given(method("GET"))
         .and(path("/detail/algebra"))
-        .respond_with(ResponseTemplate::new(404))
+        .respond_with(ResponseTemplate::new(200))
         .mount(server)
         .await;
     Mock::given(method("GET"))
         .and(path("/detail/graph"))
-        .respond_with(ResponseTemplate::new(404))
+        .respond_with(ResponseTemplate::new(200))
         .mount(server)
         .await;
 }
