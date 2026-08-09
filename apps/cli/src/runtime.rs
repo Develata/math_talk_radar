@@ -20,6 +20,38 @@ impl CliError {
             message: format!("{cmd}: not implemented in M0"),
         }
     }
+
+    /// §32 exit 3: config or schema error.
+    pub fn config(message: impl Into<String>) -> Self {
+        Self {
+            code: 3,
+            message: message.into(),
+        }
+    }
+
+    /// §32 exit 4: zero usable sources.
+    pub fn zero_sources() -> Self {
+        Self {
+            code: 4,
+            message: "no enabled sources to scan".into(),
+        }
+    }
+
+    /// §32 exit 5: state fatal.
+    pub fn state(message: impl Into<String>) -> Self {
+        Self {
+            code: 5,
+            message: message.into(),
+        }
+    }
+
+    /// §32 exit 6: output serialization fatal.
+    pub fn serialization(message: impl Into<String>) -> Self {
+        Self {
+            code: 6,
+            message: message.into(),
+        }
+    }
 }
 
 pub fn init_logging(verbose: u8, log_format: Option<LogFormat>) {
