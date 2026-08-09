@@ -20,7 +20,7 @@ jobs:
     timeout-minutes: 20
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Rust toolchain
         run: rustup show
@@ -35,7 +35,7 @@ jobs:
           ./target/release/math_talk_radar sources check --json > live-smoke.json || true
           ./target/release/math_talk_radar doctor --network --json > doctor.json || true
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: live-smoke-results
