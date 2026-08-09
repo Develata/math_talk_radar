@@ -8,6 +8,6 @@ pub mod migrations;
 pub mod repository;
 pub mod schema;
 
-pub use changes::{ChangeKind, ChangeRecord};
+pub use changes::{ChangeKind, ChangeRecord, detect_changes};
 pub use repository::{Repository, StateError};
 pub use schema::STATE_SCHEMA_VERSION;
