@@ -41,14 +41,14 @@ STATE-001	first_seen persisted	docs/plan/07_state_change_detection.md	integratio
 STATE-002	second scan unchanged	docs/plan/07_state_change_detection.md	integration	cargo test -p radar-state --test integration state_002	hard		pass
 STATE-003	media_added	docs/plan/07_state_change_detection.md	integration	cargo test -p radar-state --test integration state_003	hard		pass
 STATE-004	--no-state no write	docs/plan/07_state_change_detection.md	integration	cargo test -p radar-state --test integration state_004	hard		pass
-UPD-001	update check no write	docs/plan/10_update_uninstall.md	mock release	cargo test --test lifecycle_sandbox	hard		pending
-UPD-002	checksum failure preserves binary	docs/plan/10_update_uninstall.md	sandbox	cargo test --test lifecycle_sandbox	hard		pending
-UPD-003	valid update replaces binary	docs/plan/10_update_uninstall.md	sandbox	cargo test --test lifecycle_sandbox	hard		pending
-UPD-004	broken candidate rollback	docs/plan/10_update_uninstall.md	sandbox	cargo test --test lifecycle_sandbox	hard		pending
-UNS-001	dry-run zero mutation	docs/plan/10_update_uninstall.md	sandbox	cargo test --test lifecycle_sandbox	hard		pending
-UNS-002	keep-data preserves only data	docs/plan/10_update_uninstall.md	sandbox	cargo test --test lifecycle_sandbox	hard		pending
-UNS-003	purge removes owned paths	docs/plan/10_update_uninstall.md	sandbox	cargo test --test lifecycle_sandbox	hard		pending
-UNS-004	unmanaged binary protection	docs/plan/10_update_uninstall.md	sandbox	cargo test --test lifecycle_sandbox	hard		pending
+UPD-001	update check no write	docs/plan/10_update_uninstall.md	mock release	cargo test --test lifecycle_sandbox	hard		pass
+UPD-002	checksum failure preserves binary	docs/plan/10_update_uninstall.md	sandbox	cargo test --test lifecycle_sandbox	hard		pass
+UPD-003	valid update replaces binary	docs/plan/10_update_uninstall.md	sandbox	cargo test --test lifecycle_sandbox	hard		pass
+UPD-004	broken candidate rollback	docs/plan/10_update_uninstall.md	sandbox	cargo test --test lifecycle_sandbox	hard		pass
+UNS-001	dry-run zero mutation	docs/plan/10_update_uninstall.md	sandbox	cargo test --test lifecycle_sandbox	hard		pass
+UNS-002	keep-data preserves only data	docs/plan/10_update_uninstall.md	sandbox	cargo test --test lifecycle_sandbox	hard		pass
+UNS-003	purge removes owned paths	docs/plan/10_update_uninstall.md	sandbox	cargo test --test lifecycle_sandbox	hard		pass
+UNS-004	unmanaged binary protection	docs/plan/10_update_uninstall.md	sandbox	cargo test --test lifecycle_sandbox	hard		pass
 SEC-001	no unsafe	docs/plan/11_security.md	lint	cargo clippy -D warnings	hard		pending
 SEC-002	cargo-deny	docs/plan/11_security.md	CI	cargo deny check	hard		pending
 SEC-003	no secret logging	docs/plan/11_security.md	review/test	cargo test + review	hard		pending

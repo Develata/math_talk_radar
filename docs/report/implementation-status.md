@@ -162,3 +162,41 @@ RSS/ICS/JSON-LD/HTML adapters in `radar-adapters`, fetch coordinator in
 
 Self-update (SHA-256 verify + rollback copy) and uninstall (known-path deletion
 only) per `docs/plan/10_update_uninstall.md`.
+
+## M5 — Self-update & Uninstall (complete)
+
+- [x] Lifecycle infrastructure (`apps/cli/src/lifecycle/`):
+      `paths.rs` (known app-owned path resolution: binary via manifest or
+      `current_exe`, config/cache/data via XDG env vars, `safe_canonicalize`
+      rejecting empty/`/`/`$HOME`, `is_unmanaged_binary` detecting `target/`,
+      `MATH_TALK_RADAR_RELEASE_API` env override for tests), `manifest.rs`
+      (`InstallManifest` saved to data dir; load returns None for missing/
+      unparseable → unmanaged), `update.rs`/`uninstall.rs` implementations.
+- [x] `CliError::update` (exit 10) and `CliError::uninstall` (exit 11) per §32.
+- [x] Self-update (`lifecycle/update.rs`, §34.2): `check()` fetches
+      `/releases/latest`, SemVer compares, writes nothing (UPD-001). `run()`
+      downloads binary + `.sha256`, verifies SHA-256 (UPD-002 fail=preserve,
+      exit 10), self-tests candidate (UPD-004 fail=cleanup+preserve), creates
+      rollback copy, atomic `rename` replace, self-tests replaced (fail=restore
+      rollback), cleans up, updates manifest.
+- [x] Uninstall (`lifecycle/uninstall.rs`, §35): `--dry-run` prints plan,
+      mutates nothing (UNS-001). `--keep-data --yes` deletes binary+config+
+      cache+manifest+temp, preserves data (UNS-002). `--purge --yes` deletes
+      everything (UNS-003). Unmanaged binary (no manifest, under `target/`)
+      protected without `--force-unmanaged` (UNS-004). Requires `--keep-data`
+      or `--purge`; noninteractive requires `--yes`. `safe_canonicalize`
+      rejects empty/`/`/`$HOME`; Rust fs APIs only, no `rm -rf`.
+- [x] Lifecycle sandbox tests (`apps/cli/tests/lifecycle_sandbox.rs`): 8
+      `assert_cmd` tests in temp sandboxes (real install never touched).
+      UPD tests use `wiremock` for the fake release API via
+      `MATH_TALK_RADAR_RELEASE_API`; UNS tests set `XDG_*_HOME` to temp dirs.
+- [x] M5 gate: `cargo fmt --check`, `cargo clippy --workspace --all-targets
+      --all-features -- -D warnings`, `cargo test --workspace` (212 tests),
+      `cargo xtask check`, `cargo xtask check-matrix` — all pass.
+- [x] 8 acceptance cases flipped to `pass`: UPD-001..004, UNS-001..004.
+      Total 52 pass / 13 pending.
+
+## Next: M6 — Live Source Audit
+
+Audit ≥ 20 sources, enable ≥ 10 with fixtures + golden + live smoke per
+`docs/plan/` source-registry sections. Gate: LIVE-001/002.
