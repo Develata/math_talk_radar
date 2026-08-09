@@ -125,3 +125,40 @@ RSS/ICS/JSON-LD/HTML adapters in `radar-adapters`, fetch coordinator in
       cases). Total 36 pass / 29 pending.
 
 ## Next: M4 — CLI Composition
+
+## M4 — CLI Composition (complete)
+
+- [x] Config model: `SourcesConfig` wrapper in `radar-core/src/config.rs` with
+      `parse()`, `embedded()` (include_str! of `config/sources.toml`), `enabled()`
+      filter (CFG-001). Moved `toml` from radar-core dev-deps to main deps.
+- [x] CLI config loader (`apps/cli/src/config_loader.rs`): `load_sources(path)`
+      reads TOML from `--sources` override or falls back to embedded default.
+      Missing/unparseable file fails closed (CFG-002, exit 3).
+- [x] Scan pipeline (`apps/cli/src/scan_engine.rs`): load sources → filter
+      enabled → build `FetchClient` with default `HttpPolicy` → `fetch_all` with
+      `default_adapter` factory → extract events from `EventCandidate`s →
+      `dedup_events` → `score_event` with source-tier map from config →
+      truncate to `--max-events` → build `ScanOutput` envelope. Zero enabled
+      sources → exit 4 (HTTP-005).
+- [x] Exit-code constructors on `CliError`: `config` (3), `zero_sources` (4),
+      `state` (5), `serialization` (6).
+- [x] Command wiring: `scan` (run_scan + render → stdout JSON), `sources list`
+      (human-readable table), `schema` (ScanOutput skeleton as JSON), `doctor`
+      (binary/config-dir/state-dir/schema-version, XDG-aware). `update`/`uninstall`
+      stay stubs (M5); `sources check` stays not_implemented (M6).
+- [x] Integration tests (`apps/cli/tests/integration.rs`): 7 `assert_cmd` tests
+      driving the real binary, `wiremock` for HTTP-004/005:
+      CLI-001 (--help lists 6 subcommands), CLI-002 (--version exit 0 no
+      network), CLI-003 (scan stdout pure JSON), CLI-004 (stderr/stdout
+      separated), CFG-002 (invalid config exit 3), HTTP-004 (partial source
+      failure exit 0), HTTP-005 (zero usable sources exit 4).
+- [x] M4 gate: `cargo fmt --check`, `cargo clippy --workspace --all-targets
+      --all-features -- -D warnings`, `cargo test --workspace` (204 tests),
+      `cargo xtask check`, `cargo xtask check-matrix` — all pass.
+- [x] 8 acceptance cases flipped to `pass`: CLI-001..004, CFG-001..002,
+      HTTP-004..005. Total 44 pass / 21 pending.
+
+## Next: M5 — Self-update & Uninstall
+
+Self-update (SHA-256 verify + rollback copy) and uninstall (known-path deletion
+only) per `docs/plan/10_update_uninstall.md`.
