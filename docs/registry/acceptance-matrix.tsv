@@ -57,11 +57,11 @@ PERF-002	binary <=30 MiB	docs/plan/12_release.md	release	release.yml	hard		pendi
 REL-001	30% source failure isolation	docs/plan/05_fetching_reliability.md	fault injection	cargo test -p radar-fetch --test reliability	hard		pass
 REL-002	global deadline	docs/plan/05_fetching_reliability.md	mock server	cargo test -p radar-fetch --test http_mock	hard		pass
 REL-003	stable deterministic IDs	docs/plan/05_fetching_reliability.md	golden	cargo test -p radar-core --test golden rel_003	hard		pass
-DOC-001	every plan has acceptance mapping	docs/plan/00_engineering_constitution.md	xtask	cargo xtask check-matrix	hard		pending
-DOC-002	every hard case has automation	docs/plan/00_engineering_constitution.md	xtask	cargo xtask check-matrix	hard		pending
+DOC-001	every plan has acceptance mapping	docs/plan/00_engineering_constitution.md	xtask	cargo xtask check-matrix	hard		pass
+DOC-002	every hard case has automation	docs/plan/00_engineering_constitution.md	xtask	cargo xtask check-matrix	hard		pass
 RELS-001	static musl binary	docs/plan/12_release.md	container	release.yml (clean ubuntu)	hard		pending
 RELS-002	checksum asset	docs/plan/12_release.md	release	release.yml	hard		pending
 RELS-003	artifact provenance	docs/plan/12_release.md	release	release.yml	hard		pending
 LIVE-001	>=20 audited sources	docs/plan/01_product_scope.md	registry	cargo xtask check	hard		pass
 LIVE-002	>=10 enabled fixture-backed sources	docs/plan/01_product_scope.md	registry	cargo xtask check	hard		pass
-LIVE-003	live source health ratio	docs/plan/01_product_scope.md	scheduled	live-smoke.yml	advisory		pending
+LIVE-003	live source health ratio	docs/plan/01_product_scope.md	scheduled	live-smoke.yml	advisory		pass

@@ -13,8 +13,8 @@
 | RELS-001 | static musl binary | hard | pending |
 | RELS-002 | checksum asset present | hard | pending |
 | RELS-003 | artifact provenance attestation | hard | pending |
-| DOC-001 | every plan has an acceptance mapping | hard | pending |
-| DOC-002 | every hard case has automation | hard | pending |
+| DOC-001 | every plan has an acceptance mapping | hard | pass |
+| DOC-002 | every hard case has automation | hard | pass |
 | HTTP-001 | timeout isolation | hard | pending |
 | HTTP-002 | retry transient once | hard | pending |
 | HTTP-003 | 404 no retry | hard | pending |
