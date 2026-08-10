@@ -6,9 +6,9 @@
 //! parser. The guard tracks actual BEGIN/END nesting depth (not flat component
 //! count) so legitimate calendars with many flat VEVENTs are not rejected.
 use radar_core::{
-    AccessInfo, AdapterError, DatePrecision, Event, EventCandidate, EventDate, EventId,
-    EventStatus, EventStub, FetchPlan, FetchedDocument, Location, OnlineAvailability, PublicAccess,
-    ScoreComponents, SourceAdapter, SourceEvidence, SourceSpec, deterministic_id,
+    AccessInfo, AdapterError, DatePrecision, Event, EventCandidate, EventDate, EventStatus,
+    EventStub, FetchPlan, FetchedDocument, Location, OnlineAvailability, PublicAccess,
+    ScoreComponents, SourceAdapter, SourceEvidence, SourceSpec, event_id,
 };
 use url::Url;
 
@@ -100,7 +100,7 @@ impl SourceAdapter for IcsAdapter {
         &self,
         event: EventStub,
         documents: &[FetchedDocument],
-        source: &SourceSpec,
+        _source: &SourceSpec,
     ) -> Result<EventCandidate, AdapterError> {
         let event_type = helpers::detect_event_type(&event.title);
         let date = event.date_hint.clone().unwrap_or_else(|| EventDate {
@@ -129,7 +129,7 @@ impl SourceAdapter for IcsAdapter {
             }
         }
 
-        let id = EventId(deterministic_id(&[&event.title, &source.id]));
+        let id = event_id(&event.title, event.url.as_str());
         let full_event = Event {
             id,
             title: event.title.clone(),

@@ -9,10 +9,10 @@
 //! unlike a name in body text or a title).
 use radar_core::date::parse_date;
 use radar_core::{
-    AccessInfo, AdapterError, DatePrecision, Event, EventCandidate, EventDate, EventId,
-    EventStatus, EventStub, FetchPlan, FetchedDocument, Location, OnlineAvailability, PersonHit,
-    PersonRole, PublicAccess, ScoreComponents, SourceAdapter, SourceEvidence, SourceSpec, Talk,
-    TalkId, deterministic_id,
+    AccessInfo, AdapterError, DatePrecision, Event, EventCandidate, EventDate, EventStatus,
+    EventStub, FetchPlan, FetchedDocument, Location, OnlineAvailability, PersonHit, PersonRole,
+    PublicAccess, ScoreComponents, SourceAdapter, SourceEvidence, SourceSpec, Talk, TalkId,
+    deterministic_id, event_id,
 };
 use scraper::{Html, Selector};
 use url::Url;
@@ -159,7 +159,7 @@ impl SourceAdapter for JsonLdAdapter {
         });
 
         let event = Event {
-            id: EventId(deterministic_id(&[&stub.title, &source.id])),
+            id: event_id(&stub.title, stub.url.as_str()),
             title: stub.title.clone(),
             url: Some(stub.url.clone()),
             event_type: helpers::detect_event_type(&stub.title),

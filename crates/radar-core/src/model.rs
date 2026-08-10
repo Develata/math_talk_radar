@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 
 use crate::date::{DateTimeRange, EventDate};
+use crate::normalize::normalize_name;
 use crate::people::PersonHit;
 use crate::ranking::ScoreComponents;
 use crate::topics::TopicMatch;
@@ -31,6 +32,16 @@ pub fn deterministic_id(parts: &[&str]) -> String {
     let joined = parts.join("\x1f");
     let hash = blake3::hash(joined.as_bytes());
     format!("blake3:{hash}")
+}
+
+/// Compute a stable [`EventId`] from an event's title and canonical URL,
+/// normalizing the title (NFC + lowercase + whitespace collapse) before
+/// hashing. All adapters MUST use this function so the same event discovered
+/// via different adapter kinds produces the same id (§24 cross-adapter
+/// identity consistency).
+pub fn event_id(title: &str, url: &str) -> EventId {
+    let normalized = normalize_name(title);
+    EventId(deterministic_id(&[&normalized, url]))
 }
 
 // ---- Event (§5.1) --------------------------------------------------------

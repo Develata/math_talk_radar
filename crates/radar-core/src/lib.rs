@@ -31,7 +31,7 @@ pub use document::{FetchPlan, FetchedDocument};
 pub use model::{
     AccessInfo, Event, EventId, EventStatus, EventType, Location, MediaId, MediaResource,
     MediaType, OnlineAvailability, PublicAccess, SourceEvidence, SourceHealth, SourceStatus, Talk,
-    TalkId, deterministic_id,
+    TalkId, deterministic_id, event_id,
 };
 pub use normalize::normalize_text;
 pub use people::{PersonHit, PersonRole, ScholarRecord};

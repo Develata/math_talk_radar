@@ -9,9 +9,10 @@ use scraper::{Html, Selector};
 use radar_core::config::HtmlSelectors;
 use radar_core::date::{DatePrecision, EventDate, parse_date};
 use radar_core::{
-    AccessInfo, AdapterError, Event, EventCandidate, EventId, EventStatus, EventStub, FetchPlan,
+    AccessInfo, AdapterError, Event, EventCandidate, EventStatus, EventStub, FetchPlan,
     FetchedDocument, Location, OnlineAvailability, PersonHit, PersonRole, PublicAccess,
     ScoreComponents, SourceAdapter, SourceEvidence, SourceSpec, Talk, TalkId, deterministic_id,
+    event_id,
 };
 
 use crate::helpers::{classify_access, detect_event_type, detect_media};
@@ -154,7 +155,7 @@ impl SourceAdapter for HtmlConfigAdapter {
         let access = classify_access(body);
 
         let event_type = detect_event_type(&title);
-        let id = EventId(deterministic_id(&[&title, stub_url.as_str()]));
+        let id = event_id(&title, stub_url.as_str());
         let enriched = Event {
             id,
             title,
@@ -291,7 +292,7 @@ fn speaker_hit(name: &str) -> PersonHit {
 
 fn build_minimal_event(stub: &EventStub) -> Event {
     Event {
-        id: EventId(deterministic_id(&[&stub.title, stub.url.as_str()])),
+        id: event_id(&stub.title, stub.url.as_str()),
         title: stub.title.clone(),
         url: Some(stub.url.clone()),
         event_type: detect_event_type(&stub.title),

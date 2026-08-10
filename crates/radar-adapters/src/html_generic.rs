@@ -11,9 +11,9 @@ use scraper::{Html, Selector};
 
 use radar_core::date::parse_date;
 use radar_core::{
-    AccessInfo, AdapterError, DatePrecision, Event, EventCandidate, EventDate, EventId,
-    EventStatus, EventStub, FetchPlan, FetchedDocument, Location, OnlineAvailability, PublicAccess,
-    ScoreComponents, SourceAdapter, SourceEvidence, SourceSpec, deterministic_id,
+    AccessInfo, AdapterError, DatePrecision, Event, EventCandidate, EventDate, EventStatus,
+    EventStub, FetchPlan, FetchedDocument, Location, OnlineAvailability, PublicAccess,
+    ScoreComponents, SourceAdapter, SourceEvidence, SourceSpec, event_id,
 };
 
 use crate::helpers;
@@ -166,7 +166,7 @@ fn unknown_event_date() -> EventDate {
 fn minimal_event_from_stub(stub: &EventStub) -> Event {
     let date = stub.date_hint.clone().unwrap_or_else(unknown_event_date);
     Event {
-        id: EventId(deterministic_id(&[&stub.title, stub.url.as_str()])),
+        id: event_id(&stub.title, stub.url.as_str()),
         title: stub.title.clone(),
         url: Some(stub.url.clone()),
         event_type: helpers::detect_event_type(&stub.title),
@@ -292,7 +292,7 @@ impl SourceAdapter for HtmlGenericAdapter {
                 });
 
                 Event {
-                    id: EventId(deterministic_id(&[&stub.title, stub.url.as_str()])),
+                    id: event_id(&stub.title, stub.url.as_str()),
                     title,
                     url: Some(stub.url.clone()),
                     event_type,
