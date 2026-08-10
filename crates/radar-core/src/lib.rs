@@ -33,7 +33,7 @@ pub use model::{
     MediaType, OnlineAvailability, PublicAccess, SourceEvidence, SourceHealth, SourceStatus, Talk,
     TalkId, deterministic_id, event_id,
 };
-pub use normalize::normalize_text;
+pub use normalize::{contains_phrase, normalize_text};
 pub use people::{PersonHit, PersonRole, ScholarRecord};
 pub use ranking::{
     MAX_ACCESS, MAX_COMPLETENESS, MAX_MEDIA, MAX_PEOPLE, MAX_SOURCE_TIER, MAX_TOPIC,

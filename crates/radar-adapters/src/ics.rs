@@ -117,7 +117,8 @@ impl SourceAdapter for IcsAdapter {
             && let Ok(body) = std::str::from_utf8(&doc.body)
             && body.contains('<')
         {
-            let fields = helpers::extract_html_fields(body, &doc.url);
+            let document = scraper::Html::parse_document(body);
+            let fields = helpers::extract_html_fields(&document, &doc.url);
             description = fields.description;
             if let Some(loc_text) = fields.location_text {
                 location = Some(Location {

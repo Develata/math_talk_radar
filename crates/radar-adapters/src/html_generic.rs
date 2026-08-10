@@ -267,9 +267,10 @@ impl SourceAdapter for HtmlGenericAdapter {
             Some(doc) => {
                 let body = std::str::from_utf8(&doc.body).unwrap_or("");
                 let base_url = &doc.url;
-                let fields = helpers::extract_html_fields(body, base_url);
-                let media = helpers::detect_media(body, base_url);
-                let access = helpers::classify_access(body);
+                let document = scraper::Html::parse_document(body);
+                let fields = helpers::extract_html_fields(&document, base_url);
+                let media = helpers::detect_media(&document, base_url);
+                let access = helpers::classify_access(&document);
 
                 // Event type from stub title + extracted description text.
                 let title = fields.title.unwrap_or_else(|| stub.title.clone());

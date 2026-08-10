@@ -151,8 +151,8 @@ impl SourceAdapter for HtmlConfigAdapter {
             })
             .collect();
 
-        let media = detect_media(body, &base_url);
-        let access = classify_access(body);
+        let media = detect_media(&html, &base_url);
+        let access = classify_access(&html);
 
         let event_type = detect_event_type(&title);
         let id = event_id(&title, stub_url.as_str());

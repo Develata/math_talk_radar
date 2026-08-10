@@ -1,12 +1,13 @@
 //! Shared adapter helpers (M2 Todo 3). Pure parsing utilities used by all
 //! Wave 2 adapters: RSS, ICS, JSON-LD, HTML config, HTML generic.
 
-use scraper::{Html, Selector};
+pub use scraper::Html;
+use scraper::Selector;
 use url::Url;
 
 use radar_core::{
-    EventType, MediaId, MediaResource, MediaType, PublicAccess, SourceEvidence, deterministic_id,
-    normalize_text,
+    EventType, MediaId, MediaResource, MediaType, PublicAccess, SourceEvidence, contains_phrase,
+    deterministic_id, normalize_text,
 };
 
 // ===========================================================================
@@ -24,16 +25,12 @@ pub struct HtmlFields {
 
 /// Extract title, description, date, and location text from an HTML page using
 /// simple heuristics. Returns all-`None` for empty or malformed input.
-pub fn extract_html_fields(html: &str, _base_url: &Url) -> HtmlFields {
-    if html.is_empty() {
-        return HtmlFields::default();
-    }
-    let document = Html::parse_document(html);
+pub fn extract_html_fields(document: &Html, _base_url: &Url) -> HtmlFields {
     HtmlFields {
-        title: extract_title(&document),
-        description: extract_description(&document),
-        date_text: extract_date_text(&document),
-        location_text: extract_location_text(&document),
+        title: extract_title(document),
+        description: extract_description(document),
+        date_text: extract_date_text(document),
+        location_text: extract_location_text(document),
     }
 }
 
@@ -134,11 +131,7 @@ fn clean_text(text: &str) -> String {
 // ===========================================================================
 
 /// Detect media resources (video, slides, PDFs) embedded in an HTML page.
-pub fn detect_media(html: &str, base_url: &Url) -> Vec<MediaResource> {
-    if html.is_empty() {
-        return Vec::new();
-    }
-    let document = Html::parse_document(html);
+pub fn detect_media(document: &Html, base_url: &Url) -> Vec<MediaResource> {
     let mut results = Vec::new();
 
     if let Ok(selector) = Selector::parse("a") {
@@ -276,12 +269,10 @@ fn make_source_evidence(base_url: &Url) -> SourceEvidence {
 // classify_access
 // ===========================================================================
 
-/// Conservatively classify the public access level from HTML text and meta tags.
-pub fn classify_access(html: &str) -> PublicAccess {
-    if html.is_empty() {
-        return PublicAccess::Unknown;
-    }
-    let document = Html::parse_document(html);
+/// Conservatively classify the public access level from an HTML document's
+/// visible text and meta tags. Uses word-boundary matching to avoid
+/// false positives like "free" inside "freedom" or "sso" inside a longer word.
+pub fn classify_access(document: &Html) -> PublicAccess {
     let mut text = String::new();
     for t in document.root_element().text() {
         text.push_str(t);
@@ -295,7 +286,7 @@ pub fn classify_access(html: &str) -> PublicAccess {
             }
         }
     }
-    let text = text.to_lowercase();
+    let text = normalize_text(&text);
 
     const PAYWALLED: &[&str] = &[
         "subscription",
@@ -314,16 +305,16 @@ pub fn classify_access(html: &str) -> PublicAccess {
     const REGISTRATION: &[&str] = &["register", "registration required", "sign up", "rsvp"];
     const OPEN: &[&str] = &["free", "open access", "no registration", "public"];
 
-    if PAYWALLED.iter().any(|m| text.contains(m)) {
+    if PAYWALLED.iter().any(|m| contains_phrase(&text, m)) {
         return PublicAccess::Paywalled;
     }
-    if LOGIN.iter().any(|m| text.contains(m)) {
+    if LOGIN.iter().any(|m| contains_phrase(&text, m)) {
         return PublicAccess::InstitutionLogin;
     }
-    if REGISTRATION.iter().any(|m| text.contains(m)) {
+    if REGISTRATION.iter().any(|m| contains_phrase(&text, m)) {
         return PublicAccess::RegistrationRequired;
     }
-    if OPEN.iter().any(|m| text.contains(m)) {
+    if OPEN.iter().any(|m| contains_phrase(&text, m)) {
         return PublicAccess::Open;
     }
     PublicAccess::Unknown
@@ -407,6 +398,10 @@ mod tests {
         Url::parse("https://example.com/").unwrap()
     }
 
+    fn doc(html: &str) -> Html {
+        Html::parse_document(html)
+    }
+
     // --- extract_html_fields ---
 
     #[test]
@@ -423,7 +418,7 @@ mod tests {
             <p class="location">Berlin, Germany</p>
         </body>
         </html>"#;
-        let fields = extract_html_fields(html, &base());
+        let fields = extract_html_fields(&doc(html), &base());
         assert_eq!(fields.title.as_deref(), Some("Real Title"));
         assert_eq!(fields.description.as_deref(), Some("A test description"));
         assert_eq!(fields.date_text.as_deref(), Some("2026-08-08"));
@@ -432,7 +427,7 @@ mod tests {
 
     #[test]
     fn html_fields_empty() {
-        let fields = extract_html_fields("", &base());
+        let fields = extract_html_fields(&doc(""), &base());
         assert!(fields.title.is_none());
         assert!(fields.description.is_none());
         assert!(fields.date_text.is_none());
@@ -442,25 +437,25 @@ mod tests {
     #[test]
     fn html_fields_malformed_no_panic() {
         let html = "<<<>><html><head><body>broken";
-        let fields = extract_html_fields(html, &base());
+        let fields = extract_html_fields(&doc(html), &base());
         let _ = fields;
     }
 
     #[test]
     fn html_fields_title_fallbacks() {
         let html = "<html><head><title>Title Tag</title></head><body></body></html>";
-        let fields = extract_html_fields(html, &base());
+        let fields = extract_html_fields(&doc(html), &base());
         assert_eq!(fields.title.as_deref(), Some("Title Tag"));
 
         let html = r#"<html><head><meta property="og:title" content="OG Title"></head><body></body></html>"#;
-        let fields = extract_html_fields(html, &base());
+        let fields = extract_html_fields(&doc(html), &base());
         assert_eq!(fields.title.as_deref(), Some("OG Title"));
     }
 
     #[test]
     fn html_fields_description_fallback_to_p() {
         let html = r#"<html><body><p>short</p><p>This is a longer paragraph with more than twenty characters.</p></body></html>"#;
-        let fields = extract_html_fields(html, &base());
+        let fields = extract_html_fields(&doc(html), &base());
         assert_eq!(
             fields.description.as_deref(),
             Some("This is a longer paragraph with more than twenty characters.")
@@ -470,7 +465,7 @@ mod tests {
     #[test]
     fn html_fields_date_from_class() {
         let html = r#"<html><body><div class="event-date">August 8, 2026</div></body></html>"#;
-        let fields = extract_html_fields(html, &base());
+        let fields = extract_html_fields(&doc(html), &base());
         assert_eq!(fields.date_text.as_deref(), Some("August 8, 2026"));
     }
 
@@ -479,7 +474,7 @@ mod tests {
     #[test]
     fn media_youtube_link() {
         let html = r#"<a href="https://www.youtube.com/watch?v=abc123">Watch</a>"#;
-        let media = detect_media(html, &base());
+        let media = detect_media(&doc(html), &base());
         assert_eq!(media.len(), 1);
         assert_eq!(media[0].media_type, MediaType::Video);
         assert_eq!(media[0].platform.as_deref(), Some("youtube"));
@@ -488,7 +483,7 @@ mod tests {
     #[test]
     fn media_pdf_slides() {
         let html = r#"<a href="https://example.com/slides.pdf">Download slides</a>"#;
-        let media = detect_media(html, &base());
+        let media = detect_media(&doc(html), &base());
         assert_eq!(media.len(), 1);
         assert_eq!(media[0].media_type, MediaType::Slides);
     }
@@ -496,7 +491,7 @@ mod tests {
     #[test]
     fn media_pdf_program() {
         let html = r#"<a href="https://example.com/program.pdf">Program</a>"#;
-        let media = detect_media(html, &base());
+        let media = detect_media(&doc(html), &base());
         assert_eq!(media.len(), 1);
         assert_eq!(media[0].media_type, MediaType::ProgramPdf);
     }
@@ -504,7 +499,7 @@ mod tests {
     #[test]
     fn media_pdf_abstract() {
         let html = r#"<a href="https://example.com/abstract.pdf">Abstract</a>"#;
-        let media = detect_media(html, &base());
+        let media = detect_media(&doc(html), &base());
         assert_eq!(media.len(), 1);
         assert_eq!(media[0].media_type, MediaType::AbstractPdf);
     }
@@ -512,21 +507,21 @@ mod tests {
     #[test]
     fn media_pdf_other() {
         let html = r#"<a href="https://example.com/paper.pdf">Paper</a>"#;
-        let media = detect_media(html, &base());
+        let media = detect_media(&doc(html), &base());
         assert_eq!(media.len(), 1);
         assert_eq!(media[0].media_type, MediaType::Other);
     }
 
     #[test]
     fn media_empty() {
-        let media = detect_media("", &base());
+        let media = detect_media(&doc(""), &base());
         assert!(media.is_empty());
     }
 
     #[test]
     fn media_vimeo() {
         let html = r#"<a href="https://vimeo.com/12345">Video</a>"#;
-        let media = detect_media(html, &base());
+        let media = detect_media(&doc(html), &base());
         assert_eq!(media.len(), 1);
         assert_eq!(media[0].media_type, MediaType::Video);
         assert_eq!(media[0].platform.as_deref(), Some("vimeo"));
@@ -535,7 +530,7 @@ mod tests {
     #[test]
     fn media_bilibili() {
         let html = r#"<a href="https://www.bilibili.com/video/BV1234">Video</a>"#;
-        let media = detect_media(html, &base());
+        let media = detect_media(&doc(html), &base());
         assert_eq!(media.len(), 1);
         assert_eq!(media[0].media_type, MediaType::Video);
         assert_eq!(media[0].platform.as_deref(), Some("bilibili"));
@@ -544,7 +539,7 @@ mod tests {
     #[test]
     fn media_iframe_video() {
         let html = r#"<iframe src="https://example.com/embed"></iframe>"#;
-        let media = detect_media(html, &base());
+        let media = detect_media(&doc(html), &base());
         assert_eq!(media.len(), 1);
         assert_eq!(media[0].media_type, MediaType::Video);
         assert!(media[0].platform.is_none());
@@ -553,7 +548,7 @@ mod tests {
     #[test]
     fn media_relative_url() {
         let html = r#"<a href="/talks/video.pdf">slides</a>"#;
-        let media = detect_media(html, &base());
+        let media = detect_media(&doc(html), &base());
         assert_eq!(media.len(), 1);
         assert_eq!(media[0].url.as_str(), "https://example.com/talks/video.pdf");
         assert_eq!(media[0].media_type, MediaType::Slides);
@@ -562,7 +557,7 @@ mod tests {
     #[test]
     fn media_youtu_be() {
         let html = r#"<a href="https://youtu.be/abc123">Short link</a>"#;
-        let media = detect_media(html, &base());
+        let media = detect_media(&doc(html), &base());
         assert_eq!(media.len(), 1);
         assert_eq!(media[0].platform.as_deref(), Some("youtube"));
     }
@@ -570,7 +565,7 @@ mod tests {
     #[test]
     fn media_malformed_no_panic() {
         let html = "<<<>><a href=>broken</a>";
-        let media = detect_media(html, &base());
+        let media = detect_media(&doc(html), &base());
         let _ = media;
     }
 
@@ -579,49 +574,55 @@ mod tests {
     #[test]
     fn access_register() {
         let html = "<html><body>Please register now</body></html>";
-        assert_eq!(classify_access(html), PublicAccess::RegistrationRequired);
+        assert_eq!(
+            classify_access(&doc(html)),
+            PublicAccess::RegistrationRequired
+        );
     }
 
     #[test]
     fn access_login() {
         let html = "<html><body>login required to view</body></html>";
-        assert_eq!(classify_access(html), PublicAccess::InstitutionLogin);
+        assert_eq!(classify_access(&doc(html)), PublicAccess::InstitutionLogin);
     }
 
     #[test]
     fn access_empty() {
-        assert_eq!(classify_access(""), PublicAccess::Unknown);
+        assert_eq!(classify_access(&doc("")), PublicAccess::Unknown);
     }
 
     #[test]
     fn access_conflicting_paywall_wins() {
         let html =
             "<html><body>Free but registration required and subscription needed</body></html>";
-        assert_eq!(classify_access(html), PublicAccess::Paywalled);
+        assert_eq!(classify_access(&doc(html)), PublicAccess::Paywalled);
     }
 
     #[test]
     fn access_open() {
         let html = "<html><body>This event is free and open access</body></html>";
-        assert_eq!(classify_access(html), PublicAccess::Open);
+        assert_eq!(classify_access(&doc(html)), PublicAccess::Open);
     }
 
     #[test]
     fn access_registration_over_open() {
         let html = "<html><body>Free but please register</body></html>";
-        assert_eq!(classify_access(html), PublicAccess::RegistrationRequired);
+        assert_eq!(
+            classify_access(&doc(html)),
+            PublicAccess::RegistrationRequired
+        );
     }
 
     #[test]
     fn access_login_over_registration() {
         let html = "<html><body>Please register. SSO login required.</body></html>";
-        assert_eq!(classify_access(html), PublicAccess::InstitutionLogin);
+        assert_eq!(classify_access(&doc(html)), PublicAccess::InstitutionLogin);
     }
 
     #[test]
     fn access_malformed_no_panic() {
         let html = "<<<>>broken<<";
-        let result = classify_access(html);
+        let result = classify_access(&doc(html));
         let _ = result;
     }
 

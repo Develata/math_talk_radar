@@ -88,10 +88,11 @@ impl SourceAdapter for RssAdapter {
                     .is_some_and(|ct| ct.contains("html")) =>
             {
                 let body = std::str::from_utf8(&doc.body).unwrap_or("");
+                let document = scraper::Html::parse_document(body);
                 (
-                    helpers::extract_html_fields(body, &doc.url),
-                    helpers::detect_media(body, &doc.url),
-                    helpers::classify_access(body),
+                    helpers::extract_html_fields(&document, &doc.url),
+                    helpers::detect_media(&document, &doc.url),
+                    helpers::classify_access(&document),
                 )
             }
             _ => (

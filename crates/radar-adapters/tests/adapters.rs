@@ -16,6 +16,7 @@ use radar_core::{
     AdapterError, AdapterKind, FetchedDocument, MediaType, PersonRole, PublicAccess, SourceAdapter,
     SourceKind, SourceSpec, SourceTier,
 };
+use scraper::Html;
 use url::Url;
 
 const RSS_FEED: &str = include_str!("fixtures/rss_feed.xml");
@@ -180,7 +181,8 @@ fn src_005_html_generic_filters_nav_and_finds_events() {
 #[test]
 fn med_001_youtube_video_detected() {
     let base = Url::parse("https://example.com/test").unwrap();
-    let media = helpers::detect_media(MEDIA_DETECTION, &base);
+    let document = Html::parse_document(MEDIA_DETECTION);
+    let media = helpers::detect_media(&document, &base);
     let has_youtube = media
         .iter()
         .any(|m| m.media_type == MediaType::Video && m.platform.as_deref() == Some("youtube"));
@@ -197,7 +199,8 @@ fn med_001_youtube_video_detected() {
 #[test]
 fn med_002_pdf_slides_detected() {
     let base = Url::parse("https://example.com/test").unwrap();
-    let media = helpers::detect_media(MEDIA_DETECTION, &base);
+    let document = Html::parse_document(MEDIA_DETECTION);
+    let media = helpers::detect_media(&document, &base);
     let has_slides = media.iter().any(|m| m.media_type == MediaType::Slides);
     assert!(
         has_slides,
@@ -211,7 +214,8 @@ fn med_002_pdf_slides_detected() {
 
 #[test]
 fn med_003_access_registration_required() {
-    let access = helpers::classify_access(MEDIA_DETECTION);
+    let document = Html::parse_document(MEDIA_DETECTION);
+    let access = helpers::classify_access(&document);
     assert_eq!(
         access,
         PublicAccess::RegistrationRequired,

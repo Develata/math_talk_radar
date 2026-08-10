@@ -89,7 +89,8 @@ impl SourceAdapter for JsonLdAdapter {
 
         if let Some(doc) = documents.first() {
             let html = std::str::from_utf8(&doc.body).unwrap_or("");
-            access = helpers::classify_access(html);
+            let document = scraper::Html::parse_document(html);
+            access = helpers::classify_access(&document);
             for block in extract_jsonld_blocks(html) {
                 for ev in find_events(&block).into_iter().flatten() {
                     if ev.get("name").and_then(|v| v.as_str()) != Some(&stub.title) {

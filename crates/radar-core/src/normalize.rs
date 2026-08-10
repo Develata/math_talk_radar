@@ -47,6 +47,45 @@ pub fn word_boundaries(text: &str) -> Vec<String> {
     text.unicode_words().map(String::from).collect()
 }
 
+/// Word-boundary-aware phrase match: returns `true` if `phrase` appears in
+/// `text` bounded by non-alphanumeric characters or string boundaries on both
+/// sides. For multi-word phrases, the entire phrase must appear as a substring
+/// (whitespace already makes it distinctive). For single tokens, this prevents
+/// partial-word hits (e.g. "free" inside "freedom", "sso" inside "bossom").
+///
+/// Both `text` and `phrase` should be pre-normalized (lowercase) by the caller.
+pub fn contains_phrase(text: &str, phrase: &str) -> bool {
+    if phrase.is_empty() {
+        return false;
+    }
+    if phrase.contains(char::is_whitespace) {
+        return text.contains(phrase);
+    }
+    let mut search_from = 0;
+    while let Some(rel) = text[search_from..].find(phrase) {
+        let start = search_from + rel;
+        let end = start + phrase.len();
+        let before_ok = start == 0
+            || text[..start]
+                .chars()
+                .next_back()
+                .is_none_or(|c| !c.is_alphanumeric());
+        let after_ok = end >= text.len()
+            || text[end..]
+                .chars()
+                .next()
+                .is_none_or(|c| !c.is_alphanumeric());
+        if before_ok && after_ok {
+            return true;
+        }
+        search_from = end;
+        if search_from >= text.len() {
+            break;
+        }
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::{normalize_name, normalize_text, word_boundaries};
