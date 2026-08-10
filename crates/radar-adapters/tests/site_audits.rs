@@ -4,10 +4,13 @@
 //! over the network.
 
 use radar_adapters::html_config::HtmlConfigAdapter;
+use radar_adapters::html_generic::HtmlGenericAdapter;
 use radar_adapters::jsonld::JsonLdAdapter;
 use radar_adapters::rss::RssAdapter;
 use radar_core::config::HtmlSelectors;
-use radar_core::{AdapterKind, FetchedDocument, SourceAdapter, SourceKind, SourceSpec, SourceTier};
+use radar_core::{
+    AdapterKind, EventStub, FetchedDocument, SourceAdapter, SourceKind, SourceSpec, SourceTier,
+};
 use url::Url;
 
 const CLAY_FEED: &str = include_str!("fixtures/sites/clay-list.xml");
@@ -170,5 +173,116 @@ fn site_eth_html_config_parses() {
         "tests/fixtures/sites/eth-math-list.html",
         "https://math.ethz.ch/news-and-events/events.html",
         "eth-math",
+    );
+}
+
+// ===========================================================================
+// §18 media coverage: ≥3 adapter kinds must produce MediaResource entries
+// when enriching a detail page with media links (output-based definition).
+// ===========================================================================
+
+fn stub(title: &str, url: &str, source_id: &str) -> EventStub {
+    EventStub {
+        title: title.into(),
+        url: Url::parse(url).unwrap(),
+        date_hint: None,
+        source: radar_core::SourceEvidence {
+            source_id: source_id.into(),
+            source_url: Url::parse(url).unwrap(),
+            evidence: None,
+            captured_at: None,
+            native_id: None,
+        },
+    }
+}
+
+#[test]
+fn html_generic_enrich_extracts_youtube_media() {
+    let detail = r#"<html><body>
+        <h1>Talk on Random Graphs</h1>
+        <time datetime="2026-09-15">Sep 15</time>
+        <a href="https://www.youtube.com/watch?v=abc123">Watch recording</a>
+    </body></html>"#;
+    let doc = make_doc(detail, "text/html", "https://example.com/talk/1");
+    let source = make_source("media-generic", AdapterKind::HtmlGeneric);
+    let s = stub(
+        "Talk on Random Graphs",
+        "https://example.com/talk/1",
+        "media-generic",
+    );
+    let candidate = HtmlGenericAdapter
+        .enrich(s, std::slice::from_ref(&doc), &source)
+        .expect("html_generic enrich must succeed");
+    assert!(
+        candidate
+            .event
+            .media
+            .iter()
+            .any(|m| m.media_type == radar_core::MediaType::Video),
+        "html_generic must extract video media, got {:?}",
+        candidate.event.media
+    );
+}
+
+#[test]
+fn html_config_enrich_extracts_slides_pdf() {
+    let detail = r#"<html><body>
+        <h1>Workshop on Topology</h1>
+        <time datetime="2026-10-20">Oct 20</time>
+        <a href="https://example.com/slides/topology.pdf">Download slides</a>
+    </body></html>"#;
+    let doc = make_doc(detail, "text/html", "https://example.com/workshop/1");
+    let source = SourceSpec {
+        selectors: Some(HtmlSelectors {
+            list: "body".into(),
+            list_link: "a".into(),
+            detail_title: "h1".into(),
+            detail_date: "time".into(),
+            ..Default::default()
+        }),
+        ..make_source("media-config", AdapterKind::HtmlConfig)
+    };
+    let s = stub(
+        "Workshop on Topology",
+        "https://example.com/workshop/1",
+        "media-config",
+    );
+    let candidate = HtmlConfigAdapter
+        .enrich(s, std::slice::from_ref(&doc), &source)
+        .expect("html_config enrich must succeed");
+    assert!(
+        candidate
+            .event
+            .media
+            .iter()
+            .any(|m| m.media_type == radar_core::MediaType::Slides),
+        "html_config must extract Slides media, got {:?}",
+        candidate.event.media
+    );
+}
+
+#[test]
+fn rss_enrich_extracts_vimeo_media_from_html_content() {
+    let detail = r#"<html><body>
+        <a href="https://vimeo.com/99988">View video</a>
+    </body></html>"#;
+    let doc = make_doc(detail, "text/html", "https://example.com/feed");
+    let source = make_source("media-rss", AdapterKind::Rss);
+    let s = stub(
+        "Conference Talk",
+        "https://example.com/feed/item/1",
+        "media-rss",
+    );
+    let candidate = RssAdapter
+        .enrich(s, std::slice::from_ref(&doc), &source)
+        .expect("rss enrich must succeed");
+    assert!(
+        candidate
+            .event
+            .media
+            .iter()
+            .any(|m| m.media_type == radar_core::MediaType::Video),
+        "rss must extract video media from HTML content, got {:?}",
+        candidate.event.media
     );
 }
