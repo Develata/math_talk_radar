@@ -319,56 +319,34 @@ fn site_hcm_html_config_discovers_real_events() {
     );
 }
 
-// Group C — permissive fallback (body → all links). These fixtures have no
-// server-side event listing; they still must parse and yield ≥1 stub. Tuning
-// needs a different approach (JS rendering, alternate URL, or schema markup):
-//   cirm (WordPress, no visible server-side event listing),
-//   eth-math (seminar table has no per-event detail links, only series pages),
-//   icm (Cvent SPA with no server-side event HTML).
-
-fn html_fixture_parses(path: &str, url: &str, id: &str) {
-    let body = std::fs::read_to_string(path).expect("fixture file exists");
-    let doc = make_doc(&body, "text/html", url);
-    let source = SourceSpec {
-        selectors: Some(HtmlSelectors {
-            list: "body".into(),
-            list_link: "a".into(),
-            detail_title: "h1".into(),
-            detail_date: "time".into(),
-            ..Default::default()
-        }),
-        ..make_source(id, AdapterKind::HtmlConfig)
-    };
-    let stubs = HtmlConfigAdapter
-        .discover(&doc, &source)
-        .expect("HTML-config fixture must not error");
-    assert!(!stubs.is_empty(), "{id}: fixture expected >=1 stub, got 0");
-}
+// Group C — tuned selectors against re-captured fixtures. eth-math and icm
+// have non-standard event structures (series-page links / Cvent article blocks)
+// that were re-captured from the correct event-list URL and tuned to target
+// the content area, avoiding nav-link garbage.
 
 #[test]
-fn site_eth_html_config_parses() {
-    html_fixture_parses(
-        "tests/fixtures/sites/eth-math-list.html",
-        "https://math.ethz.ch/news-and-events/events.html",
-        "eth-math",
+fn site_eth_math_html_config_discovers_real_events() {
+    let stubs = discover_fixture("eth-math", "tests/fixtures/sites/eth-math-list.html");
+    assert_real_events("eth-math", &stubs, 1);
+    assert!(
+        stubs
+            .iter()
+            .any(|s| s.title.contains("Algebraic Geometry") || s.title.contains("Colloquium")),
+        "eth-math: expected Algebraic Geometry or Colloquium series, got {:?}",
+        stubs.iter().take(3).map(|s| &s.title).collect::<Vec<_>>()
     );
 }
 
 #[test]
-fn site_cirm_html_config_parses() {
-    html_fixture_parses(
-        "tests/fixtures/sites/cirm-list.html",
-        "https://www.cirm-math.com/",
-        "cirm",
-    );
-}
-
-#[test]
-fn site_icm_html_config_parses() {
-    html_fixture_parses(
-        "tests/fixtures/sites/icm-list.html",
-        "https://www.icm2026.org/",
-        "icm",
+fn site_icm_html_config_discovers_real_events() {
+    let stubs = discover_fixture("icm", "tests/fixtures/sites/icm-list.html");
+    assert_real_events("icm", &stubs, 5);
+    assert!(
+        stubs
+            .iter()
+            .any(|s| s.title.contains("Hilbert") || s.title.contains("ICM 2026")),
+        "icm: expected Hilbert or ICM 2026 article, got {:?}",
+        stubs.iter().take(3).map(|s| &s.title).collect::<Vec<_>>()
     );
 }
 

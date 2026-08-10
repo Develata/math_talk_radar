@@ -122,9 +122,9 @@ impl SourceAdapter for HtmlConfigAdapter {
         let date_selector = parse_selector(&source.id, "detail_date", &selectors.detail_date)?;
 
         let title = first_text(&html, &title_selector).unwrap_or_else(|| stub_title.clone());
-        let date_text = first_text(&html, &date_selector);
-        let event_date = match date_text {
-            Some(t) => parse_or_unknown(&t),
+        let detail_date = first_date(&html, &date_selector);
+        let event_date = match detail_date {
+            Some(d) => d,
             None => date_hint.unwrap_or_else(|| parse_or_unknown("")),
         };
 
@@ -244,6 +244,22 @@ fn first_text(document: &Html, selector: &Selector) -> Option<String> {
     let element = document.select(selector).next()?;
     let text = clean_text(&element.text().collect::<String>());
     if text.is_empty() { None } else { Some(text) }
+}
+
+fn first_date(document: &Html, selector: &Selector) -> Option<EventDate> {
+    let element = document.select(selector).next()?;
+    if let Some(dt) = element.attr("datetime")
+        && let Ok(d) = parse_date(dt)
+        && d.precision != DatePrecision::Unknown
+    {
+        return Some(d);
+    }
+    let text = clean_text(&element.text().collect::<String>());
+    if text.is_empty() {
+        return None;
+    }
+    let d = parse_date(&text).ok()?;
+    (d.precision != DatePrecision::Unknown).then_some(d)
 }
 
 fn first_text_in(scope: &ElementRef, selector: &Selector) -> Option<String> {
@@ -641,5 +657,86 @@ mod tests {
         let source = make_source("test", Some(selectors));
         let result = HtmlConfigAdapter.enrich(stub, std::slice::from_ref(&detail), &source);
         assert!(matches!(result, Err(AdapterError::Parse { .. })));
+    }
+
+    #[test]
+    fn first_date_prefers_datetime_attr_over_text() {
+        let html = r#"<html><body>
+          <time datetime="2026-09-15">Some unrelated display text</time>
+        </body></html>"#;
+        let document = make_doc("https://example.com/x", html);
+        let body = std::str::from_utf8(&document.body).expect("utf8");
+        let parsed = Html::parse_document(body);
+        let selector = Selector::parse("time").expect("valid selector");
+        let date = first_date(&parsed, &selector).expect("date present");
+        assert_eq!(date.precision, DatePrecision::Day);
+        assert_eq!(
+            date.start_date().map(|d| d.to_string()),
+            Some("2026-09-15".into())
+        );
+    }
+
+    #[test]
+    fn first_date_falls_back_to_text_when_no_datetime_attr() {
+        let html = r#"<html><body><time>2026-09-15</time></body></html>"#;
+        let document = make_doc("https://example.com/x", html);
+        let body = std::str::from_utf8(&document.body).expect("utf8");
+        let parsed = Html::parse_document(body);
+        let selector = Selector::parse("time").expect("valid selector");
+        let date = first_date(&parsed, &selector).expect("date present");
+        assert_eq!(date.precision, DatePrecision::Day);
+        assert_eq!(
+            date.start_date().map(|d| d.to_string()),
+            Some("2026-09-15".into())
+        );
+    }
+
+    #[test]
+    fn first_date_rejects_unknown_precision() {
+        let html = r#"<html><body><time>not a date at all</time></body></html>"#;
+        let document = make_doc("https://example.com/x", html);
+        let body = std::str::from_utf8(&document.body).expect("utf8");
+        let parsed = Html::parse_document(body);
+        let selector = Selector::parse("time").expect("valid selector");
+        assert!(first_date(&parsed, &selector).is_none());
+    }
+
+    #[test]
+    fn enrich_preserves_date_hint_when_detail_date_missing() {
+        let html = r#"<html><body>
+          <h1>Princeton Talk</h1>
+          <time>no parseable date here</time>
+        </body></html>"#;
+        let detail = make_doc("https://example.com/talks/x", html);
+        let mut stub = stub_for("Princeton Talk", "https://example.com/talks/x");
+        stub.date_hint = parse_date("2026-09-20").ok();
+        let source = make_source("test", Some(test_selectors()));
+        let candidate = HtmlConfigAdapter
+            .enrich(stub, std::slice::from_ref(&detail), &source)
+            .expect("enrich ok");
+        assert_eq!(candidate.event.date.precision, DatePrecision::Day);
+        assert_eq!(
+            candidate.event.date.start_date().map(|d| d.to_string()),
+            Some("2026-09-20".into())
+        );
+    }
+
+    #[test]
+    fn enrich_detail_date_overrides_date_hint() {
+        let html = r#"<html><body>
+          <h1>Talk</h1>
+          <time datetime="2026-10-01">Oct 1</time>
+        </body></html>"#;
+        let detail = make_doc("https://example.com/x", html);
+        let mut stub = stub_for("Talk", "https://example.com/x");
+        stub.date_hint = parse_date("2026-09-20").ok();
+        let source = make_source("test", Some(test_selectors()));
+        let candidate = HtmlConfigAdapter
+            .enrich(stub, std::slice::from_ref(&detail), &source)
+            .expect("enrich ok");
+        assert_eq!(
+            candidate.event.date.start_date().map(|d| d.to_string()),
+            Some("2026-10-01".into())
+        );
     }
 }
