@@ -44,6 +44,13 @@ pub enum AdapterKind {
 /// `list`/`list_link`/`detail_title`/`detail_date` are required when the
 /// adapter is in use; the `detail_*` optional fields default to `None` when
 /// absent from TOML.
+///
+/// `list_title` and `list_date` (§P-5, added post-M6) are optional overrides
+/// for sites where the event title or date does not live on the link element
+/// itself (e.g. AMS Calendar puts the title in a sibling `dd.event_title`, MIT
+/// puts it in a `td > strong`). When `list_title` is absent, the adapter falls
+/// back to the link's own text — preserving the original contract. Per §7 /
+/// §64, adding optional fields is schema-compatible in v0.x.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct HtmlSelectors {
     pub list: String,
@@ -56,6 +63,17 @@ pub struct HtmlSelectors {
     pub detail_description: Option<String>,
     #[serde(default)]
     pub detail_speaker: Option<String>,
+    /// Override the event title source on the list page. Selector is matched
+    /// within each `list` container; the first match's text wins. When absent,
+    /// the `list_link` element's text is used (legacy behavior).
+    #[serde(default)]
+    pub list_title: Option<String>,
+    /// Override the event date source on the list page. Selector is matched
+    /// within each `list` container; the first match's text is fed to
+    /// `parse_date` and stored as `EventStub::date_hint`. When absent, no
+    /// date hint is extracted at discovery.
+    #[serde(default)]
+    pub list_date: Option<String>,
 }
 
 /// A source entry loaded from `config/sources.toml` (§17). Adapters and the

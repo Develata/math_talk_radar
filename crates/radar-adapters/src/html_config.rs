@@ -4,7 +4,7 @@
 //! Selectors are never hardcoded here: every query reads from `source.selectors`.
 //! A configured-HTML source without `selectors` fails fast with `AdapterError`
 //! (Metis D5: no automatic fallback to the generic HTML adapter).
-use scraper::{Html, Selector};
+use scraper::{ElementRef, Html, Selector};
 
 use radar_core::config::HtmlSelectors;
 use radar_core::date::{DatePrecision, EventDate, parse_date};
@@ -31,6 +31,16 @@ impl SourceAdapter for HtmlConfigAdapter {
         let html = Html::parse_document(body);
         let list_selector = parse_selector(&source.id, "list", &selectors.list)?;
         let link_selector = parse_selector(&source.id, "list_link", &selectors.list_link)?;
+        let title_selector = selectors
+            .list_title
+            .as_deref()
+            .map(|s| parse_selector(&source.id, "list_title", s))
+            .transpose()?;
+        let date_selector = selectors
+            .list_date
+            .as_deref()
+            .map(|s| parse_selector(&source.id, "list_date", s))
+            .transpose()?;
 
         let mut stubs = Vec::new();
         for container in html.select(&list_selector) {
@@ -43,14 +53,23 @@ impl SourceAdapter for HtmlConfigAdapter {
                     Ok(u) => u,
                     Err(_) => continue,
                 };
-                let title = clean_text(&link.text().collect::<String>());
+                let title = match &title_selector {
+                    Some(sel) => match first_text_in(&container, sel) {
+                        Some(t) => t,
+                        None => continue,
+                    },
+                    None => clean_text(&link.text().collect::<String>()),
+                };
                 if title.is_empty() {
                     continue;
                 }
+                let date_hint = date_selector
+                    .as_ref()
+                    .and_then(|sel| first_date_in(&container, sel));
                 stubs.push(EventStub {
                     title,
                     url,
-                    date_hint: None,
+                    date_hint,
                     source: SourceEvidence {
                         source_id: source.id.clone(),
                         source_url: document.url.clone(),
@@ -227,6 +246,28 @@ fn first_text(document: &Html, selector: &Selector) -> Option<String> {
     if text.is_empty() { None } else { Some(text) }
 }
 
+fn first_text_in(scope: &ElementRef, selector: &Selector) -> Option<String> {
+    let element = scope.select(selector).next()?;
+    let text = clean_text(&element.text().collect::<String>());
+    if text.is_empty() { None } else { Some(text) }
+}
+
+fn first_date_in(scope: &ElementRef, selector: &Selector) -> Option<EventDate> {
+    let element = scope.select(selector).next()?;
+    if let Some(dt) = element.attr("datetime")
+        && let Ok(d) = parse_date(dt)
+        && d.precision != DatePrecision::Unknown
+    {
+        return Some(d);
+    }
+    let text = clean_text(&element.text().collect::<String>());
+    if text.is_empty() {
+        return None;
+    }
+    let d = parse_date(&text).ok()?;
+    (d.precision != DatePrecision::Unknown).then_some(d)
+}
+
 fn all_texts(document: &Html, selector: &Selector) -> Vec<String> {
     document
         .select(selector)
@@ -380,6 +421,8 @@ mod tests {
             detail_location: None,
             detail_description: None,
             detail_speaker: None,
+            list_title: None,
+            list_date: None,
         }
     }
 

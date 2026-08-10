@@ -55,8 +55,14 @@ fixture = "sites/stanford-math-list.html"
 
 # --- HTML-config (12) ---
 #
-# Selectors use a permissive default (body → all links) that yields ≥1 stub
-# from each fixture. Site-specific selector tuning is post-M6 work (§P-5).
+# 9 sites have site-specific selectors tuned against their fixtures (§P-5):
+#   mpim, cambridge-dpmms, oxford-math, ams-calendar, princeton-math, mit-math,
+#   fields, ini, hcm.
+# 3 sites still use the permissive default (body → all links) that yields ≥1
+# stub from each fixture; they need further investigation before selector tuning:
+#   cirm (WordPress site with no visible server-side event listing),
+#   eth-math (seminar table has no per-event detail links, only series pages),
+#   icm (Cvent SPA with no server-side event HTML).
 
 [[sources]]
 id = "fields"
@@ -64,7 +70,7 @@ name = "Fields Institute"
 tier = "a"
 kind = "institution_calendar"
 adapter = "html_config"
-entrypoint = "https://www.fields.utoronto.ca/activities"
+entrypoint = "https://www.fields.utoronto.ca/calendar"
 allowed_hosts = ["www.fields.utoronto.ca", "fields.utoronto.ca"]
 max_depth = 2
 request_budget = 20
@@ -73,7 +79,7 @@ enabled = true
 fixture = "sites/fields-list.html"
 
 [sources.selectors]
-list = "body"
+list = "div.event"
 list_link = "a"
 detail_title = "h1"
 detail_date = "time"
@@ -84,7 +90,7 @@ name = "Isaac Newton Institute"
 tier = "a"
 kind = "institution_calendar"
 adapter = "html_config"
-entrypoint = "https://www.newton.ac.uk/events/"
+entrypoint = "https://www.newton.ac.uk/events/calendar-of-activities/"
 allowed_hosts = ["www.newton.ac.uk", "newton.ac.uk"]
 max_depth = 2
 request_budget = 20
@@ -93,8 +99,9 @@ enabled = true
 fixture = "sites/newton-list.html"
 
 [sources.selectors]
-list = "body"
-list_link = "a"
+list = "table.calendar-seminars tr"
+list_link = "td:first-child a"
+list_date = "td:nth-child(4)"
 detail_title = "h1"
 detail_date = "time"
 
@@ -124,8 +131,8 @@ name = "Hausdorff Center for Mathematics"
 tier = "a"
 kind = "institution_calendar"
 adapter = "html_config"
-entrypoint = "https://www.hcm.uni-bonn.de/events/"
-allowed_hosts = ["www.hcm.uni-bonn.de", "hcm.uni-bonn.de"]
+entrypoint = "https://math-events.uni-bonn.de"
+allowed_hosts = ["math-events.uni-bonn.de", "www.hcm.uni-bonn.de", "hcm.uni-bonn.de"]
 max_depth = 2
 request_budget = 20
 dynamic = false
@@ -133,8 +140,9 @@ enabled = true
 fixture = "sites/hcm-list.html"
 
 [sources.selectors]
-list = "body"
-list_link = "a"
+list = "span.list-name"
+list_link = "div.event-title a"
+list_date = "span.date"
 detail_title = "h1"
 detail_date = "time"
 
@@ -153,7 +161,7 @@ enabled = true
 fixture = "sites/mpim-list.html"
 
 [sources.selectors]
-list = "body"
+list = "div.view-data-node-title"
 list_link = "a"
 detail_title = "h1"
 detail_date = "time"
@@ -173,8 +181,10 @@ enabled = true
 fixture = "sites/mit-math-list.html"
 
 [sources.selectors]
-list = "body"
-list_link = "a"
+list = "table tr"
+list_link = "td a"
+list_title = "td strong"
+list_date = "td:first-child"
 detail_title = "h1"
 detail_date = "time"
 
@@ -193,8 +203,10 @@ enabled = true
 fixture = "sites/princeton-math-list.html"
 
 [sources.selectors]
-list = "body"
-list_link = "a"
+list = "div.event-card"
+list_link = "a.event-card__title"
+list_title = ".event-card__body span"
+list_date = "time"
 detail_title = "h1"
 detail_date = "time"
 
@@ -213,7 +225,7 @@ enabled = true
 fixture = "sites/oxford-math-list.html"
 
 [sources.selectors]
-list = "body"
+list = "div.event-list div.views-row"
 list_link = "a"
 detail_title = "h1"
 detail_date = "time"
@@ -233,7 +245,7 @@ enabled = true
 fixture = "sites/cambridge-dpmms-list.html"
 
 [sources.selectors]
-list = "body"
+list = "div.campl-highlight-date-title"
 list_link = "a"
 detail_title = "h1"
 detail_date = "time"
@@ -273,8 +285,10 @@ enabled = true
 fixture = "sites/ams-calendar-list.html"
 
 [sources.selectors]
-list = "body"
-list_link = "a"
+list = "dl"
+list_link = "dd.event_url a"
+list_title = "dd.event_title"
+list_date = "dt.event_dates"
 detail_title = "h1"
 detail_date = "time"
 

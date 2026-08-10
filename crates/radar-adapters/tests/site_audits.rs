@@ -108,10 +108,224 @@ fn site_stanford_jsonld_discovers_events() {
     );
 }
 
-// HTML-config fixtures: parse with a permissive selector (body → all links)
-// and verify ≥1 stub. These sites use varied markup; site-specific selectors
-// land when each source is individually wired (§P-5). The golden assertion
-// is "the fixture is parseable and yields ≥1 candidate link."
+// HTML-config fixtures: discover with the site-specific selectors shipped in
+// `config/sources.toml` (§P-5). Two tiers:
+//   - Group A (tuned selectors): assert ≥1 stub AND that titles look like real
+//     events (not nav links like "Home" / "Skip to content").
+//   - Group B (permissive fallback): assert ≥1 stub only — their fixtures are
+//     landing pages without event lists; selector tuning needs a re-captured
+//     fixture from the correct event-list URL.
+fn source_from_embedded(id: &str) -> SourceSpec {
+    let config = radar_core::SourcesConfig::embedded();
+    let s = config
+        .sources
+        .iter()
+        .find(|s| s.id == id)
+        .unwrap_or_else(|| panic!("source {id} must be in embedded sources.toml"));
+    SourceSpec {
+        entrypoint: s.entrypoint.clone(),
+        selectors: s.selectors.clone(),
+        ..make_source(id, AdapterKind::HtmlConfig)
+    }
+}
+
+fn discover_fixture(id: &str, fixture_path: &str) -> Vec<EventStub> {
+    let body = std::fs::read_to_string(fixture_path)
+        .unwrap_or_else(|e| panic!("{id}: fixture {fixture_path}: {e}"));
+    let source = source_from_embedded(id);
+    let url = source
+        .entrypoint
+        .as_ref()
+        .map(|u| u.as_str())
+        .unwrap_or("https://example.com/");
+    let doc = make_doc(&body, "text/html", url);
+    HtmlConfigAdapter
+        .discover(&doc, &source)
+        .unwrap_or_else(|e| panic!("{id}: discover must not error, got {e:?}"))
+}
+
+const NAV_LINK_TITLES: &[&str] = &[
+    "Home",
+    "About",
+    "Search",
+    "Menu",
+    "Skip to content",
+    "Skip to main content",
+    "Contact",
+    "Site Map",
+    "Imprint",
+    "Privacy Policy",
+    "Website",
+];
+
+fn looks_like_nav_link(title: &str) -> bool {
+    NAV_LINK_TITLES
+        .iter()
+        .any(|nav| title.eq_ignore_ascii_case(nav))
+}
+
+fn assert_real_events(id: &str, stubs: &[EventStub], min_count: usize) {
+    assert!(
+        stubs.len() >= min_count,
+        "{id}: expected >={min_count} stubs, got {}",
+        stubs.len()
+    );
+    let nav_like = stubs
+        .iter()
+        .filter(|s| looks_like_nav_link(&s.title))
+        .count();
+    assert!(
+        nav_like < stubs.len(),
+        "{id}: all {min_count}+ stubs look like nav links (titles: {:?})",
+        stubs.iter().take(5).map(|s| &s.title).collect::<Vec<_>>()
+    );
+}
+
+// Group A — tuned selectors (§P-5). These fixtures contain real event lists.
+
+#[test]
+fn site_mpim_html_config_discovers_real_events() {
+    let stubs = discover_fixture("mpim", "tests/fixtures/sites/mpim-list.html");
+    assert_real_events("mpim", &stubs, 10);
+    assert!(
+        stubs
+            .iter()
+            .any(|s| s.title.contains("primes") || s.title.contains("L-functions")),
+        "mpim: expected a real seminar title, got {:?}",
+        stubs.iter().take(3).map(|s| &s.title).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn site_cambridge_dpmms_html_config_discovers_real_events() {
+    let stubs = discover_fixture(
+        "cambridge-dpmms",
+        "tests/fixtures/sites/cambridge-dpmms-list.html",
+    );
+    assert_real_events("cambridge-dpmms", &stubs, 6);
+    assert!(
+        stubs
+            .iter()
+            .any(|s| s.title.contains("Statistics Clinic") || s.title.contains("Particles")),
+        "cambridge-dpmms: expected real seminar titles, got {:?}",
+        stubs.iter().take(3).map(|s| &s.title).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn site_oxford_math_html_config_discovers_real_events() {
+    let stubs = discover_fixture("oxford-math", "tests/fixtures/sites/oxford-math-list.html");
+    assert_real_events("oxford-math", &stubs, 1);
+    assert!(
+        stubs.iter().any(|s| s.title.contains("Sarah Hart")),
+        "oxford-math: expected the Sarah Hart event, got {:?}",
+        stubs.iter().take(3).map(|s| &s.title).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn site_ams_calendar_html_config_discovers_real_events() {
+    let stubs = discover_fixture(
+        "ams-calendar",
+        "tests/fixtures/sites/ams-calendar-list.html",
+    );
+    assert_real_events("ams-calendar", &stubs, 90);
+    assert!(
+        stubs
+            .iter()
+            .any(|s| s.title.contains("Conference") || s.title.contains("Summer School")),
+        "ams-calendar: expected conference/school titles, got {:?}",
+        stubs.iter().take(3).map(|s| &s.title).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn site_princeton_math_html_config_discovers_real_events() {
+    let stubs = discover_fixture(
+        "princeton-math",
+        "tests/fixtures/sites/princeton-math-list.html",
+    );
+    assert_real_events("princeton-math", &stubs, 11);
+    assert!(
+        stubs
+            .iter()
+            .any(|s| s.title.contains("Positive Mass Theorem")),
+        "princeton-math: expected the Positive Mass Theorem talk, got {:?}",
+        stubs.iter().take(3).map(|s| &s.title).collect::<Vec<_>>()
+    );
+    assert!(
+        stubs.iter().all(|s| s.date_hint.is_some()),
+        "princeton-math: every stub should carry a date_hint from <time datetime>"
+    );
+}
+
+#[test]
+fn site_mit_math_html_config_discovers_real_events() {
+    let stubs = discover_fixture("mit-math", "tests/fixtures/sites/mit-math-list.html");
+    assert_real_events("mit-math", &stubs, 40);
+    assert!(
+        stubs
+            .iter()
+            .any(|s| s.title.contains("Gross--Zagier") || s.title.contains("Representation Theory")),
+        "mit-math: expected Gross-Zagier or Representation Theory, got {:?}",
+        stubs.iter().take(3).map(|s| &s.title).collect::<Vec<_>>()
+    );
+    assert!(
+        stubs.iter().filter(|s| s.date_hint.is_some()).count() >= 30,
+        "mit-math: expected >=30 stubs with date_hint, got {}",
+        stubs.iter().filter(|s| s.date_hint.is_some()).count()
+    );
+}
+
+// Group B — re-captured fixtures with tuned selectors (§P-5). These sites had
+// landing-page fixtures that were re-captured from the correct event-list URL.
+
+#[test]
+fn site_fields_html_config_discovers_real_events() {
+    let stubs = discover_fixture("fields", "tests/fixtures/sites/fields-list.html");
+    assert_real_events("fields", &stubs, 2);
+    assert!(
+        stubs
+            .iter()
+            .any(|s| s.title.contains("Complex Analysis") || s.title.contains("Mathematical AI")),
+        "fields: expected Complex Analysis or Mathematical AI Seminar, got {:?}",
+        stubs.iter().take(3).map(|s| &s.title).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn site_ini_html_config_discovers_real_events() {
+    let stubs = discover_fixture("ini", "tests/fixtures/sites/newton-list.html");
+    assert_real_events("ini", &stubs, 20);
+    assert!(
+        stubs
+            .iter()
+            .any(|s| s.title.contains("Koopman") || s.title.contains("scattering")),
+        "ini: expected Koopman or scattering seminar, got {:?}",
+        stubs.iter().take(3).map(|s| &s.title).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn site_hcm_html_config_discovers_real_events() {
+    let stubs = discover_fixture("hcm", "tests/fixtures/sites/hcm-list.html");
+    assert_real_events("hcm", &stubs, 1000);
+    assert!(
+        stubs
+            .iter()
+            .any(|s| s.title.contains("Floer") || s.title.contains("resonances")),
+        "hcm: expected Floer or resonances seminar, got {:?}",
+        stubs.iter().take(3).map(|s| &s.title).collect::<Vec<_>>()
+    );
+}
+
+// Group C — permissive fallback (body → all links). These fixtures have no
+// server-side event listing; they still must parse and yield ≥1 stub. Tuning
+// needs a different approach (JS rendering, alternate URL, or schema markup):
+//   cirm (WordPress, no visible server-side event listing),
+//   eth-math (seminar table has no per-event detail links, only series pages),
+//   icm (Cvent SPA with no server-side event HTML).
+
 fn html_fixture_parses(path: &str, url: &str, id: &str) {
     let body = std::fs::read_to_string(path).expect("fixture file exists");
     let doc = make_doc(&body, "text/html", url);
@@ -132,47 +346,29 @@ fn html_fixture_parses(path: &str, url: &str, id: &str) {
 }
 
 #[test]
-fn site_fields_html_config_parses() {
-    html_fixture_parses(
-        "tests/fixtures/sites/fields-list.html",
-        "https://www.fields.utoronto.ca/activities",
-        "fields",
-    );
-}
-
-#[test]
-fn site_mpim_html_config_parses() {
-    html_fixture_parses(
-        "tests/fixtures/sites/mpim-list.html",
-        "https://www.mpim-bonn.mpg.de/calendar",
-        "mpim",
-    );
-}
-
-#[test]
-fn site_princeton_html_config_parses() {
-    html_fixture_parses(
-        "tests/fixtures/sites/princeton-math-list.html",
-        "https://www.math.princeton.edu/events",
-        "princeton-math",
-    );
-}
-
-#[test]
-fn site_oxford_html_config_parses() {
-    html_fixture_parses(
-        "tests/fixtures/sites/oxford-math-list.html",
-        "https://www.maths.ox.ac.uk/events",
-        "oxford-math",
-    );
-}
-
-#[test]
 fn site_eth_html_config_parses() {
     html_fixture_parses(
         "tests/fixtures/sites/eth-math-list.html",
         "https://math.ethz.ch/news-and-events/events.html",
         "eth-math",
+    );
+}
+
+#[test]
+fn site_cirm_html_config_parses() {
+    html_fixture_parses(
+        "tests/fixtures/sites/cirm-list.html",
+        "https://www.cirm-math.com/",
+        "cirm",
+    );
+}
+
+#[test]
+fn site_icm_html_config_parses() {
+    html_fixture_parses(
+        "tests/fixtures/sites/icm-list.html",
+        "https://www.icm2026.org/",
+        "icm",
     );
 }
 
