@@ -417,7 +417,16 @@ fn validate_source_registry(root: &Path) -> Vec<String> {
         if cell(i_en) == "true" {
             let fixture = cell(i_fixture);
             if !fixture.is_empty() {
-                enabled_fixture_count += 1;
+                let fixture_path = root
+                    .join("crates/radar-adapters/tests/fixtures")
+                    .join(fixture);
+                if fixture_path.exists() {
+                    enabled_fixture_count += 1;
+                } else {
+                    errors.push(format!(
+                        "source-registry row {i} ({id}): fixture '{fixture}' not found on disk"
+                    ));
+                }
             }
             enabled_adapter_kinds.insert(cell(i_adapter));
         }
