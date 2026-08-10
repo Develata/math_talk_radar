@@ -56,6 +56,12 @@ impl ChangeRecord {
 ///   `previous`.
 /// - [`ChangeKind::EventCancelled`] for events present in `previous` but not
 ///   `current`.
+/// - [`ChangeKind::EventUpdated`] when a persisted event's title, date,
+///   location, or description changed.
+/// - [`ChangeKind::ScheduleAdded`] when new talks appear that were not in the
+///   previous scan.
+/// - [`ChangeKind::SpeakerAdded`] when new speakers (people or talk speakers)
+///   appear that were not in the previous scan.
 /// - [`ChangeKind::MediaAdded`] for each media URL present in the current
 ///   event but absent from the previous event (canonical baseline §23).
 /// - [`ChangeKind::MediaRemoved`] for each media URL that disappeared.
@@ -98,6 +104,34 @@ pub fn detect_changes(
     for id in curr_ids.intersection(&prev_ids) {
         let prev = prev_by_id[id];
         let curr = curr_by_id[id];
+
+        if is_event_updated(prev, curr) {
+            records.push(ChangeRecord::new(
+                ChangeKind::EventUpdated,
+                curr.id.clone(),
+                now,
+                None,
+            ));
+        }
+
+        for new_talk_id in new_talk_ids(prev, curr) {
+            records.push(ChangeRecord::new(
+                ChangeKind::ScheduleAdded,
+                curr.id.clone(),
+                now,
+                Some(new_talk_id),
+            ));
+        }
+
+        for new_speaker in new_speakers(prev, curr) {
+            records.push(ChangeRecord::new(
+                ChangeKind::SpeakerAdded,
+                curr.id.clone(),
+                now,
+                Some(new_speaker),
+            ));
+        }
+
         let prev_urls: HashSet<&str> = prev.media.iter().map(|m| m.url.as_str()).collect();
         let curr_urls: HashSet<&str> = curr.media.iter().map(|m| m.url.as_str()).collect();
 
@@ -132,13 +166,60 @@ pub fn detect_changes(
     records
 }
 
+fn is_event_updated(prev: &Event, curr: &Event) -> bool {
+    prev.title != curr.title
+        || prev.date != curr.date
+        || prev.location != curr.location
+        || prev.description != curr.description
+}
+
+fn new_talk_ids(prev: &Event, curr: &Event) -> Vec<String> {
+    let prev_ids: HashSet<&str> = prev.talks.iter().map(|t| t.id.0.as_str()).collect();
+    curr.talks
+        .iter()
+        .filter(|t| !prev_ids.contains(t.id.0.as_str()))
+        .map(|t| t.id.0.clone())
+        .collect()
+}
+
+fn new_speakers(prev: &Event, curr: &Event) -> Vec<String> {
+    let prev_names: HashSet<String> = prev
+        .people
+        .iter()
+        .filter(|p| p.role == radar_core::PersonRole::Speaker)
+        .map(|p| p.canonical_name.clone())
+        .collect();
+    let mut added: Vec<String> = curr
+        .people
+        .iter()
+        .filter(|p| p.role == radar_core::PersonRole::Speaker)
+        .filter(|p| !prev_names.contains(&p.canonical_name))
+        .map(|p| p.canonical_name.clone())
+        .collect();
+    let prev_talk_speakers: HashSet<String> = prev
+        .talks
+        .iter()
+        .flat_map(|t| t.speaker.iter())
+        .map(|s| s.canonical_name.clone())
+        .collect();
+    for t in &curr.talks {
+        for s in &t.speaker {
+            if !prev_talk_speakers.contains(&s.canonical_name) && !added.contains(&s.canonical_name)
+            {
+                added.push(s.canonical_name.clone());
+            }
+        }
+    }
+    added
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use chrono::NaiveDate;
     use radar_core::{
         AccessInfo, EventDate, EventId, EventStatus, EventType, MediaId, MediaResource, MediaType,
-        OnlineAvailability, PublicAccess, SourceEvidence,
+        OnlineAvailability, PersonHit, PersonRole, PublicAccess, SourceEvidence, Talk, TalkId,
     };
     use url::Url;
 
@@ -208,6 +289,48 @@ mod tests {
         }
     }
 
+    fn speaker(name: &str) -> PersonHit {
+        PersonHit {
+            canonical_name: name.into(),
+            matched_text: name.into(),
+            role: PersonRole::Speaker,
+            evidence: None,
+            confidence: 1.0,
+            scholar_tags: Vec::new(),
+        }
+    }
+
+    fn talk(id: &str, speaker_name: Option<&str>) -> Talk {
+        Talk {
+            id: TalkId(id.into()),
+            title: format!("Talk {id}"),
+            speaker: speaker_name.into_iter().map(speaker).collect(),
+            date_time: None,
+            abstract_text: None,
+            topics: Vec::new(),
+            media: Vec::new(),
+            source: src(),
+        }
+    }
+
+    fn event_with_title(id: &str, title: &str) -> Event {
+        let mut e = event(id, Vec::new());
+        e.title = title.into();
+        e
+    }
+
+    fn event_with_talks(id: &str, talks: Vec<Talk>) -> Event {
+        let mut e = event(id, Vec::new());
+        e.talks = talks;
+        e
+    }
+
+    fn event_with_people(id: &str, people: Vec<PersonHit>) -> Event {
+        let mut e = event(id, Vec::new());
+        e.people = people;
+        e
+    }
+
     #[test]
     fn empty_scans_produce_no_records() {
         let records = detect_changes(&[], &[], now());
@@ -259,5 +382,94 @@ mod tests {
         let records = detect_changes(&prev, &[], now());
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].kind, ChangeKind::EventCancelled);
+    }
+
+    #[test]
+    fn title_change_emits_event_updated() {
+        let prev = vec![event_with_title("e1", "Old Title")];
+        let curr = vec![event_with_title("e1", "New Title")];
+        let records = detect_changes(&prev, &curr, now());
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].kind, ChangeKind::EventUpdated);
+        assert_eq!(records[0].event_id.0, "e1");
+    }
+
+    #[test]
+    fn unchanged_title_emits_no_event_updated() {
+        let prev = vec![event_with_title("e1", "Same Title")];
+        let curr = vec![event_with_title("e1", "Same Title")];
+        let records = detect_changes(&prev, &curr, now());
+        assert!(records.is_empty());
+    }
+
+    #[test]
+    fn new_talk_emits_schedule_added() {
+        let prev = vec![event_with_talks("e1", vec![])];
+        let curr = vec![event_with_talks("e1", vec![talk("t1", None)])];
+        let records = detect_changes(&prev, &curr, now());
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].kind, ChangeKind::ScheduleAdded);
+        assert_eq!(records[0].detail.as_deref(), Some("t1"));
+    }
+
+    #[test]
+    fn existing_talk_emits_no_schedule_added() {
+        let prev = vec![event_with_talks("e1", vec![talk("t1", None)])];
+        let curr = vec![event_with_talks("e1", vec![talk("t1", None)])];
+        let records = detect_changes(&prev, &curr, now());
+        assert!(records.is_empty());
+    }
+
+    #[test]
+    fn new_event_speaker_emits_speaker_added() {
+        let prev = vec![event_with_people("e1", vec![])];
+        let curr = vec![event_with_people("e1", vec![speaker("Terence Tao")])];
+        let records = detect_changes(&prev, &curr, now());
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].kind, ChangeKind::SpeakerAdded);
+        assert_eq!(records[0].detail.as_deref(), Some("Terence Tao"));
+    }
+
+    #[test]
+    fn new_talk_speaker_emits_speaker_added() {
+        let prev = vec![event_with_talks("e1", vec![talk("t1", None)])];
+        let curr = vec![event_with_talks("e1", vec![talk("t1", Some("Don Zagier"))])];
+        let records = detect_changes(&prev, &curr, now());
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].kind, ChangeKind::SpeakerAdded);
+        assert_eq!(records[0].detail.as_deref(), Some("Don Zagier"));
+    }
+
+    #[test]
+    fn existing_speaker_emits_no_speaker_added() {
+        let prev = vec![event_with_people("e1", vec![speaker("Terence Tao")])];
+        let curr = vec![event_with_people("e1", vec![speaker("Terence Tao")])];
+        let records = detect_changes(&prev, &curr, now());
+        assert!(records.is_empty());
+    }
+
+    #[test]
+    fn non_speaker_role_emits_no_speaker_added() {
+        let mut organizer = speaker("Alice Organizer");
+        organizer.role = PersonRole::Organizer;
+        let prev = vec![event_with_people("e1", vec![])];
+        let curr = vec![event_with_people("e1", vec![organizer])];
+        let records = detect_changes(&prev, &curr, now());
+        assert!(
+            records.iter().all(|r| r.kind != ChangeKind::SpeakerAdded),
+            "non-Speaker role must not emit SpeakerAdded, got {records:?}"
+        );
+    }
+
+    #[test]
+    fn multiple_changes_one_event_sorted() {
+        let prev = vec![event_with_title("e1", "Old")];
+        let mut curr = event_with_title("e1", "New");
+        curr.media.push(video("https://youtube.com/v/1"));
+        let curr = vec![curr];
+        let records = detect_changes(&prev, &curr, now());
+        let kinds: Vec<_> = records.iter().map(|r| r.kind).collect();
+        assert!(kinds.contains(&ChangeKind::EventUpdated));
+        assert!(kinds.contains(&ChangeKind::MediaAdded));
     }
 }
