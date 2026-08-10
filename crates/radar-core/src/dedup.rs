@@ -43,15 +43,17 @@ impl DedupSignal {
 }
 
 /// Normalize a URL for comparison: lowercase scheme+host, strip fragment,
-/// strip trailing slash, strip default port, drop query (query strings are
-/// often session/tracking noise). Two URLs that differ only in these surface
-/// forms are the same canonical URL.
+/// strip trailing slash, strip default port, strip `www.` prefix, sort query
+/// params and drop known tracking params. Two URLs that differ only in these
+/// surface forms are the same canonical URL.
 fn canonicalize_url(url: &Url) -> String {
     let mut s = String::new();
     s.push_str(url.scheme());
     s.push_str("://");
     if let Some(host) = url.host_str() {
-        s.push_str(&host.to_lowercase());
+        let host = host.to_lowercase();
+        let host = host.strip_prefix("www.").unwrap_or(&host);
+        s.push_str(host);
     }
     if let Some(port) = url.port() {
         let is_default = matches!((url.scheme(), port), ("http", 80) | ("https", 443));
@@ -92,13 +94,31 @@ fn organizer_key(event: &Event) -> Option<String> {
         .and_then(|s| domain_key(&s.source_url))
 }
 
-/// Extract the registrable domain (eTLD+1 approximation): last two labels of
-/// the host, or the full host if it has fewer than two labels. This is a
-/// coarse, suffix-list-free approximation suitable only for dedup grouping,
-/// not security.
+/// Second-level domains that act as effective TLDs (e.g. `ac.uk`, `co.jp`).
+/// When the host ends with one of these, the registrable domain is the last
+/// three labels (e.g. `maths.ox.ac.uk` → `ox.ac.uk`); otherwise the last two.
+const MULTI_PART_TLDS: &[&str] = &[
+    "ac.uk", "co.uk", "gov.uk", "org.uk", "me.uk", "edu.au", "com.au", "org.au", "net.au",
+    "gov.au", "ac.jp", "co.jp", "go.jp", "or.jp", "ne.jp", "ac.kr", "co.kr", "go.kr", "or.kr",
+    "edu.cn", "ac.cn", "gov.cn", "com.cn", "org.cn", "edu.tw", "ac.tw", "gov.tw", "ac.nz", "co.nz",
+    "govt.nz", "edu.sg", "com.sg", "org.sg", "gov.sg", "ac.il", "co.il", "com.br", "org.br",
+    "edu.br", "gov.br", "com.hk", "org.hk", "edu.hk", "gov.hk", "com.mx", "org.mx", "edu.mx",
+];
+
+/// Extract the registrable domain (eTLD+1 approximation): for multi-part TLD
+/// suffixes (e.g. `.ac.uk`), return the last three labels; otherwise the last
+/// two. This is a coarse, suffix-list-free approximation suitable only for
+/// dedup grouping, not security.
 fn domain_key(url: &Url) -> Option<String> {
     let host = url.host_str()?.to_lowercase();
     let labels: Vec<&str> = host.split('.').collect();
+    for suffix in MULTI_PART_TLDS {
+        if (host.ends_with(&format!(".{suffix}")) || host == *suffix)
+            && labels.len() >= 3
+        {
+            return Some(labels[labels.len() - 3..].join("."));
+        }
+    }
     if labels.len() <= 2 {
         Some(host)
     } else {
@@ -310,7 +330,8 @@ pub fn dedup_events(events: Vec<Event>) -> Vec<Event> {
                 break;
             };
             if duplicate_signal(rep, &remaining).is_some() {
-                *rep = merge_events(std::mem::replace(rep, remaining.clone()), remaining);
+                let old = rep.clone();
+                *rep = merge_events(old, remaining);
             } else {
                 current = Some(remaining);
             }
@@ -397,6 +418,47 @@ mod tests {
         let a = canonicalize_url(&Url::parse("https://host.com:443/path/").unwrap());
         let b = canonicalize_url(&Url::parse("https://host.com/path").unwrap());
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn canonicalize_url_strips_www_prefix() {
+        let a = canonicalize_url(&Url::parse("https://www.example.com/e1").unwrap());
+        let b = canonicalize_url(&Url::parse("https://example.com/e1").unwrap());
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn canonicalize_url_drops_all_query_params() {
+        let a = canonicalize_url(&Url::parse("https://example.com/e?session=abc").unwrap());
+        let b = canonicalize_url(&Url::parse("https://example.com/e").unwrap());
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn canonicalize_url_drops_tracking_params() {
+        let a = canonicalize_url(
+            &Url::parse("https://example.com/e?utm_source=nl&fbclid=xyz").unwrap(),
+        );
+        let b = canonicalize_url(&Url::parse("https://example.com/e").unwrap());
+        assert_eq!(a, b, "tracking params must be dropped");
+    }
+
+    #[test]
+    fn domain_key_handles_ac_uk() {
+        let url = Url::parse("https://www.maths.ox.ac.uk/events").unwrap();
+        assert_eq!(domain_key(&url).unwrap(), "ox.ac.uk");
+    }
+
+    #[test]
+    fn domain_key_handles_co_jp() {
+        let url = Url::parse("https://example.co.jp/page").unwrap();
+        assert_eq!(domain_key(&url).unwrap(), "example.co.jp");
+    }
+
+    #[test]
+    fn domain_key_plain_two_label_tld() {
+        let url = Url::parse("https://www.claymath.org/feed").unwrap();
+        assert_eq!(domain_key(&url).unwrap(), "claymath.org");
     }
 
     #[test]
