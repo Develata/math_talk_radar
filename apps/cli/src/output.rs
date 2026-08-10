@@ -28,11 +28,39 @@ pub struct QuerySpec {
     pub after_days: u32,
 }
 
-/// Render a `ScanOutput` to the requested format. `Json` pretty-prints the full
-/// envelope; `Jsonl` is reserved for the streaming path (M4).
-pub fn render(output: &ScanOutput, format: crate::cli::OutputFormat) -> anyhow::Result<String> {
+/// Render a `ScanOutput` to the requested format and detail level (§31).
+/// `Json` pretty-prints the full envelope; `Jsonl` emits one JSON object.
+/// Detail level truncates long text fields: compact ≤1200 chars, full ≤8000.
+pub fn render(
+    output: &ScanOutput,
+    format: crate::cli::OutputFormat,
+    detail: crate::cli::DetailLevel,
+) -> anyhow::Result<String> {
+    let mut output = output.clone();
+    truncate_for_detail(&mut output, detail);
     match format {
-        crate::cli::OutputFormat::Json => Ok(serde_json::to_string_pretty(output)?),
-        crate::cli::OutputFormat::Jsonl => Ok(serde_json::to_string(output)?),
+        crate::cli::OutputFormat::Json => Ok(serde_json::to_string_pretty(&output)?),
+        crate::cli::OutputFormat::Jsonl => Ok(serde_json::to_string(&output)?),
+    }
+}
+
+fn truncate_for_detail(output: &mut ScanOutput, detail: crate::cli::DetailLevel) {
+    let limit = match detail {
+        crate::cli::DetailLevel::Compact => 1200,
+        crate::cli::DetailLevel::Full => 8000,
+    };
+    for event in &mut output.events {
+        if let Some(d) = &event.description
+            && d.chars().count() > limit
+        {
+            event.description = Some(d.chars().take(limit).collect());
+        }
+        for talk in &mut event.talks {
+            if let Some(a) = &talk.abstract_text
+                && a.chars().count() > limit
+            {
+                talk.abstract_text = Some(a.chars().take(limit).collect());
+            }
+        }
     }
 }
