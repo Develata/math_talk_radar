@@ -14,9 +14,11 @@ pub struct CliError {
 }
 
 impl CliError {
+    /// §32 exit 2: usage error. Returned by stubs for commands not yet
+    /// implemented; exit 1 is deliberately absent from the §32 enum.
     pub fn not_implemented(cmd: &str) -> Self {
         Self {
-            code: 1,
+            code: 2,
             message: format!("{cmd}: not implemented in M0"),
         }
     }
