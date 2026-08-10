@@ -407,10 +407,11 @@ pub async fn fetch_all(
         let robots = robots.clone();
 
         join_set.spawn(async move {
-            // Acquire global permit
-            let _global_permit = global_sem.acquire_owned().await.ok();
-
-            // Acquire per-host permit (Oracle #1: outside lock)
+            // Acquire per-host permit first, then global. Ordering matters:
+            // global-first creates a convoy — a task blocked on a saturated
+            // host holds a global slot it cannot use, starving tasks on other
+            // hosts that could proceed. Per-host-first ensures a task only
+            // holds a global slot when it is ready to fetch.
             let host = source
                 .entrypoint
                 .as_ref()
@@ -424,6 +425,8 @@ pub async fn fetch_all(
                     .clone()
             };
             let _host_permit = host_sem.acquire_owned().await.ok();
+
+            let _global_permit = global_sem.acquire_owned().await.ok();
 
             fetch_source(&client, &source, adapter.as_ref(), &robots, deadline).await
         });
