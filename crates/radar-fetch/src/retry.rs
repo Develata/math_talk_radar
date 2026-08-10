@@ -21,6 +21,32 @@ pub fn retry_for_status(status: u16, retry_after: Option<Duration>) -> RetryDeci
     }
 }
 
+/// Classify a `reqwest` network error for retry. Per §15: retry connection
+/// reset and transient network failure. Never retry timeout (handled by the
+/// scan deadline), redirect errors, or body/decode errors.
+pub fn is_transient_network_error(err: &reqwest::Error) -> bool {
+    if err.is_timeout() {
+        return false;
+    }
+    if err.is_connect() {
+        return true;
+    }
+    // Walk the error source chain for connection reset / aborted.
+    let mut source = std::error::Error::source(err);
+    while let Some(e) = source {
+        if let Some(io) = e.downcast_ref::<std::io::Error>() {
+            match io.kind() {
+                std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::ConnectionAborted => {
+                    return true;
+                }
+                _ => {}
+            }
+        }
+        source = e.source();
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::{RetryDecision, retry_for_status};

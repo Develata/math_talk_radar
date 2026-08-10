@@ -16,7 +16,7 @@ use crate::client::{FetchClient, make_document};
 use crate::error::FetchError;
 use crate::fetch_policy::FetchPolicy;
 use crate::policy::HttpPolicy;
-use crate::retry::retry_for_status;
+use crate::retry::{is_transient_network_error, retry_for_status};
 use crate::robots::RobotsCache;
 
 pub struct SourceFetchResult {
@@ -51,22 +51,44 @@ pub async fn fetch_one(
         return Err(FetchError::BudgetExhausted);
     }
 
+    // §16: verify the initial URL host before any request leaves.
+    if !policy.is_host_allowed(url) {
+        return Err(FetchError::RedirectDisallowed);
+    }
+
     // Robots check (clone to owned so the fetch closure is 'static + Send).
     let owned_url = url.clone();
     let client_clone = client.clone();
+    let robots_body_cap = http_policy.max_response_body;
     let rules = robots
         .get_or_init(url, move || async move {
             let robots_url = robots_url_for(&owned_url);
             match robots_url {
                 Some(ru) => {
-                    let resp = client_clone
+                    let mut resp = client_clone
                         .handle()
                         .get(ru.as_str())
                         .send()
                         .await
                         .map_err(FetchError::from)?;
                     if resp.status().is_success() {
-                        let body = resp.text().await.map_err(FetchError::from)?;
+                        // §66: cap robots.txt body — a malicious host could
+                        // otherwise exhaust the RSS budget with an enormous
+                        // robots.txt. On cap breach, return empty rules
+                        // (allow-all) so the host cannot DoS the crawl.
+                        let mut buf = Vec::new();
+                        let mut capped = false;
+                        while let Some(chunk) = resp.chunk().await.map_err(FetchError::from)? {
+                            if buf.len() + chunk.len() > robots_body_cap {
+                                capped = true;
+                                break;
+                            }
+                            buf.extend_from_slice(&chunk);
+                        }
+                        if capped {
+                            return Ok(crate::robots::RobotsRules::default());
+                        }
+                        let body = String::from_utf8_lossy(&buf);
                         Ok(crate::robots::parse_robots(&body))
                     } else {
                         Ok(crate::robots::RobotsRules::default())
@@ -80,10 +102,14 @@ pub async fn fetch_one(
         return Err(FetchError::RobotsDenied { url: url.clone() });
     }
 
-    // Manual redirect loop (Oracle #7)
+    // Manual redirect loop (Oracle #7). Network errors (B1, §15: connection
+    // reset, transient) and status retries (§15: 408, 429, 5xx) share a single
+    // retry budget bounded by `max_retry`. After any retry we loop back to the
+    // top so a 3xx on the retried response is followed as a redirect (W5).
     let mut current_url = url.clone();
     let mut hops = 0;
     let max_hops = http_policy.redirect_limit;
+    let mut retries_used: u32 = 0;
 
     loop {
         let timeout = remaining_time(deadline, http_policy.request_timeout);
@@ -91,17 +117,23 @@ pub async fn fetch_one(
             return Err(FetchError::Timeout);
         }
 
-        let mut resp = client
+        let mut resp = match client
             .handle()
             .get(current_url.as_str())
             .timeout(timeout)
             .send()
             .await
-            .map_err(FetchError::from)?;
+        {
+            Ok(r) => r,
+            Err(e) if is_transient_network_error(&e) && retries_used < http_policy.max_retry => {
+                retries_used += 1;
+                continue;
+            }
+            Err(e) => return Err(FetchError::from(e)),
+        };
 
         let status = resp.status().as_u16();
 
-        // Check for redirect
         if (300..400).contains(&status) {
             hops += 1;
             if hops > max_hops {
@@ -124,7 +156,6 @@ pub async fn fetch_one(
             continue;
         }
 
-        // Non-redirect response
         let retry = retry_for_status(
             status,
             resp.headers()
@@ -133,7 +164,8 @@ pub async fn fetch_one(
                 .and_then(|s| s.parse::<u64>().ok().map(std::time::Duration::from_secs)),
         );
         if let crate::retry::RetryDecision::Retry { after } = retry {
-            if http_policy.max_retry > 0 {
+            if retries_used < http_policy.max_retry {
+                retries_used += 1;
                 if let Some(delay) = after {
                     let capped =
                         std::cmp::min(delay, remaining_time(deadline, http_policy.request_timeout));
@@ -141,18 +173,7 @@ pub async fn fetch_one(
                         tokio::time::sleep(capped).await;
                     }
                 }
-                // Re-send the request
-                let timeout2 = remaining_time(deadline, http_policy.request_timeout);
-                if timeout2.is_zero() {
-                    return Err(FetchError::Timeout);
-                }
-                resp = client
-                    .handle()
-                    .get(current_url.as_str())
-                    .timeout(timeout2)
-                    .send()
-                    .await
-                    .map_err(FetchError::from)?;
+                continue;
             } else {
                 return Err(FetchError::HttpError { status });
             }
@@ -165,7 +186,6 @@ pub async fn fetch_one(
             });
         }
 
-        // Body cap
         if let Some(len) = resp.content_length()
             && (len as usize) > http_policy.max_response_body
         {
@@ -199,7 +219,7 @@ pub async fn fetch_one(
             final_url,
             final_status,
             content_type,
-            body.to_vec(),
+            body,
             Utc::now(),
         ));
     }

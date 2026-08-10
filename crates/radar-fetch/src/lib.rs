@@ -20,5 +20,5 @@ pub use engine::{SourceFetchResult, fetch_all, fetch_source, past_deadline};
 pub use error::FetchError;
 pub use fetch_policy::FetchPolicy;
 pub use policy::HttpPolicy;
-pub use retry::{RetryDecision, retry_for_status};
+pub use retry::{RetryDecision, is_transient_network_error, retry_for_status};
 pub use robots::{RobotsCache, RobotsPolicy};
