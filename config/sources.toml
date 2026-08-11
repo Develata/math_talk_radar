@@ -79,8 +79,8 @@ fixture = "sites/fields-list.html"
 [sources.selectors]
 list = "div.event"
 list_link = "a"
-detail_title = "h1"
-detail_date = "time"
+detail_title = "h1.title"
+detail_date = "span.human-date"
 
 [[sources]]
 id = "ini"

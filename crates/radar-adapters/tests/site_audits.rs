@@ -238,6 +238,24 @@ fn site_ams_calendar_html_config_discovers_real_events() {
         "ams-calendar: expected conference/school titles, got {:?}",
         stubs.iter().take(3).map(|s| &s.title).collect::<Vec<_>>()
     );
+    // ams-calendar `dt.event_dates` contains the date text alongside child
+    // `<a>` links ("Expand to view...", "Download .ics"). Without `direct_text`
+    // filtering, `element.text()` pollutes the date string and 0% of stubs
+    // carry a date_hint.
+    let dated = stubs
+        .iter()
+        .filter(|s| {
+            s.date_hint
+                .as_ref()
+                .map(|d| d.precision != DatePrecision::Unknown)
+                .unwrap_or(false)
+        })
+        .count();
+    assert!(
+        dated > 0,
+        "ams-calendar: expected >0 stubs with dated date_hint, got {dated}/{}",
+        stubs.len()
+    );
 }
 
 #[test]

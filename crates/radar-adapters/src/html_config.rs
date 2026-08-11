@@ -4,7 +4,7 @@
 //! Selectors are never hardcoded here: every query reads from `source.selectors`.
 //! A configured-HTML source without `selectors` fails fast with `AdapterError`
 //! (Metis D5: no automatic fallback to the generic HTML adapter).
-use scraper::{ElementRef, Html, Selector};
+use scraper::{ElementRef, Html, Node, Selector};
 
 use chrono::Datelike;
 
@@ -250,6 +250,20 @@ fn clean_text(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+/// Collect text from direct `Node::Text` children only, ignoring text inside
+/// nested elements. Used for date extraction where a `<dt>` or `<span>` wraps
+/// the date text alongside `<a>` links (e.g. ams-calendar's `dt.event_dates`
+/// contains "Expand to view..." links after the date).
+fn direct_text(element: &ElementRef) -> String {
+    element
+        .children()
+        .filter_map(|child| match child.value() {
+            Node::Text(t) => Some(&**t),
+            _ => None,
+        })
+        .collect()
+}
+
 fn first_text(document: &Html, selector: &Selector) -> Option<String> {
     let element = document.select(selector).next()?;
     let text = clean_text(&element.text().collect::<String>());
@@ -260,6 +274,13 @@ fn first_date(document: &Html, selector: &Selector) -> Option<EventDate> {
     let element = document.select(selector).next()?;
     if let Some(dt) = element.attr("datetime")
         && let Ok(d) = parse_date(dt)
+        && d.precision != DatePrecision::Unknown
+    {
+        return Some(d);
+    }
+    let direct = clean_text(&direct_text(&element));
+    if !direct.is_empty()
+        && let Ok(d) = parse_date(&direct)
         && d.precision != DatePrecision::Unknown
     {
         return Some(d);
@@ -282,6 +303,13 @@ fn first_date_in(scope: &ElementRef, selector: &Selector, year_hint: i32) -> Opt
     let element = scope.select(selector).next()?;
     if let Some(dt) = element.attr("datetime")
         && let Ok(d) = parse_date(dt)
+        && d.precision != DatePrecision::Unknown
+    {
+        return Some(d);
+    }
+    let direct = clean_text(&direct_text(&element));
+    if !direct.is_empty()
+        && let Ok(d) = parse_date_with_year_hint(&direct, year_hint)
         && d.precision != DatePrecision::Unknown
     {
         return Some(d);

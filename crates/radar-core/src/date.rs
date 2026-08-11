@@ -137,6 +137,16 @@ fn re_day_month_year_single() -> &'static Regex {
     })
 }
 
+fn re_us_full_date_range() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(
+            r"^([A-Za-z]+)\s+(\d{1,2}),?\s+(\d{4})\s*(?:[–-]|to)\s*([A-Za-z]+)\s+(\d{1,2}),?\s+(\d{4})$",
+        )
+        .expect("statically verified regex literal")
+    })
+}
+
 // --- Year-less variants (used by `parse_date_with_year_hint`) ---------------
 //
 // Mirrors the five patterns above but without the year capture. Anchored with
@@ -233,9 +243,10 @@ fn parse_date_inner(text: &str, year_hint: Option<i32>) -> Result<EventDate, Dat
         });
     }
 
-    // 2-6. Range / US / DMY patterns, tried in order; first match wins.
+    // 2-7. Range / US / DMY patterns, tried in order; first match wins.
     //      Invalid dates (e.g. Feb 30) fall through to Unknown via `?`.
-    if let Some(ed) = try_same_month_range(trimmed, text)
+    if let Some(ed) = try_us_full_date_range(trimmed, text)
+        .or_else(|| try_same_month_range(trimmed, text))
         .or_else(|| try_cross_month_range(trimmed, text))
         .or_else(|| try_us_range(trimmed, text))
         .or_else(|| try_us_single(trimmed, text))
@@ -251,6 +262,30 @@ fn parse_date_inner(text: &str, year_hint: Option<i32>) -> Result<EventDate, Dat
         timezone: None,
         original_text: text.to_string(),
         precision: DatePrecision::Unknown,
+    })
+}
+
+/// Full US date range: "August 2, 2026 - August 7, 2026". Both endpoints carry
+/// explicit year and month; the separator is en-dash or ASCII hyphen.
+fn try_us_full_date_range(trimmed: &str, original: &str) -> Option<EventDate> {
+    let caps = re_us_full_date_range().captures(trimmed)?;
+    let m1 = month_from_name(&caps[1])?;
+    let d1: u32 = caps[2].parse().ok()?;
+    let y1: i32 = caps[3].parse().ok()?;
+    let m2 = month_from_name(&caps[4])?;
+    let d2: u32 = caps[5].parse().ok()?;
+    let y2: i32 = caps[6].parse().ok()?;
+    let start = NaiveDate::from_ymd_opt(y1, m1, d1)?;
+    let end = NaiveDate::from_ymd_opt(y2, m2, d2)?;
+    if start > end {
+        return None;
+    }
+    Some(EventDate {
+        start: Some(DateTimeOrDate::Date(start)),
+        end: Some(DateTimeOrDate::Date(end)),
+        timezone: None,
+        original_text: original.to_string(),
+        precision: DatePrecision::Range,
     })
 }
 
@@ -810,5 +845,39 @@ mod tests {
                 "parse_date_with_year_hint({c:?}) should be Ok"
             );
         }
+    }
+
+    // DATE-006: full US date range "August 2, 2026 - August 7, 2026" (ams-calendar).
+    #[test]
+    fn date_006_us_full_date_range() {
+        let ed = parse_date("August 2, 2026 - August 7, 2026").unwrap();
+        assert_eq!(ed.precision, DatePrecision::Range);
+        assert_eq!(start_date(&ed), d(2026, 8, 2));
+        assert_eq!(end_date(&ed), d(2026, 8, 7));
+        assert_eq!(ed.original_text, "August 2, 2026 - August 7, 2026");
+
+        // Cross-month + cross-year variant.
+        let ed2 = parse_date("December 30, 2026 - January 2, 2027").unwrap();
+        assert_eq!(ed2.precision, DatePrecision::Range);
+        assert_eq!(start_date(&ed2), d(2026, 12, 30));
+        assert_eq!(end_date(&ed2), d(2027, 1, 2));
+
+        // En-dash separator.
+        let ed3 = parse_date("August 2, 2026 – August 7, 2026").unwrap();
+        assert_eq!(ed3.precision, DatePrecision::Range);
+        assert_eq!(start_date(&ed3), d(2026, 8, 2));
+        assert_eq!(end_date(&ed3), d(2026, 8, 7));
+
+        // Same-day range (start == end).
+        let ed4 = parse_date("August 19, 2026 - August 19, 2026").unwrap();
+        assert_eq!(ed4.precision, DatePrecision::Range);
+        assert_eq!(start_date(&ed4), d(2026, 8, 19));
+        assert_eq!(end_date(&ed4), d(2026, 8, 19));
+
+        // "to" separator (fields.utoronto.ca series pages).
+        let ed5 = parse_date("July 1, 2026 to June 30, 2027").unwrap();
+        assert_eq!(ed5.precision, DatePrecision::Range);
+        assert_eq!(start_date(&ed5), d(2026, 7, 1));
+        assert_eq!(end_date(&ed5), d(2027, 6, 30));
     }
 }
