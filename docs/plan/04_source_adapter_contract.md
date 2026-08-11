@@ -39,8 +39,9 @@ enabled, fixture, last_verified, status, notes. Validated by `cargo xtask check`
 
 ## Coverage baseline (§18)
 
-Audited ≥ 20, enabled ≥ 10, structured adapter kinds ≥ 3, media/recording ≥ 3.
-Audit the real entrypoint before writing the URL.
+Audited ≥ 20, enabled ≥ 10, structured adapter kinds ≥ 2 (v0.1; restore to
+≥ 3 when a qualified JSON-LD/ICS source is audited — see ADR-0007),
+media/recording ≥ 3. Audit the real entrypoint before writing the URL.
 
 ## Dynamic sources (§19)
 

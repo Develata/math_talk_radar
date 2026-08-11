@@ -6,8 +6,10 @@
 //! (Metis D5: no automatic fallback to the generic HTML adapter).
 use scraper::{ElementRef, Html, Selector};
 
+use chrono::Datelike;
+
 use radar_core::config::HtmlSelectors;
-use radar_core::date::{DatePrecision, EventDate, parse_date};
+use radar_core::date::{DatePrecision, EventDate, parse_date, parse_date_with_year_hint};
 use radar_core::{
     AccessInfo, AdapterError, Event, EventCandidate, EventStatus, EventStub, FetchPlan,
     FetchedDocument, Location, OnlineAvailability, PersonHit, PersonRole, PublicAccess,
@@ -27,8 +29,8 @@ impl SourceAdapter for HtmlConfigAdapter {
         source: &SourceSpec,
     ) -> Result<Vec<EventStub>, AdapterError> {
         let selectors = require_selectors(source)?;
-        let body = doc_body(&document.body, source)?;
-        let html = Html::parse_document(body);
+        let body = doc_body(&document.body);
+        let html = Html::parse_document(&body);
         let list_selector = parse_selector(&source.id, "list", &selectors.list)?;
         let link_selector = parse_selector(&source.id, "list_link", &selectors.list_link)?;
         let title_selector = selectors
@@ -65,7 +67,7 @@ impl SourceAdapter for HtmlConfigAdapter {
                 }
                 let date_hint = date_selector
                     .as_ref()
-                    .and_then(|sel| first_date_in(&container, sel));
+                    .and_then(|sel| first_date_in(&container, sel, document.fetched_at.year()));
                 stubs.push(EventStub {
                     title,
                     url,
@@ -114,9 +116,9 @@ impl SourceAdapter for HtmlConfigAdapter {
         let stub_source = event.source.clone();
         let date_hint = event.date_hint.clone();
 
-        let body = doc_body(&doc.body, source)?;
+        let body = doc_body(&doc.body);
         let base_url = doc.final_url.clone();
-        let html = Html::parse_document(body);
+        let html = Html::parse_document(&body);
 
         let title_selector = parse_selector(&source.id, "detail_title", &selectors.detail_title)?;
         let date_selector = parse_selector(&source.id, "detail_date", &selectors.detail_date)?;
@@ -218,11 +220,19 @@ fn require_selectors(source: &SourceSpec) -> Result<&HtmlSelectors, AdapterError
         })
 }
 
-fn doc_body<'a>(body: &'a [u8], source: &SourceSpec) -> Result<&'a str, AdapterError> {
-    std::str::from_utf8(body).map_err(|e| AdapterError::Parse {
-        source_id: source.id.clone(),
-        message: format!("document body is not valid utf-8: {e}"),
-    })
+fn doc_body<'a>(body: &'a [u8]) -> std::borrow::Cow<'a, str> {
+    match std::str::from_utf8(body) {
+        Ok(s) => std::borrow::Cow::Borrowed(s),
+        Err(_) => std::borrow::Cow::Owned(
+            body.utf8_chunks()
+                .flat_map(|c| {
+                    c.valid()
+                        .chars()
+                        .chain(std::iter::repeat_n('\u{FFFD}', c.invalid().len()))
+                })
+                .collect(),
+        ),
+    }
 }
 
 fn parse_selector(
@@ -268,7 +278,7 @@ fn first_text_in(scope: &ElementRef, selector: &Selector) -> Option<String> {
     if text.is_empty() { None } else { Some(text) }
 }
 
-fn first_date_in(scope: &ElementRef, selector: &Selector) -> Option<EventDate> {
+fn first_date_in(scope: &ElementRef, selector: &Selector, year_hint: i32) -> Option<EventDate> {
     let element = scope.select(selector).next()?;
     if let Some(dt) = element.attr("datetime")
         && let Ok(d) = parse_date(dt)
@@ -280,7 +290,7 @@ fn first_date_in(scope: &ElementRef, selector: &Selector) -> Option<EventDate> {
     if text.is_empty() {
         return None;
     }
-    let d = parse_date(&text).ok()?;
+    let d = parse_date_with_year_hint(&text, year_hint).ok()?;
     (d.precision != DatePrecision::Unknown).then_some(d)
 }
 
@@ -405,6 +415,24 @@ mod tests {
             status: 200,
             content_type: Some("text/html; charset=utf-8".into()),
             body: body.as_bytes().to_vec(),
+            fetched_at,
+        }
+    }
+
+    fn make_doc_bytes(url: &str, body: &[u8]) -> FetchedDocument {
+        let evidence: SourceEvidence = serde_json::from_str(
+            r#"{"source_id":"x","source_url":"https://example.com/","captured_at":"2026-08-09T00:00:00Z"}"#,
+        )
+        .expect("SourceEvidence fixture parses");
+        let fetched_at = evidence
+            .captured_at
+            .expect("captured_at present in fixture");
+        FetchedDocument {
+            url: Url::parse(url).expect("valid url"),
+            final_url: Url::parse(url).expect("valid url"),
+            status: 200,
+            content_type: Some("text/html; charset=iso-8859-1".into()),
+            body: body.to_vec(),
             fetched_at,
         }
     }
@@ -738,5 +766,37 @@ mod tests {
             candidate.event.date.start_date().map(|d| d.to_string()),
             Some("2026-10-01".into())
         );
+    }
+
+    #[test]
+    fn doc_body_valid_utf8_is_borrowed() {
+        let body = b"<html><body>hello</body></html>";
+        let s = doc_body(body);
+        assert!(matches!(s, std::borrow::Cow::Borrowed(_)));
+        assert_eq!(s.as_ref(), "<html><body>hello</body></html>");
+    }
+
+    #[test]
+    fn doc_body_invalid_utf8_replaces_with_replacement_char() {
+        // 0xf6 is 'ö' in ISO-8859-1, invalid in UTF-8.
+        let body: &[u8] = b"<html><body>G\xf6del Seminar</body></html>";
+        let s = doc_body(body);
+        assert!(matches!(s, std::borrow::Cow::Owned(_)));
+        assert_eq!(s.as_ref(), "<html><body>G\u{FFFD}del Seminar</body></html>");
+    }
+
+    #[test]
+    fn discover_handles_non_utf8_body() {
+        // Simulate an ISO-8859-1 page with a non-UTF-8 byte in the link text.
+        let body: &[u8] =
+            b"<html><body><ul class=\"event-list\"><li><a href=\"/talks/godel\">G\xf6del Talk</a></li></ul></body></html>";
+        let document = make_doc_bytes("https://example.com/events", body);
+        let source = make_source("test", Some(test_selectors()));
+        let stubs = HtmlConfigAdapter
+            .discover(&document, &source)
+            .expect("discover ok with non-utf8 body");
+        assert_eq!(stubs.len(), 1);
+        assert!(stubs[0].title.contains("Gdel") || stubs[0].title.contains("G\u{FFFD}del"));
+        assert_eq!(stubs[0].url.as_str(), "https://example.com/talks/godel");
     }
 }

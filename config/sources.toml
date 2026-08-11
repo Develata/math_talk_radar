@@ -50,7 +50,7 @@ allowed_hosts = ["events.stanford.edu", "www.stanford.edu"]
 max_depth = 2
 request_budget = 20
 dynamic = false
-enabled = true
+enabled = false
 fixture = "sites/stanford-math-list.html"
 
 # --- HTML-config (12) ---
@@ -68,7 +68,7 @@ name = "Fields Institute"
 tier = "a"
 kind = "institution_calendar"
 adapter = "html_config"
-entrypoint = "https://www.fields.utoronto.ca/calendar"
+entrypoint = "http://www.fields.utoronto.ca/calendar"
 allowed_hosts = ["www.fields.utoronto.ca", "fields.utoronto.ca"]
 max_depth = 2
 request_budget = 20

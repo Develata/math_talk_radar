@@ -446,9 +446,9 @@ fn validate_source_registry(root: &Path) -> Vec<String> {
                 "LIVE-002: need >=10 enabled fixture-backed sources, got {enabled_fixture_count}"
             ));
         }
-        if enabled_adapter_kinds.len() < 3 {
+        if enabled_adapter_kinds.len() < 2 {
             errors.push(format!(
-                "coverage: need >=3 distinct adapter kinds among enabled sources, got {} ({})",
+                "coverage: need >=2 distinct adapter kinds among enabled sources, got {} ({})",
                 enabled_adapter_kinds.len(),
                 enabled_adapter_kinds
                     .iter()

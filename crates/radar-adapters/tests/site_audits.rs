@@ -8,6 +8,7 @@ use radar_adapters::html_generic::HtmlGenericAdapter;
 use radar_adapters::jsonld::JsonLdAdapter;
 use radar_adapters::rss::RssAdapter;
 use radar_core::config::HtmlSelectors;
+use radar_core::date::DatePrecision;
 use radar_core::{
     AdapterKind, EventStub, FetchedDocument, SourceAdapter, SourceKind, SourceSpec, SourceTier,
 };
@@ -316,6 +317,23 @@ fn site_hcm_html_config_discovers_real_events() {
             .any(|s| s.title.contains("Floer") || s.title.contains("resonances")),
         "hcm: expected Floer or resonances seminar, got {:?}",
         stubs.iter().take(3).map(|s| &s.title).collect::<Vec<_>>()
+    );
+    // hcm list-page dates are year-less ("Nov 21", "Jan 01 - Dec 30") and
+    // require the year-hint path in `parse_date_with_year_hint`. Without it,
+    // 0% of stubs carry a date_hint.
+    let dated = stubs
+        .iter()
+        .filter(|s| {
+            s.date_hint
+                .as_ref()
+                .map(|d| d.precision != DatePrecision::Unknown)
+                .unwrap_or(false)
+        })
+        .count();
+    assert!(
+        dated > 0,
+        "hcm: expected >0 stubs with dated date_hint, got {dated}/{}",
+        stubs.len()
     );
 }
 

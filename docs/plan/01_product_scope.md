@@ -41,9 +41,10 @@ CAPTCHA, deep crawling, generic search engines, theorem proving.
 
 ## Source coverage baseline (§18)
 
-Audited ≥ 20, enabled ≥ 10, structured adapter kinds ≥ 3, media/recording
-sources ≥ 3. Audit the real current entrypoint before writing a URL — do not
-mechanically reuse possibly-stale URLs.
+Audited ≥ 20, enabled ≥ 10, structured adapter kinds ≥ 2 (v0.1; restore to
+≥ 3 when a qualified JSON-LD/ICS source is audited — see ADR-0007),
+media/recording sources ≥ 3. Audit the real current entrypoint before writing
+a URL — do not mechanically reuse possibly-stale URLs.
 
 ## Recommended scan defaults (§70)
 

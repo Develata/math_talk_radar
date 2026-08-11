@@ -137,6 +137,58 @@ fn re_day_month_year_single() -> &'static Regex {
     })
 }
 
+// --- Year-less variants (used by `parse_date_with_year_hint`) ---------------
+//
+// Mirrors the five patterns above but without the year capture. Anchored with
+// `$` so they do not match the prefix of a year-bearing string (e.g. "Aug 3"
+// must not match "August 3, 2026" prematurely).
+
+fn re_same_month_range_no_year() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r"^(\d{1,2})\s*[–-]\s*(\d{1,2})\s+([A-Za-z]+)$")
+            .expect("statically verified regex literal")
+    })
+}
+
+fn re_cross_month_range_no_year() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r"^(\d{1,2})\s+([A-Za-z]+)\s*[–-]\s*(\d{1,2})\s+([A-Za-z]+)$")
+            .expect("statically verified regex literal")
+    })
+}
+
+fn re_us_range_no_year() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r"^([A-Za-z]+)\s+(\d{1,2})\s*[–-]\s*(\d{1,2})$")
+            .expect("statically verified regex literal")
+    })
+}
+
+fn re_us_single_no_year() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r"^([A-Za-z]+)\s+(\d{1,2})$").expect("statically verified regex literal")
+    })
+}
+
+fn re_dmy_single_no_year() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r"^(\d{1,2})\s+([A-Za-z]+)$").expect("statically verified regex literal")
+    })
+}
+
+fn re_us_cross_month_range_no_year() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r"^([A-Za-z]+)\s+(\d{1,2})\s*[–-]\s*([A-Za-z]+)\s+(\d{1,2})$")
+            .expect("statically verified regex literal")
+    })
+}
+
 /// Parse a free-text date string into an [`EventDate`].
 ///
 /// Always returns `Ok`; unparseable text (including year-less dates) produces
@@ -144,6 +196,24 @@ fn re_day_month_year_single() -> &'static Regex {
 /// year inference is performed. `timezone` is always `None` here — timezone
 /// handling is a CLI concern (M4).
 pub fn parse_date(text: &str) -> Result<EventDate, DateError> {
+    parse_date_inner(text, None)
+}
+
+/// Parse a free-text date string with a year hint for year-less patterns.
+///
+/// Same as [`parse_date`], but patterns without an explicit year (e.g. "Aug 3",
+/// "3–7 August", "Nov 21 – Dec 30") use `year_hint` as the year. For cross-month
+/// ranges where the end month precedes the start month (e.g. "Dec 30 – Jan 2"),
+/// the end is inferred to `year_hint + 1`.
+///
+/// The crate remains clock-free: the year is supplied by the caller (typically
+/// derived from `FetchedDocument::fetched_at` in `radar-adapters`), not read
+/// from a system clock inside `radar-core`.
+pub fn parse_date_with_year_hint(text: &str, year_hint: i32) -> Result<EventDate, DateError> {
+    parse_date_inner(text, Some(year_hint))
+}
+
+fn parse_date_inner(text: &str, year_hint: Option<i32>) -> Result<EventDate, DateError> {
     let trimmed = text.trim();
 
     // 1. ISO 8601 single date: "2026-08-08" or "2026-08-08T10:00:00".
@@ -170,6 +240,7 @@ pub fn parse_date(text: &str) -> Result<EventDate, DateError> {
         .or_else(|| try_us_range(trimmed, text))
         .or_else(|| try_us_single(trimmed, text))
         .or_else(|| try_day_month_year_single(trimmed, text))
+        .or_else(|| year_hint.and_then(|y| try_yearless(trimmed, text, y)))
     {
         return Ok(ed);
     }
@@ -269,6 +340,128 @@ fn try_day_month_year_single(trimmed: &str, original: &str) -> Option<EventDate>
     let day: u32 = caps[1].parse().ok()?;
     let month = month_from_name(&caps[2])?;
     let year: i32 = caps[3].parse().ok()?;
+    let d = NaiveDate::from_ymd_opt(year, month, day)?;
+    Some(EventDate {
+        start: Some(DateTimeOrDate::Date(d)),
+        end: None,
+        timezone: None,
+        original_text: original.to_string(),
+        precision: DatePrecision::Day,
+    })
+}
+
+/// Year-less patterns dispatched under a caller-supplied year hint. Cross-month
+/// ranges whose end precedes the start (e.g. "Dec 30 – Jan 2") roll the end
+/// forward into `year + 1`; same-month ranges with `d1 > d2` are rejected
+/// (no plausible year wrap within one month).
+fn try_yearless(trimmed: &str, original: &str, year: i32) -> Option<EventDate> {
+    try_same_month_range_no_year(trimmed, original, year)
+        .or_else(|| try_cross_month_range_no_year(trimmed, original, year))
+        .or_else(|| try_us_cross_month_range_no_year(trimmed, original, year))
+        .or_else(|| try_us_range_no_year(trimmed, original, year))
+        .or_else(|| try_us_single_no_year(trimmed, original, year))
+        .or_else(|| try_dmy_single_no_year(trimmed, original, year))
+}
+
+fn try_same_month_range_no_year(trimmed: &str, original: &str, year: i32) -> Option<EventDate> {
+    let caps = re_same_month_range_no_year().captures(trimmed)?;
+    let d1: u32 = caps[1].parse().ok()?;
+    let d2: u32 = caps[2].parse().ok()?;
+    let month = month_from_name(&caps[3])?;
+    let start = NaiveDate::from_ymd_opt(year, month, d1)?;
+    let end = NaiveDate::from_ymd_opt(year, month, d2)?;
+    if start > end {
+        return None;
+    }
+    Some(EventDate {
+        start: Some(DateTimeOrDate::Date(start)),
+        end: Some(DateTimeOrDate::Date(end)),
+        timezone: None,
+        original_text: original.to_string(),
+        precision: DatePrecision::Range,
+    })
+}
+
+fn try_cross_month_range_no_year(trimmed: &str, original: &str, year: i32) -> Option<EventDate> {
+    let caps = re_cross_month_range_no_year().captures(trimmed)?;
+    let d1: u32 = caps[1].parse().ok()?;
+    let m1 = month_from_name(&caps[2])?;
+    let d2: u32 = caps[3].parse().ok()?;
+    let m2 = month_from_name(&caps[4])?;
+    let start = NaiveDate::from_ymd_opt(year, m1, d1)?;
+    // If end month precedes start month, the range crosses the year boundary.
+    let end_year = if m2 < m1 { year + 1 } else { year };
+    let end = NaiveDate::from_ymd_opt(end_year, m2, d2)?;
+    if start > end {
+        return None;
+    }
+    Some(EventDate {
+        start: Some(DateTimeOrDate::Date(start)),
+        end: Some(DateTimeOrDate::Date(end)),
+        timezone: None,
+        original_text: original.to_string(),
+        precision: DatePrecision::Range,
+    })
+}
+
+fn try_us_cross_month_range_no_year(trimmed: &str, original: &str, year: i32) -> Option<EventDate> {
+    let caps = re_us_cross_month_range_no_year().captures(trimmed)?;
+    let m1 = month_from_name(&caps[1])?;
+    let d1: u32 = caps[2].parse().ok()?;
+    let m2 = month_from_name(&caps[3])?;
+    let d2: u32 = caps[4].parse().ok()?;
+    let start = NaiveDate::from_ymd_opt(year, m1, d1)?;
+    let end_year = if m2 < m1 { year + 1 } else { year };
+    let end = NaiveDate::from_ymd_opt(end_year, m2, d2)?;
+    if start > end {
+        return None;
+    }
+    Some(EventDate {
+        start: Some(DateTimeOrDate::Date(start)),
+        end: Some(DateTimeOrDate::Date(end)),
+        timezone: None,
+        original_text: original.to_string(),
+        precision: DatePrecision::Range,
+    })
+}
+
+fn try_us_range_no_year(trimmed: &str, original: &str, year: i32) -> Option<EventDate> {
+    let caps = re_us_range_no_year().captures(trimmed)?;
+    let month = month_from_name(&caps[1])?;
+    let d1: u32 = caps[2].parse().ok()?;
+    let d2: u32 = caps[3].parse().ok()?;
+    let start = NaiveDate::from_ymd_opt(year, month, d1)?;
+    let end = NaiveDate::from_ymd_opt(year, month, d2)?;
+    if start > end {
+        return None;
+    }
+    Some(EventDate {
+        start: Some(DateTimeOrDate::Date(start)),
+        end: Some(DateTimeOrDate::Date(end)),
+        timezone: None,
+        original_text: original.to_string(),
+        precision: DatePrecision::Range,
+    })
+}
+
+fn try_us_single_no_year(trimmed: &str, original: &str, year: i32) -> Option<EventDate> {
+    let caps = re_us_single_no_year().captures(trimmed)?;
+    let month = month_from_name(&caps[1])?;
+    let day: u32 = caps[2].parse().ok()?;
+    let d = NaiveDate::from_ymd_opt(year, month, day)?;
+    Some(EventDate {
+        start: Some(DateTimeOrDate::Date(d)),
+        end: None,
+        timezone: None,
+        original_text: original.to_string(),
+        precision: DatePrecision::Day,
+    })
+}
+
+fn try_dmy_single_no_year(trimmed: &str, original: &str, year: i32) -> Option<EventDate> {
+    let caps = re_dmy_single_no_year().captures(trimmed)?;
+    let day: u32 = caps[1].parse().ok()?;
+    let month = month_from_name(&caps[2])?;
     let d = NaiveDate::from_ymd_opt(year, month, day)?;
     Some(EventDate {
         start: Some(DateTimeOrDate::Date(d)),
@@ -530,6 +723,92 @@ mod tests {
         let cases = ["", "   ", "2026", "August", "13–14", "garbage!@#"];
         for c in cases {
             assert!(parse_date(c).is_ok(), "parse_date({c:?}) should be Ok");
+        }
+    }
+
+    #[test]
+    fn year_hint_us_single() {
+        let ed = parse_date_with_year_hint("Nov 21", 2024).unwrap();
+        assert_eq!(ed.precision, DatePrecision::Day);
+        assert_eq!(start_date(&ed), d(2024, 11, 21));
+        assert!(ed.end.is_none());
+        assert_eq!(ed.original_text, "Nov 21");
+    }
+
+    #[test]
+    fn year_hint_dmy_single() {
+        let ed = parse_date_with_year_hint("21 November", 2024).unwrap();
+        assert_eq!(ed.precision, DatePrecision::Day);
+        assert_eq!(start_date(&ed), d(2024, 11, 21));
+    }
+
+    #[test]
+    fn year_hint_same_month_range() {
+        let ed = parse_date_with_year_hint("3–7 August", 2026).unwrap();
+        assert_eq!(ed.precision, DatePrecision::Range);
+        assert_eq!(start_date(&ed), d(2026, 8, 3));
+        assert_eq!(end_date(&ed), d(2026, 8, 7));
+    }
+
+    #[test]
+    fn year_hint_us_range() {
+        let ed = parse_date_with_year_hint("August 3–7", 2026).unwrap();
+        assert_eq!(ed.precision, DatePrecision::Range);
+        assert_eq!(start_date(&ed), d(2026, 8, 3));
+        assert_eq!(end_date(&ed), d(2026, 8, 7));
+    }
+
+    #[test]
+    fn year_hint_cross_month_range_rolls_end_year_forward() {
+        // "Nov 21 – Dec 30" — same year, no roll.
+        let ed = parse_date_with_year_hint("Nov 21 – Dec 30", 2024).unwrap();
+        assert_eq!(ed.precision, DatePrecision::Range);
+        assert_eq!(start_date(&ed), d(2024, 11, 21));
+        assert_eq!(end_date(&ed), d(2024, 12, 30));
+
+        // "Dec 30 – Jan 02" — end month precedes start, roll end to year+1.
+        let ed = parse_date_with_year_hint("Dec 30 – Jan 02", 2024).unwrap();
+        assert_eq!(ed.precision, DatePrecision::Range);
+        assert_eq!(start_date(&ed), d(2024, 12, 30));
+        assert_eq!(end_date(&ed), d(2025, 1, 2));
+    }
+
+    #[test]
+    fn year_hint_does_not_override_explicit_year() {
+        let ed = parse_date_with_year_hint("August 3, 2026", 2099).unwrap();
+        assert_eq!(ed.precision, DatePrecision::Day);
+        assert_eq!(start_date(&ed), d(2026, 8, 3));
+    }
+
+    #[test]
+    fn year_hint_iso_ignores_hint() {
+        let ed = parse_date_with_year_hint("2026-08-08", 2099).unwrap();
+        assert_eq!(ed.precision, DatePrecision::Day);
+        assert_eq!(start_date(&ed), d(2026, 8, 8));
+    }
+
+    #[test]
+    fn year_hint_unparseable_stays_unknown() {
+        let ed = parse_date_with_year_hint("not a date", 2024).unwrap();
+        assert_eq!(ed.precision, DatePrecision::Unknown);
+        assert!(ed.start.is_none());
+    }
+
+    #[test]
+    fn year_hint_same_month_reversed_rejected() {
+        // "7–3 August" — d1 > d2 within same month is not a plausible range.
+        let ed = parse_date_with_year_hint("7–3 August", 2026).unwrap();
+        assert_eq!(ed.precision, DatePrecision::Unknown);
+    }
+
+    #[test]
+    fn year_hint_never_errors() {
+        let cases = ["", "   ", "2026", "August", "13–14", "garbage!@#"];
+        for c in cases {
+            assert!(
+                parse_date_with_year_hint(c, 2024).is_ok(),
+                "parse_date_with_year_hint({c:?}) should be Ok"
+            );
         }
     }
 }
