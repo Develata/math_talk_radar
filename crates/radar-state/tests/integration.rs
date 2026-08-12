@@ -9,7 +9,7 @@ use radar_core::{
     Location, MediaId, MediaResource, MediaType, OnlineAvailability, PublicAccess, ScoreComponents,
     SourceEvidence,
 };
-use radar_state::{ChangeKind, Repository, detect_changes};
+use radar_state::{ChangeKind, Repository, StateError, detect_changes};
 use url::Url;
 
 fn t0() -> DateTime<Utc> {
@@ -202,4 +202,256 @@ fn state_004_no_state_no_write() {
         file_size_before, file_size_after,
         "read-only repository must not modify the database file"
     );
+}
+
+fn event_with_title(id: &str, title: &str) -> Event {
+    let mut e = base_event(id, vec![]);
+    e.title = title.into();
+    e
+}
+
+/// store_scan on an empty repository with no current events produces no
+/// changes and stores nothing.
+#[test]
+fn store_scan_empty() {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let db_path = dir.path().join("state.redb");
+    let repo = Repository::open(&db_path).expect("open repo");
+
+    let (stored, changes) = repo.store_scan(&[], t0()).expect("store_scan");
+    assert!(stored.is_empty());
+    assert!(changes.is_empty());
+    assert!(repo.list_events().expect("list").is_empty());
+}
+
+/// store_scan of a new event emits EventAdded and stamps first/last seen.
+#[test]
+fn store_scan_new_event_emits_added() {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let db_path = dir.path().join("state.redb");
+    let repo = Repository::open(&db_path).expect("open repo");
+
+    let now = t0();
+    let event = base_event("e1", vec![]);
+    let (stored, changes) = repo
+        .store_scan(std::slice::from_ref(&event), now)
+        .expect("store_scan");
+
+    assert_eq!(stored.len(), 1);
+    assert_eq!(stored[0].first_seen_at, Some(now));
+    assert_eq!(stored[0].last_seen_at, Some(now));
+
+    assert_eq!(changes.len(), 1);
+    assert_eq!(changes[0].kind, ChangeKind::EventAdded);
+    assert_eq!(changes[0].event_id, event.id);
+}
+
+/// store_scan of an unchanged event emits no change records but updates
+/// last_seen_at; first_seen_at is preserved across scans.
+#[test]
+fn store_scan_unchanged_preserves_first_seen() {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let db_path = dir.path().join("state.redb");
+    let repo = Repository::open(&db_path).expect("open repo");
+
+    let first = t0();
+    let later = t1();
+    let event = base_event("e1", vec![]);
+
+    let (stored1, changes1) = repo
+        .store_scan(std::slice::from_ref(&event), first)
+        .expect("scan 1");
+    assert_eq!(changes1.len(), 1);
+    assert_eq!(stored1[0].first_seen_at, Some(first));
+
+    let (stored2, changes2) = repo
+        .store_scan(std::slice::from_ref(&event), later)
+        .expect("scan 2");
+    assert!(
+        changes2.is_empty(),
+        "unchanged re-scan emits nothing: {changes2:?}"
+    );
+    assert_eq!(
+        stored2[0].first_seen_at,
+        Some(first),
+        "first_seen preserved"
+    );
+    assert_eq!(stored2[0].last_seen_at, Some(later), "last_seen updated");
+}
+
+/// store_scan detects MediaAdded (canonical baseline §23).
+#[test]
+fn store_scan_media_added() {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let db_path = dir.path().join("state.redb");
+    let repo = Repository::open(&db_path).expect("open repo");
+
+    let first = base_event("e1", vec![]);
+    repo.store_scan(std::slice::from_ref(&first), t0())
+        .expect("scan 1");
+
+    let second = base_event("e1", vec![video("https://youtube.com/v/1")]);
+    let (stored, changes) = repo
+        .store_scan(std::slice::from_ref(&second), t1())
+        .expect("scan 2");
+
+    assert_eq!(changes.len(), 1);
+    assert_eq!(changes[0].kind, ChangeKind::MediaAdded);
+    assert_eq!(stored[0].first_seen_at, Some(t0()), "first_seen preserved");
+    assert_eq!(stored[0].last_seen_at, Some(t1()));
+}
+
+/// store_scan detects EventCancelled when an event disappears.
+#[test]
+fn store_scan_event_cancelled() {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let db_path = dir.path().join("state.redb");
+    let repo = Repository::open(&db_path).expect("open repo");
+
+    let event = base_event("e1", vec![]);
+    repo.store_scan(std::slice::from_ref(&event), t0())
+        .expect("scan 1");
+
+    let (stored, changes) = repo.store_scan(&[], t1()).expect("scan 2");
+    assert!(stored.is_empty());
+    assert_eq!(changes.len(), 1);
+    assert_eq!(changes[0].kind, ChangeKind::EventCancelled);
+}
+
+/// store_scan detects EventUpdated on a title change.
+#[test]
+fn store_scan_event_updated() {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let db_path = dir.path().join("state.redb");
+    let repo = Repository::open(&db_path).expect("open repo");
+
+    let first = event_with_title("e1", "Old Title");
+    repo.store_scan(std::slice::from_ref(&first), t0())
+        .expect("scan 1");
+
+    let second = event_with_title("e1", "New Title");
+    let (_stored, changes) = repo
+        .store_scan(std::slice::from_ref(&second), t1())
+        .expect("scan 2");
+
+    assert_eq!(changes.len(), 1);
+    assert_eq!(changes[0].kind, ChangeKind::EventUpdated);
+}
+
+/// store_scan on a read-only repository is rejected with StateError::ReadOnly.
+#[test]
+fn store_scan_read_only_rejected() {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let db_path = dir.path().join("state.redb");
+
+    let event = base_event("e1", vec![]);
+    {
+        let repo = Repository::open(&db_path).expect("open repo");
+        repo.store_scan(std::slice::from_ref(&event), t0())
+            .expect("seed");
+    }
+
+    let ro = Repository::open_read_only(&db_path).expect("open read-only");
+    let err = ro
+        .store_scan(std::slice::from_ref(&event), t1())
+        .unwrap_err();
+    assert!(matches!(err, StateError::ReadOnly), "got {err:?}");
+}
+
+/// store_scan persists events that survive a close and reopen.
+#[test]
+fn store_scan_persists_across_reopen() {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let db_path = dir.path().join("state.redb");
+    let now = t0();
+
+    {
+        let repo = Repository::open(&db_path).expect("open repo");
+        let event = base_event("e1", vec![]);
+        let (stored, changes) = repo
+            .store_scan(std::slice::from_ref(&event), now)
+            .expect("scan");
+        assert_eq!(stored[0].first_seen_at, Some(now));
+        assert_eq!(changes.len(), 1);
+    }
+
+    let repo = Repository::open(&db_path).expect("reopen repo");
+    let retrieved = repo
+        .get_event(&EventId("e1".into()))
+        .expect("get")
+        .expect("present");
+    assert_eq!(retrieved.first_seen_at, Some(now));
+    assert_eq!(retrieved.last_seen_at, Some(now));
+}
+
+/// store_scan handles multiple events with mixed changes in one call.
+#[test]
+fn store_scan_multiple_events_mixed() {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let db_path = dir.path().join("state.redb");
+    let repo = Repository::open(&db_path).expect("open repo");
+
+    let e1 = base_event("e1", vec![]);
+    let e2 = base_event("e2", vec![]);
+    repo.store_scan(&[e1.clone(), e2.clone()], t0())
+        .expect("scan 1");
+
+    // e1 unchanged, e2 gets media, e3 is new.
+    let e2_new = base_event("e2", vec![video("https://youtube.com/v/9")]);
+    let e3 = base_event("e3", vec![]);
+    let (stored, changes) = repo.store_scan(&[e1, e2_new, e3], t1()).expect("scan 2");
+
+    assert_eq!(stored.len(), 3);
+    let kinds: Vec<_> = changes.iter().map(|c| c.kind).collect();
+    assert!(
+        kinds.contains(&ChangeKind::MediaAdded),
+        "e2 media added: {changes:?}"
+    );
+    assert!(
+        kinds.contains(&ChangeKind::EventAdded),
+        "e3 added: {changes:?}"
+    );
+    // e1 unchanged → no record for e1.
+    assert!(
+        !kinds.contains(&ChangeKind::EventUpdated),
+        "no spurious event_updated: {changes:?}"
+    );
+    // first_seen preserved for e1 and e2.
+    let e1_stored = stored.iter().find(|e| e.id.0 == "e1").expect("e1 stored");
+    assert_eq!(e1_stored.first_seen_at, Some(t0()));
+    let e2_stored = stored.iter().find(|e| e.id.0 == "e2").expect("e2 stored");
+    assert_eq!(e2_stored.first_seen_at, Some(t0()));
+    let e3_stored = stored.iter().find(|e| e.id.0 == "e3").expect("e3 stored");
+    assert_eq!(e3_stored.first_seen_at, Some(t1()));
+}
+
+/// store_scan is equivalent to the manual list → detect_changes → store_event
+/// pattern but in one atomic transaction (STATE-002 regression).
+#[test]
+fn store_scan_matches_manual_pattern() {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let db_path = dir.path().join("state.redb");
+    let repo = Repository::open(&db_path).expect("open repo");
+
+    let first = base_event("e1", vec![]);
+    repo.store_scan(std::slice::from_ref(&first), t0())
+        .expect("scan 1");
+
+    // Manual pattern.
+    let prev = repo.list_events().expect("list");
+    let second = base_event("e1", vec![video("https://youtube.com/v/2")]);
+    let manual_changes = detect_changes(&prev, std::slice::from_ref(&second), t1());
+
+    // store_scan on a fresh repo with the same prev state.
+    let dir2 = tempfile::TempDir::new().expect("temp dir 2");
+    let db_path2 = dir2.path().join("state.redb");
+    let repo2 = Repository::open(&db_path2).expect("open repo 2");
+    repo2
+        .store_scan(std::slice::from_ref(&first), t0())
+        .expect("seed repo 2");
+    let (_, scan_changes) = repo2
+        .store_scan(std::slice::from_ref(&second), t1())
+        .expect("scan 2");
+
+    assert_eq!(manual_changes, scan_changes);
 }
