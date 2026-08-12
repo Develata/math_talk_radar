@@ -222,28 +222,45 @@ pub async fn run(force_unmanaged: bool) -> Result<String, CliError> {
     }
     fsync_parent_dir(&current_binary)?;
 
-    // Self-test the replaced binary; restore rollback on failure.
+    // Self-test the replaced binary; restore rollback on failure. The error
+    // message must tell the user whether rollback succeeded and where the
+    // rollback copy lives, so a double failure still leaves a recovery path.
     if let Err(e) = self_test(&current_binary) {
-        let _ = std::fs::rename(&rollback_path, &current_binary);
-        return Err(e);
+        let msg = match std::fs::rename(&rollback_path, &current_binary) {
+            Ok(()) => format!(
+                "{}; rollback restored to {}",
+                e.message,
+                current_binary.display()
+            ),
+            Err(re) => format!(
+                "{}; rollback restore FAILED: {re}; \
+                 recover manually from {} if still present",
+                e.message,
+                rollback_path.display()
+            ),
+        };
+        return Err(CliError::update(msg));
     }
 
     let _ = std::fs::remove_file(&rollback_path);
 
-    // Update manifest.
+    // Update manifest. The binary is already replaced and self-tested, so a
+    // manifest write failure is NOT fatal — surface it as a warning in the
+    // success message rather than turning a successful update into an error.
     let data_dir = paths::data_dir();
     let manifest = crate::lifecycle::manifest::InstallManifest::new(
         current_binary,
         "self-update",
         latest.to_string(),
     );
-    manifest
-        .save(&data_dir)
-        .map_err(|e| CliError::update(format!("manifest save failed: {e}")))?;
+    let manifest_note = match manifest.save(&data_dir) {
+        Ok(()) => String::new(),
+        Err(e) => format!(" (warning: manifest save failed: {e})"),
+    };
 
     Ok(format!(
-        "updated: {} -> {}",
-        CURRENT_VERSION, release.tag_name
+        "updated: {} -> {}{}",
+        CURRENT_VERSION, release.tag_name, manifest_note
     ))
 }
 

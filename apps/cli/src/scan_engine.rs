@@ -59,11 +59,12 @@ pub async fn run_scan(args: ScanArgs) -> Result<ScanOutput, CliError> {
         event.rank_reasons = reasons;
     }
 
-    let today = args
-        .today
-        .as_deref()
-        .and_then(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok())
-        .unwrap_or_else(|| Utc::now().date_naive());
+    let today = match args.today.as_deref() {
+        Some(s) => NaiveDate::parse_from_str(s, "%Y-%m-%d").map_err(|e| {
+            CliError::config(format!("invalid --today {s:?}: {e}; expected YYYY-MM-DD"))
+        })?,
+        None => Utc::now().date_naive(),
+    };
     events.retain(|e| matches_mode_and_window(e, args.mode, today, args.before, args.after));
 
     if let Some(max) = args.max_events {

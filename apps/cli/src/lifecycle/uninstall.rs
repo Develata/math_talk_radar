@@ -27,9 +27,16 @@ pub async fn run(args: UninstallArgs) -> Result<String, CliError> {
     let binary = paths::binary_path(&data_dir)
         .ok_or_else(|| CliError::uninstall("cannot resolve binary path"))?;
 
-    // Unmanaged binary protection (§36): no manifest + path under target/
-    let has_manifest = manifest::load(&data_dir).is_some();
-    if !has_manifest && paths::is_unmanaged_binary(&binary) && !args.force_unmanaged {
+    // §36: protect dev binaries. A stale manifest (recorded path gone) makes
+    // binary_path() fall back to current_exe(), which may be a target/ dev
+    // binary — so the guard keys on whether the manifest actually manages the
+    // resolved path, not on whether a manifest file merely exists.
+    let manifest = manifest::load(&data_dir);
+    let managed_by_manifest = manifest
+        .as_ref()
+        .map(|m| m.binary_path == binary)
+        .unwrap_or(false);
+    if !managed_by_manifest && paths::is_unmanaged_binary(&binary) && !args.force_unmanaged {
         return Err(CliError::uninstall(format!(
             "refusing to delete unmanaged binary: {} (use --force-unmanaged to override)",
             binary.display()

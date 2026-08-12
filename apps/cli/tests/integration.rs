@@ -187,3 +187,23 @@ async fn http_004_partial_failure_exit_0() {
         "failing source must report non-ok status, got: {health:?}"
     );
 }
+
+// T2-5: invalid --today format → exit 3 (config error), not silent fallback.
+#[tokio::test]
+async fn t2_5_invalid_today_exits_3() {
+    let server = MockServer::start().await;
+    mount_rss_feed(&server).await;
+    let config = write_sources_config(&[(true, "ok", &format!("{}/feed.xml", server.uri()))]);
+    bin()
+        .args([
+            "scan",
+            "--no-state",
+            "--sources",
+            config.path().to_str().unwrap(),
+            "--today",
+            "not-a-date",
+        ])
+        .assert()
+        .failure()
+        .code(3);
+}

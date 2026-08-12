@@ -326,3 +326,22 @@ fn uns_004_unmanaged_binary_protected() {
         .failure()
         .code(11);
 }
+
+// UNS-005: stale manifest (recorded path gone) must not bypass dev-binary
+// protection. binary_path() falls back to current_exe() (under target/), and
+// the manifest no longer backs it — refuse without --force-unmanaged.
+#[test]
+fn uns_005_stale_manifest_protects_dev_binary() {
+    let sandbox = Sandbox::new();
+    let gone_binary = sandbox.root.join("bin").join("math_talk_radar");
+    sandbox.write_manifest(&gone_binary);
+    std::fs::create_dir_all(sandbox.config_dir()).expect("create config dir");
+    std::fs::create_dir_all(sandbox.cache_dir()).expect("create cache dir");
+
+    let mut cmd = bin();
+    sandbox.set_env(&mut cmd);
+    cmd.args(["uninstall", "--keep-data", "--yes"])
+        .assert()
+        .failure()
+        .code(11);
+}
