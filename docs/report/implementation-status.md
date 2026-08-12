@@ -2,7 +2,7 @@
 
 > Evidence only — non-authoritative (§0.2). Updated per milestone.
 
-## Current milestone: M1 — Core Domain
+## Current milestone: M8 — Final Acceptance (pre-release audit complete)
 
 - [x] Date parser: `parse_date` (ISO, same-month range, cross-month range, US
       format, DMY single) + `interval_overlap`. 11 unit tests (DATE-001..005).
@@ -316,7 +316,29 @@ now pass; M8 is the final review + tag gate.
       musl build, static-linkage verify, size ≤30 MiB gate, SHA-256 checksum,
       build-provenance attestation, GitHub Release creation.
 
+## Pre-Release Code Audit (2026-08-12)
+
+A module-by-module review of the v0.1.0 codebase, prioritizing long-term
+maintainability. 29 findings (T1 HIGH / T2 MEDIUM / T3 LOW): 26 fixed across 10
+atomic commits, 3 dismissed. All fixes pushed to `origin/main`. Post-audit gate:
+285 tests pass, clippy clean, baseline ok (perf 6.3 MiB ≤ 128 MiB), cargo-deny
+ok. Full findings ledger: `docs/report/pre-release-audit.md`.
+
+Commits (oldest first):
+- `0ee76c2` fix(core): T1-1/T1-2/T2-1/T2-3/T2-8
+- `c133c94` fix(adapters): T1-3/T1-6
+- `ffc41b0` fix(fetch): T1-4/T2-2
+- `bec33af` fix(state): T2-4
+- `7277892` fix(cli): T1-5/T2-5/T2-6/T2-7
+- `1279af7` fix(core): T3-1/T3-3/T3-5/T3-6/T3-11
+- `e3cfc7b` fix(adapters): T3-9/T3-10/T3-11/T3-12
+- `9fd5cc4` fix(fetch): T3-7/T3-8
+- `6ed0dcb` fix(state): T3-13
+- `dcbbf99` fix(cli): T3-14
+
 ## Project status
 
-All 8 milestones (M0–M8) complete. 65/65 acceptance cases pass. The codebase
-is ready for `v0.1.0` release pending Deve's explicit authorization to tag.
+All 8 milestones (M0–M8) complete. 65/65 acceptance cases pass. Pre-release
+audit complete (26 fixes, 2026-08-12). Post-audit gate: 285 tests, clippy clean,
+baseline ok (perf 6.3 MiB), cargo-deny ok. The codebase is ready for `v0.1.0`
+release pending Deve's explicit authorization to tag.
