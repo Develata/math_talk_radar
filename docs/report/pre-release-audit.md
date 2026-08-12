@@ -69,3 +69,76 @@ dismissed (T3-2, T3-4, T3-15 — not dead code / not actionable / duplicate).
 
 All audit commits are on `origin/main` (pushed 2026-08-12). The codebase is
 ready for `v0.1.0` tag pending Deve's explicit authorization (AGENTS.md §12).
+
+## Second-round audit (2026-08-13)
+
+A second module-by-module review by 5 oracle agents (one per crate + one
+cross-cutting) produced 40 additional findings: 4 HIGH, 18 MEDIUM, 16 LOW +
+2 edge. Deve authorized fixing all 40 before `v0.1.0`. Fixes committed in 3
+batches across 9 atomic commits (`d5bdb2b`..`00f1d45`).
+
+### Batch 1 — HIGH (4 findings, all fixed)
+
+| ID | Crate | Fix | Commit |
+|---|---|---|---|
+| CORE-1 | core+cli | score before dedup so merge picks the richer record | `d5bdb2b` |
+| CLI-1 | cli | sort by score (desc) + id tie-break before --max-events truncate | `d5bdb2b` |
+| CLI-2 | core+cli | wire --interests into score_event; remove 4 dead flags | `d5bdb2b` |
+| ADAP-1 | adapters | defer link_text collection in detect_media (lazy PDF branch) | `d5bdb2b` |
+
+### Batch 2 — MEDIUM (18 findings, all fixed)
+
+| ID | Crate | Fix | Commit |
+|---|---|---|---|
+| CORE-2 | core | precompute DedupKeys once per event (no O(n²) re-normalization) | `a937c99` |
+| CORE-3 | core | word_boundaries computed only for BodyText context | `a937c99` |
+| CORE-4 | core | unify two URL canonicalizers into one pub fn in normalize | `a937c99` |
+| CLI-6 | core | move matches_mode_and_window + ScanMode into radar_core::filter | `a937c99` |
+| ADAP-2 | adapters | classify_access single-pass lowercase+collapse buffer | `8c2455e` |
+| ADAP-3 | adapters | first_text prefers direct_text over all-descendant text | `8c2455e` |
+| ADAP-4 | adapters | jsonld plan_enrichment empty Vec for url-less events | `8c2455e` |
+| ADAP-5 | adapters | drop dead base_url param from extract_html_fields | `8c2455e` |
+| FS-1 | fetch | RFC 9309 wildcard (*) and end-anchor ($) matching | `1415ee4` |
+| FS-2 | fetch | per-host semaphore on actual request URL, not entrypoint | `1415ee4` |
+| FS-3 | fetch | panicked source tasks get synthetic ParseError in source_health | `1415ee4` |
+| FS-4 | fetch | exponential backoff when Retry-After header absent | `1415ee4` |
+| ST-1 | state+cli | store_scan atomic compare-and-store primitive + wire into scan | `bfd460c` `7bfb725` |
+| ST-2 | state | first_seen_at from already-deserialized prev events (no re-deser) | `bfd460c` |
+| CLI-4 | cli | real JSONL output (one object per line) | `7bfb725` |
+| CLI-5 | cli | render takes ScanOutput by value (no full-output clone) | `7bfb725` |
+
+### Batch 3 — LOW (18 findings: 16 fixed, 2 documented as deferred)
+
+| ID | Crate | Fix | Commit |
+|---|---|---|---|
+| CORE-5 | core | NormalizedTopic + match_topics_normalized (pre-normalize once) | `b3e5cc7` |
+| CORE-6 | core | PersonHit.evidence = None (was duplicate of matched_text) | `b3e5cc7` |
+| CORE-7 | core | role-specific rank_reason (important_speaker/organizer/panelist) | `b3e5cc7` |
+| CORE-8 | core | is_important_scholar exact match (no substring false-positives) | `b3e5cc7` |
+| CORE-9 | core | space-separated ISO date range parsed as Range | `b3e5cc7` |
+| CORE-10 | core | remove generic ref/source/ver from tracking-param denylist | `b3e5cc7` |
+| ADAP-6 | adapters | thread_local runtime selector cache for html_config | `1e9b12c` |
+| ADAP-7 | adapters | html_generic uses doc_body helper (not from_utf8_lossy) | `1e9b12c` |
+| ADAP-8 | adapters | contains_event_keyword uses contains_phrase (word boundaries) | `1e9b12c` |
+| FS-5 | fetch | oversized robots.txt → disallow_all (conservative) | `1e9b12c` |
+| FS-6 | fetch | pub(crate) on budget/fetch_policy/retry/robots modules | `1e9b12c` |
+| A-1 | adapters | pub(crate) on sites module | `1e9b12c` |
+| CLI-7 | cli | lazy tokio runtime (not on --help/--version path) | `00f1d45` |
+| CLI-8 | cli | --jobs 0 rejected with exit 2 (not silent fallback) | `00f1d45` |
+| CLI-9 | cli | self-update streams to file + incremental hash (bounded memory) | `00f1d45` |
+| ST-3 | state | documented: peak memory ≈ 2× corpus, iterator-based deferred | `00f1d45` |
+| ST-4 | state | documented: full Event persisted, fingerprint projection deferred | `00f1d45` |
+
+### Post-second-round gate (2026-08-13)
+
+| Check | Result |
+|---|---|
+| `cargo fmt --check` | clean |
+| `cargo clippy --workspace --all-targets --all-features -- -D warnings` | clean |
+| `cargo test --workspace` | 309 passed, 0 failed |
+| `cargo xtask check` | ok |
+| `cargo xtask check-matrix` | ok |
+| `cargo xtask baseline` | ok (functional + quality + perf 6.6 MiB) |
+
+Both audit rounds (26 + 40 = 66 findings total) are resolved. The codebase
+is ready for `v0.1.0` tag pending Deve's explicit authorization (AGENTS.md §12).
