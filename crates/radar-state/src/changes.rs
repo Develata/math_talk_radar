@@ -7,7 +7,7 @@
 use std::collections::{HashMap, HashSet};
 
 use chrono::{DateTime, Utc};
-use radar_core::{Event, EventId};
+use radar_core::{Event, EventDate, EventId};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -168,9 +168,18 @@ pub fn detect_changes(
 
 fn is_event_updated(prev: &Event, curr: &Event) -> bool {
     prev.title != curr.title
-        || prev.date != curr.date
+        || !dates_semantically_equal(&prev.date, &curr.date)
         || prev.location != curr.location
         || prev.description != curr.description
+}
+
+/// Compare only the semantically meaningful fields of [`EventDate`].
+/// `original_text` and `precision` are parser artifacts: the same date can be
+/// rendered as "Aug 12" or "August 12th" across scans, flipping those fields
+/// without changing the event. Comparing them would produce spurious
+/// `event_updated` records (§47 false-positive risk).
+fn dates_semantically_equal(a: &EventDate, b: &EventDate) -> bool {
+    a.start == b.start && a.end == b.end && a.timezone == b.timezone
 }
 
 fn new_talk_ids(prev: &Event, curr: &Event) -> Vec<String> {
@@ -471,5 +480,73 @@ mod tests {
         let kinds: Vec<_> = records.iter().map(|r| r.kind).collect();
         assert!(kinds.contains(&ChangeKind::EventUpdated));
         assert!(kinds.contains(&ChangeKind::MediaAdded));
+    }
+
+    // T2-4: same start/end/timezone but different `original_text`/`precision`
+    // are parser artifacts, not a semantic change — must not emit
+    // `event_updated` (§47 false-positive risk).
+    #[test]
+    fn date_artifact_change_emits_no_event_updated() {
+        let mut prev = event("e1", vec![]);
+        prev.date = EventDate {
+            start: Some(radar_core::DateTimeOrDate::Date(
+                NaiveDate::from_ymd_opt(2026, 9, 1).unwrap(),
+            )),
+            end: None,
+            timezone: None,
+            original_text: "Sep 1".into(),
+            precision: radar_core::DatePrecision::Day,
+        };
+        let mut curr = event("e1", vec![]);
+        curr.date = EventDate {
+            start: Some(radar_core::DateTimeOrDate::Date(
+                NaiveDate::from_ymd_opt(2026, 9, 1).unwrap(),
+            )),
+            end: None,
+            timezone: None,
+            original_text: "September 1st, 2026".into(),
+            precision: radar_core::DatePrecision::Range,
+        };
+        let records = detect_changes(
+            std::slice::from_ref(&prev),
+            std::slice::from_ref(&curr),
+            now(),
+        );
+        assert!(
+            records.is_empty(),
+            "date artifact change (original_text/precision) must not emit event_updated: {records:?}"
+        );
+    }
+
+    // T2-4 negative: an actual start-date change MUST still emit event_updated.
+    #[test]
+    fn date_start_change_emits_event_updated() {
+        let mut prev = event("e1", vec![]);
+        prev.date = EventDate {
+            start: Some(radar_core::DateTimeOrDate::Date(
+                NaiveDate::from_ymd_opt(2026, 9, 1).unwrap(),
+            )),
+            end: None,
+            timezone: None,
+            original_text: "Sep 1".into(),
+            precision: radar_core::DatePrecision::Day,
+        };
+        let mut curr = event("e1", vec![]);
+        curr.date = EventDate {
+            start: Some(radar_core::DateTimeOrDate::Date(
+                NaiveDate::from_ymd_opt(2026, 9, 2).unwrap(),
+            )),
+            end: None,
+            timezone: None,
+            original_text: "Sep 1".into(),
+            precision: radar_core::DatePrecision::Day,
+        };
+        let records = detect_changes(
+            std::slice::from_ref(&prev),
+            std::slice::from_ref(&curr),
+            now(),
+        );
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].kind, ChangeKind::EventUpdated);
     }
 }
