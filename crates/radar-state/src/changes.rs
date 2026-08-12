@@ -198,13 +198,17 @@ fn new_speakers(prev: &Event, curr: &Event) -> Vec<String> {
         .filter(|p| p.role == radar_core::PersonRole::Speaker)
         .map(|p| p.canonical_name.clone())
         .collect();
-    let mut added: Vec<String> = curr
+    let mut added: Vec<String> = Vec::new();
+    let mut added_set: HashSet<String> = HashSet::new();
+    for p in curr
         .people
         .iter()
         .filter(|p| p.role == radar_core::PersonRole::Speaker)
-        .filter(|p| !prev_names.contains(&p.canonical_name))
-        .map(|p| p.canonical_name.clone())
-        .collect();
+    {
+        if !prev_names.contains(&p.canonical_name) && added_set.insert(p.canonical_name.clone()) {
+            added.push(p.canonical_name.clone());
+        }
+    }
     let prev_talk_speakers: HashSet<String> = prev
         .talks
         .iter()
@@ -213,7 +217,8 @@ fn new_speakers(prev: &Event, curr: &Event) -> Vec<String> {
         .collect();
     for t in &curr.talks {
         for s in &t.speaker {
-            if !prev_talk_speakers.contains(&s.canonical_name) && !added.contains(&s.canonical_name)
+            if !prev_talk_speakers.contains(&s.canonical_name)
+                && added_set.insert(s.canonical_name.clone())
             {
                 added.push(s.canonical_name.clone());
             }
