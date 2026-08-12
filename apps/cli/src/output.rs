@@ -51,16 +51,25 @@ fn truncate_for_detail(output: &mut ScanOutput, detail: crate::cli::DetailLevel)
     };
     for event in &mut output.events {
         if let Some(d) = &event.description
-            && d.chars().count() > limit
+            && let Some(t) = truncate_if_longer(d, limit)
         {
-            event.description = Some(d.chars().take(limit).collect());
+            event.description = Some(t);
         }
         for talk in &mut event.talks {
             if let Some(a) = &talk.abstract_text
-                && a.chars().count() > limit
+                && let Some(t) = truncate_if_longer(a, limit)
             {
-                talk.abstract_text = Some(a.chars().take(limit).collect());
+                talk.abstract_text = Some(t);
             }
         }
     }
+}
+
+fn truncate_if_longer(s: &str, limit: usize) -> Option<String> {
+    if s.len() <= limit {
+        return None;
+    }
+    s.char_indices()
+        .nth(limit)
+        .map(|(idx, _)| s[..idx].to_string())
 }
