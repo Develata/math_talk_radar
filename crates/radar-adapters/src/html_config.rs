@@ -225,7 +225,7 @@ fn parse_selector(
     field: &str,
     selector_str: &str,
 ) -> Result<Selector, AdapterError> {
-    Selector::parse(selector_str).map_err(|e| AdapterError::Parse {
+    crate::helpers::cached_selector_runtime(selector_str).map_err(|e| AdapterError::Parse {
         source_id: source_id.to_string(),
         message: format!("invalid {field} selector {selector_str:?}: {e}"),
     })

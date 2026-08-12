@@ -12,7 +12,8 @@ pub mod ics;
 pub mod indico;
 pub mod jsonld;
 pub mod rss;
-pub mod sites;
+
+pub(crate) mod sites;
 
 use radar_core::AdapterKind;
 use radar_core::SourceAdapter;

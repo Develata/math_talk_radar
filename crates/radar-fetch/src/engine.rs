@@ -35,7 +35,8 @@ fn remaining_time(deadline: Option<Instant>, default: std::time::Duration) -> st
 
 /// Fetch robots.txt following same-host redirects safely. Per RFC 9309
 /// §2.3.1: 4xx → allow-all, 5xx → disallow-all, cross-host/unsafe-scheme
-/// redirect → disallow-all. Body is capped at `max_response_body`.
+/// redirect → disallow-all. Body exceeding `max_response_body` → disallow-all
+/// (conservative: an oversized policy could hide disallow rules).
 async fn fetch_robots_txt(
     client: &FetchClient,
     start_url: Url,
@@ -84,7 +85,10 @@ async fn fetch_robots_txt(
                 buf.extend_from_slice(&chunk);
             }
             if capped {
-                return Ok(RobotsRules::default());
+                // Conservative: an oversized robots.txt could be hiding
+                // disallow rules. Disallow all rather than risk crawling
+                // without having seen the full policy (§47 philosophy).
+                return Ok(RobotsRules::disallow_all());
             }
             let body = String::from_utf8_lossy(&buf);
             return Ok(crate::robots::parse_robots(&body));

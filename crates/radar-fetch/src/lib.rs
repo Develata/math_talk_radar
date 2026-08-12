@@ -5,14 +5,15 @@
 //! establishes the policy shape, retry decision logic, and client builder.
 #![forbid(unsafe_code)]
 
-pub mod budget;
 pub mod client;
 pub mod engine;
 pub mod error;
-pub mod fetch_policy;
 pub mod policy;
-pub mod retry;
-pub mod robots;
+
+pub(crate) mod budget;
+pub(crate) mod fetch_policy;
+pub(crate) mod retry;
+pub(crate) mod robots;
 
 pub use budget::RequestBudget;
 pub use client::{FetchBuildError, FetchClient};

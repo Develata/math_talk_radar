@@ -13,7 +13,7 @@ use radar_core::date::parse_date;
 use radar_core::{
     AccessInfo, AdapterError, Event, EventCandidate, EventDate, EventStatus, EventStub, FetchPlan,
     FetchedDocument, Location, OnlineAvailability, PublicAccess, ScoreComponents, SourceAdapter,
-    SourceEvidence, SourceSpec, event_id,
+    SourceEvidence, SourceSpec, contains_phrase, event_id,
 };
 
 use crate::helpers;
@@ -135,10 +135,14 @@ fn contains_date_like(text: &str) -> bool {
     contains_year(text)
 }
 
-/// True if `text` contains an event-type keyword (case-insensitive substring).
+/// True if `text` contains an event-type keyword. Uses word-boundary matching
+/// via [`radar_core::contains_phrase`] so that single-word keywords like
+/// "school" or "meeting" do not match inside longer words (e.g. "highschool",
+/// "submeeting"). Multi-word phrases (e.g. "summer school") fall back to plain
+/// substring matching since whitespace already provides a boundary.
 fn contains_event_keyword(text: &str) -> bool {
     let lower = text.to_ascii_lowercase();
-    EVENT_KEYWORDS.iter().any(|k| lower.contains(k))
+    EVENT_KEYWORDS.iter().any(|k| contains_phrase(&lower, k))
 }
 
 // ===========================================================================
@@ -187,7 +191,7 @@ impl SourceAdapter for HtmlGenericAdapter {
         document: &FetchedDocument,
         source: &SourceSpec,
     ) -> Result<Vec<EventStub>, AdapterError> {
-        let body = String::from_utf8_lossy(&document.body);
+        let body = crate::helpers::doc_body(&document.body);
         if body.is_empty() {
             return Ok(Vec::new());
         }

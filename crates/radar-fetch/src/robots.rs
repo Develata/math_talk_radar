@@ -305,4 +305,15 @@ mod robots_tests {
             "Disallow wildcard still matches non-allow-listed subpaths"
         );
     }
+
+    // FS-5: an oversized robots.txt (body exceeding max_response_body) must
+    // yield disallow-all, not allow-all. The conservative rule set blocks every
+    // path so we never crawl without having seen the full policy.
+    #[test]
+    fn disallow_all_blocks_every_path() {
+        let rules = RobotsRules::disallow_all();
+        assert!(!rules.is_allowed(&Url::parse("https://example.com/").unwrap()));
+        assert!(!rules.is_allowed(&Url::parse("https://example.com/any/path").unwrap()));
+        assert!(!rules.is_allowed(&Url::parse("https://example.com/robots.txt").unwrap()));
+    }
 }

@@ -3,6 +3,7 @@
 
 pub use scraper::Html;
 use scraper::Selector;
+use std::cell::RefCell;
 use std::sync::OnceLock;
 use url::Url;
 
@@ -28,6 +29,29 @@ pub(crate) fn cached_selector(selector_str: &'static str) -> Option<&'static Sel
         m
     });
     map.get(selector_str)
+}
+
+thread_local! {
+    static RUNTIME_SELECTOR_CACHE: RefCell<std::collections::HashMap<String, Selector>> =
+        RefCell::new(std::collections::HashMap::new());
+}
+
+/// Parse `selector_str` with a per-thread cache (stored in
+/// `RUNTIME_SELECTOR_CACHE`). On a cache hit, returns a clone of the previously
+/// parsed [`Selector`]; on a miss, parses, caches, and returns the selector.
+/// Avoids repeated CSS parsing on every `enrich` call (HCM: ~1000 events ×
+/// 2–5 selectors per source).
+pub(crate) fn cached_selector_runtime(selector_str: &str) -> Result<Selector, String> {
+    RUNTIME_SELECTOR_CACHE.with(|cache| {
+        if let Some(sel) = cache.borrow().get(selector_str).cloned() {
+            return Ok(sel);
+        }
+        let sel = Selector::parse(selector_str).map_err(|e| e.to_string())?;
+        cache
+            .borrow_mut()
+            .insert(selector_str.to_string(), sel.clone());
+        Ok(sel)
+    })
 }
 
 use radar_core::{
