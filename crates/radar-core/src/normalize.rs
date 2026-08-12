@@ -25,7 +25,9 @@ pub fn normalize_text(input: &str) -> String {
             prev_space = false;
         }
     }
-    out.trim_end().to_string()
+    let trim_len = out.trim_end().len();
+    out.truncate(trim_len);
+    out
 }
 
 /// NFC-normalize `text`, then apply [`normalize_text`] (lowercase + whitespace

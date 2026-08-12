@@ -3,7 +3,7 @@
 //! Role protection (§P-2, §6.2): a name in body text can yield at most
 //! `TitleMention` / `Unknown`. Structured person fields or strong
 //! name-in-context evidence are required for `Speaker` / `Organizer` / etc.
-use crate::normalize::{normalize_name, word_boundaries};
+use crate::normalize::{contains_phrase, normalize_name, word_boundaries};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -64,45 +64,6 @@ pub enum MatchContext {
 /// requires ≥2 tokens of the canonical name to also appear in the text.
 const AMBIGUOUS_SURNAMES: &[&str] = &["li", "wang", "tao", "yau", "gross", "wei", "wu"];
 
-/// Whether `candidate` (a single normalized token, no internal whitespace)
-/// appears in `norm_text` as a substring bounded by non-alphanumeric characters
-/// or string boundaries.
-///
-/// This generalizes the §6.2 word-boundary match: for Latin scripts it behaves
-/// like `text_words.contains(candidate)` — "zagier" does not match inside
-/// "mozagier" because the preceding "o" is alphanumeric — and for CJK compounds
-/// that `unicode_words` splits per-character (e.g. "陶哲轩" → ["陶","哲","轩"]),
-/// it still matches the full compound when surrounded by punctuation or string
-/// boundaries (see PER-002).
-fn boundary_substring_match(norm_text: &str, candidate: &str) -> bool {
-    if candidate.is_empty() {
-        return false;
-    }
-    let mut search_from = 0;
-    while let Some(rel) = norm_text[search_from..].find(candidate) {
-        let start = search_from + rel;
-        let end = start + candidate.len();
-        let before_ok = start == 0
-            || norm_text[..start]
-                .chars()
-                .next_back()
-                .is_none_or(|c| !c.is_alphanumeric());
-        let after_ok = end >= norm_text.len()
-            || norm_text[end..]
-                .chars()
-                .next()
-                .is_none_or(|c| !c.is_alphanumeric());
-        if before_ok && after_ok {
-            return true;
-        }
-        search_from = end;
-        if search_from >= norm_text.len() {
-            break;
-        }
-    }
-    false
-}
-
 /// Match `scholars` against `text` under the given [`MatchContext`] (§6.2).
 ///
 /// Pipeline: normalize text → for each scholar, normalize canonical name and
@@ -139,12 +100,9 @@ pub fn match_scholars(
                 continue;
             }
             let is_match = if normalized.contains(char::is_whitespace) {
-                // Multi-word phrase: substring match (distinctive enough per §6.2).
                 norm_text.contains(normalized.as_str())
             } else {
-                // Single token: word-boundary match to avoid partial-word hits
-                // (e.g. "zagier" inside "mozagier").
-                boundary_substring_match(&norm_text, normalized)
+                contains_phrase(&norm_text, normalized)
             };
             if is_match {
                 matched.push(original);

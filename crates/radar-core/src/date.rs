@@ -24,6 +24,19 @@ impl EventDate {
     pub fn start_date(&self) -> Option<NaiveDate> {
         self.start.as_ref().map(to_naive_date)
     }
+
+    /// An `EventDate` with no known start/end/timezone and `Unknown` precision,
+    /// preserving `original_text` for display. Used by adapters when a date
+    /// field is absent or unparseable.
+    pub fn unknown(original_text: impl Into<String>) -> Self {
+        Self {
+            start: None,
+            end: None,
+            timezone: None,
+            original_text: original_text.into(),
+            precision: DatePrecision::Unknown,
+        }
+    }
 }
 
 /// A date that may be a calendar date or an exact instant. Serialized

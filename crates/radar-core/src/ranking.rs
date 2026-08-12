@@ -214,10 +214,9 @@ fn access_signal(online: OnlineAvailability) -> u8 {
 /// Crafoord laureate), case-insensitive substring match.
 fn is_important_scholar(scholar_tags: &[String]) -> bool {
     const MARKERS: [&str; 4] = ["fields", "abel", "wolf", "crafoord"];
-    scholar_tags.iter().any(|tag| {
-        let lower = tag.to_lowercase();
-        MARKERS.iter().copied().any(|m| lower.contains(m))
-    })
+    scholar_tags
+        .iter()
+        .any(|tag| MARKERS.iter().any(|m| tag.to_lowercase().contains(m)))
 }
 
 /// People signal: important Speaker/Lecturer → 10, important Organizer/Panelist

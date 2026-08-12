@@ -170,7 +170,12 @@ fn domain_key(url: &Url) -> Option<String> {
     let host = url.host_str()?.to_lowercase();
     let labels: Vec<&str> = host.split('.').collect();
     for suffix in MULTI_PART_TLDS {
-        if (host.ends_with(&format!(".{suffix}")) || host == *suffix) && labels.len() >= 3 {
+        if (host.ends_with(suffix)
+            && host.len() > suffix.len()
+            && host.as_bytes()[host.len() - suffix.len() - 1] == b'.'
+            || host == *suffix)
+            && labels.len() >= 3
+        {
             return Some(labels[labels.len() - 3..].join("."));
         }
     }
