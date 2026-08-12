@@ -44,6 +44,22 @@ impl InterestWeights {
     pub fn weight(&self, topic_id: &str) -> f64 {
         self.0.get(topic_id).copied().unwrap_or(1.0)
     }
+
+    /// Parse interest weights from a TOML string in the format:
+    /// ```toml
+    /// [interests]
+    /// arithmetic_geometry = 1.0
+    /// number_theory = 0.8
+    /// ```
+    pub fn parse(toml_str: &str) -> Result<Self, toml::de::Error> {
+        #[derive(Deserialize)]
+        struct Wrapper {
+            #[serde(default)]
+            interests: HashMap<String, f64>,
+        }
+        let w: Wrapper = toml::from_str(toml_str)?;
+        Ok(InterestWeights(w.interests))
+    }
 }
 
 /// Round half up to u8, clamped to [0, 255]. Per-signal caps already bound

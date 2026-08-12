@@ -189,9 +189,8 @@ pub fn detect_media(document: &Html, base_url: &Url) -> Vec<MediaResource> {
             if let Some(href) = element.attr("href")
                 && let Ok(resolved) = base_url.join(href)
             {
-                let link_text = element.text().collect::<String>();
                 let title_attr = element.attr("title");
-                if let Some(media) = classify_link(&resolved, &link_text, title_attr, base_url) {
+                if let Some(media) = classify_link(&resolved, &element, title_attr, base_url) {
                     results.push(media);
                 }
             }
@@ -223,7 +222,7 @@ pub fn detect_media(document: &Html, base_url: &Url) -> Vec<MediaResource> {
 
 fn classify_link(
     url: &Url,
-    link_text: &str,
+    element: &scraper::ElementRef,
     title_attr: Option<&str>,
     base_url: &Url,
 ) -> Option<MediaResource> {
@@ -240,7 +239,8 @@ fn classify_link(
         });
     }
     if is_pdf(url) {
-        let mut context = String::from(link_text);
+        let link_text = element.text().collect::<String>();
+        let mut context = link_text;
         context.push(' ');
         if let Some(t) = title_attr {
             context.push_str(t);

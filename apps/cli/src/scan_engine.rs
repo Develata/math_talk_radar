@@ -7,7 +7,7 @@ use std::time::Instant;
 use chrono::{NaiveDate, Utc};
 use radar_adapters::default_adapter;
 use radar_core::dedup::dedup_events;
-use radar_core::ranking::score_event;
+use radar_core::ranking::{InterestWeights, score_event};
 use radar_core::{Event, config::SourceSpec, config::SourceTier};
 
 use crate::cli::{ScanArgs, ScanMode};
@@ -27,6 +27,19 @@ pub async fn run_scan(args: ScanArgs) -> Result<ScanOutput, CliError> {
         return Err(CliError::zero_sources());
     }
 
+    let interests = match args.interests.as_deref() {
+        Some(path) => {
+            let content = std::fs::read_to_string(path).map_err(|e| {
+                CliError::config(format!("failed to read --interests {path:?}: {e}"))
+            })?;
+            Some(InterestWeights::parse(&content).map_err(|e| {
+                CliError::config(format!("failed to parse --interests {path:?}: {e}"))
+            })?)
+        }
+        None => None,
+    };
+    let interests_ref = interests.as_ref();
+
     let mut http_policy = radar_fetch::policy::HttpPolicy::default();
     if args.jobs > 0 {
         http_policy.global_concurrency = args.jobs as usize;
@@ -45,7 +58,6 @@ pub async fn run_scan(args: ScanArgs) -> Result<ScanOutput, CliError> {
         .iter()
         .flat_map(|r| r.candidates.iter().map(|c| c.event.clone()))
         .collect();
-    events = dedup_events(events);
 
     let tiers: HashMap<String, SourceTier> = config
         .sources
@@ -53,11 +65,26 @@ pub async fn run_scan(args: ScanArgs) -> Result<ScanOutput, CliError> {
         .map(|s| (s.id.clone(), s.tier))
         .collect();
     for event in &mut events {
-        let (score, components, reasons) = score_event(event, &tiers, None);
+        let (score, components, reasons) = score_event(event, &tiers, interests_ref);
         event.score = score;
         event.score_components = components;
         event.rank_reasons = reasons;
     }
+
+    events = dedup_events(events);
+
+    for event in &mut events {
+        let (score, components, reasons) = score_event(event, &tiers, interests_ref);
+        event.score = score;
+        event.score_components = components;
+        event.rank_reasons = reasons;
+    }
+
+    events.sort_by(|a, b| {
+        b.score
+            .total_cmp(&a.score)
+            .then_with(|| a.id.0.cmp(&b.id.0))
+    });
 
     let today = match args.today.as_deref() {
         Some(s) => NaiveDate::parse_from_str(s, "%Y-%m-%d").map_err(|e| {
