@@ -42,10 +42,47 @@ impl DedupSignal {
     ];
 }
 
+/// Query parameter keys that carry no event identity and are dropped during
+/// URL canonicalization (tracking, analytics, session surface forms). All
+/// other params are preserved — dropping them risks merging distinct recurring
+/// sessions distinguished by `?session=N`, `?date=...`, etc. (§47).
+const TRACKING_PARAM_KEYS: &[&str] = &[
+    "utm_source",
+    "utm_medium",
+    "utm_campaign",
+    "utm_term",
+    "utm_content",
+    "utm_id",
+    "utm_referrer",
+    "fbclid",
+    "gclid",
+    "ref",
+    "source",
+    "mc_cid",
+    "mc_eid",
+    "_ga",
+    "_gl",
+    "igshid",
+    "fb_ref",
+    "ref_src",
+    "ref_url",
+    "_hsenc",
+    "_hsmi",
+    "hsctatracking",
+    "ver",
+];
+
+fn is_tracking_param(key: &str) -> bool {
+    let key = key.to_ascii_lowercase();
+    TRACKING_PARAM_KEYS.contains(&key.as_str())
+}
+
 /// Normalize a URL for comparison: lowercase scheme+host, strip fragment,
-/// strip trailing slash, strip default port, strip `www.` prefix, sort query
-/// params and drop known tracking params. Two URLs that differ only in these
-/// surface forms are the same canonical URL.
+/// strip trailing slash, strip default port, strip `www.` prefix, drop known
+/// tracking params, sort remaining params. Two URLs that differ only in these
+/// surface forms are the same canonical URL. Meaningful query params (session,
+/// date, id, etc.) are preserved so that distinct recurring sessions are not
+/// wrongly merged (§47).
 fn canonicalize_url(url: &Url) -> String {
     let mut s = String::new();
     s.push_str(url.scheme());
@@ -67,6 +104,26 @@ fn canonicalize_url(url: &Url) -> String {
         s.push('/');
     } else {
         s.push_str(path);
+    }
+    // Preserve query params except known tracking params; sort for determinism.
+    let mut pairs: Vec<(String, String)> = url
+        .query_pairs()
+        .filter(|(k, _)| !is_tracking_param(k))
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+    if !pairs.is_empty() {
+        pairs.sort();
+        s.push('?');
+        let mut first = true;
+        for (k, v) in &pairs {
+            if !first {
+                s.push('&');
+            }
+            first = false;
+            s.push_str(k);
+            s.push('=');
+            s.push_str(v);
+        }
     }
     s
 }
@@ -426,10 +483,12 @@ mod tests {
     }
 
     #[test]
-    fn canonicalize_url_drops_all_query_params() {
+    fn canonicalize_url_preserves_meaningful_params() {
         let a = canonicalize_url(&Url::parse("https://example.com/e?session=abc").unwrap());
-        let b = canonicalize_url(&Url::parse("https://example.com/e").unwrap());
-        assert_eq!(a, b);
+        let b = canonicalize_url(&Url::parse("https://example.com/e?session=xyz").unwrap());
+        assert_ne!(a, b, "distinct session params must not canonicalize equal");
+        let c = canonicalize_url(&Url::parse("https://example.com/e?session=abc").unwrap());
+        assert_eq!(a, c, "same session param must canonicalize equal");
     }
 
     #[test]
@@ -439,6 +498,25 @@ mod tests {
         );
         let b = canonicalize_url(&Url::parse("https://example.com/e").unwrap());
         assert_eq!(a, b, "tracking params must be dropped");
+    }
+
+    #[test]
+    fn canonicalize_url_sorts_query_params() {
+        let a = canonicalize_url(&Url::parse("https://example.com/e?b=2&a=1").unwrap());
+        let b = canonicalize_url(&Url::parse("https://example.com/e?a=1&b=2").unwrap());
+        assert_eq!(
+            a, b,
+            "params must be sorted for deterministic canonicalization"
+        );
+    }
+
+    #[test]
+    fn canonicalize_url_preserves_tracking_alongside_meaningful() {
+        let a = canonicalize_url(
+            &Url::parse("https://example.com/e?utm_source=nl&session=42").unwrap(),
+        );
+        let b = canonicalize_url(&Url::parse("https://example.com/e?session=42").unwrap());
+        assert_eq!(a, b, "tracking dropped, meaningful preserved");
     }
 
     #[test]

@@ -54,7 +54,7 @@ b = { title = "PDE Conference", url = "https://math.berkeley.edu/events/9", star
 id = "DEDUP-001e"
 should_merge = true
 expected_signal = "CanonicalUrl"
-a = { title = "Combinatorics Colloquium", url = "https://math.stanford.edu/talks/55?session=abc", start_date = "2026-08-30", source_id = "s1", source_url = "https://math.stanford.edu/feed" }
+a = { title = "Combinatorics Colloquium", url = "https://math.stanford.edu/talks/55?utm_source=nl", start_date = "2026-08-30", source_id = "s1", source_url = "https://math.stanford.edu/feed" }
 b = { title = "Combinatorics Colloquium", url = "https://math.stanford.edu/talks/55", start_date = "2026-08-30", source_id = "s2", source_url = "https://other.com/feed" }
 
 [[pairs]]

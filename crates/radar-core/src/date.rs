@@ -100,7 +100,7 @@ fn month_from_name(name: &str) -> Option<u32> {
 fn re_same_month_range() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
-        Regex::new(r"^(\d{1,2})\s*[–-]\s*(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})$")
+        Regex::new(r"^(\d{1,2})(?:st|nd|rd|th)?\s*[–-]\s*(\d{1,2})(?:st|nd|rd|th)?\s+([A-Za-z]+)\s+(\d{4})$")
             .expect("statically verified regex literal")
     })
 }
@@ -108,7 +108,7 @@ fn re_same_month_range() -> &'static Regex {
 fn re_cross_month_range() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
-        Regex::new(r"^(\d{1,2})\s+([A-Za-z]+)\s*[–-]\s*(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})$")
+        Regex::new(r"^(\d{1,2})(?:st|nd|rd|th)?\s+([A-Za-z]+)\s*[–-]\s*(\d{1,2})(?:st|nd|rd|th)?\s+([A-Za-z]+)\s+(\d{4})$")
             .expect("statically verified regex literal")
     })
 }
@@ -116,7 +116,7 @@ fn re_cross_month_range() -> &'static Regex {
 fn re_us_range() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
-        Regex::new(r"^([A-Za-z]+)\s+(\d{1,2})\s*[–-]\s*(\d{1,2}),?\s+(\d{4})$")
+        Regex::new(r"^([A-Za-z]+)\s+(\d{1,2})(?:st|nd|rd|th)?\s*[–-]\s*(\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{4})$")
             .expect("statically verified regex literal")
     })
 }
@@ -124,7 +124,7 @@ fn re_us_range() -> &'static Regex {
 fn re_us_single() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
-        Regex::new(r"^([A-Za-z]+)\s+(\d{1,2}),?\s+(\d{4})$")
+        Regex::new(r"^([A-Za-z]+)\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{4})$")
             .expect("statically verified regex literal")
     })
 }
@@ -132,7 +132,7 @@ fn re_us_single() -> &'static Regex {
 fn re_day_month_year_single() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
-        Regex::new(r"^(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})$")
+        Regex::new(r"^(\d{1,2})(?:st|nd|rd|th)?\s+([A-Za-z]+)\s+(\d{4})$")
             .expect("statically verified regex literal")
     })
 }
@@ -141,9 +141,17 @@ fn re_us_full_date_range() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
         Regex::new(
-            r"^([A-Za-z]+)\s+(\d{1,2}),?\s+(\d{4})\s*(?:[–-]|to)\s*([A-Za-z]+)\s+(\d{1,2}),?\s+(\d{4})$",
+            r"^([A-Za-z]+)\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{4})\s*(?:[–-]|to)\s*([A-Za-z]+)\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{4})$",
         )
         .expect("statically verified regex literal")
+    })
+}
+
+fn re_iso_date_range() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r"^(\d{4}-\d{2}-\d{2})\s*[/–-]\s*(\d{4}-\d{2}-\d{2})$")
+            .expect("statically verified regex literal")
     })
 }
 
@@ -156,7 +164,7 @@ fn re_us_full_date_range() -> &'static Regex {
 fn re_same_month_range_no_year() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
-        Regex::new(r"^(\d{1,2})\s*[–-]\s*(\d{1,2})\s+([A-Za-z]+)$")
+        Regex::new(r"^(\d{1,2})(?:st|nd|rd|th)?\s*[–-]\s*(\d{1,2})(?:st|nd|rd|th)?\s+([A-Za-z]+)$")
             .expect("statically verified regex literal")
     })
 }
@@ -164,7 +172,7 @@ fn re_same_month_range_no_year() -> &'static Regex {
 fn re_cross_month_range_no_year() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
-        Regex::new(r"^(\d{1,2})\s+([A-Za-z]+)\s*[–-]\s*(\d{1,2})\s+([A-Za-z]+)$")
+        Regex::new(r"^(\d{1,2})(?:st|nd|rd|th)?\s+([A-Za-z]+)\s*[–-]\s*(\d{1,2})(?:st|nd|rd|th)?\s+([A-Za-z]+)$")
             .expect("statically verified regex literal")
     })
 }
@@ -172,7 +180,7 @@ fn re_cross_month_range_no_year() -> &'static Regex {
 fn re_us_range_no_year() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
-        Regex::new(r"^([A-Za-z]+)\s+(\d{1,2})\s*[–-]\s*(\d{1,2})$")
+        Regex::new(r"^([A-Za-z]+)\s+(\d{1,2})(?:st|nd|rd|th)?\s*[–-]\s*(\d{1,2})(?:st|nd|rd|th)?$")
             .expect("statically verified regex literal")
     })
 }
@@ -180,21 +188,23 @@ fn re_us_range_no_year() -> &'static Regex {
 fn re_us_single_no_year() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
-        Regex::new(r"^([A-Za-z]+)\s+(\d{1,2})$").expect("statically verified regex literal")
+        Regex::new(r"^([A-Za-z]+)\s+(\d{1,2})(?:st|nd|rd|th)?$")
+            .expect("statically verified regex literal")
     })
 }
 
 fn re_dmy_single_no_year() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
-        Regex::new(r"^(\d{1,2})\s+([A-Za-z]+)$").expect("statically verified regex literal")
+        Regex::new(r"^(\d{1,2})(?:st|nd|rd|th)?\s+([A-Za-z]+)$")
+            .expect("statically verified regex literal")
     })
 }
 
 fn re_us_cross_month_range_no_year() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
-        Regex::new(r"^([A-Za-z]+)\s+(\d{1,2})\s*[–-]\s*([A-Za-z]+)\s+(\d{1,2})$")
+        Regex::new(r"^([A-Za-z]+)\s+(\d{1,2})(?:st|nd|rd|th)?\s*[–-]\s*([A-Za-z]+)\s+(\d{1,2})(?:st|nd|rd|th)?$")
             .expect("statically verified regex literal")
     })
 }
@@ -226,7 +236,12 @@ pub fn parse_date_with_year_hint(text: &str, year_hint: i32) -> Result<EventDate
 fn parse_date_inner(text: &str, year_hint: Option<i32>) -> Result<EventDate, DateError> {
     let trimmed = text.trim();
 
-    // 1. ISO 8601 single date: "2026-08-08" or "2026-08-08T10:00:00".
+    // 1. ISO 8601 date range: "2026-08-08 - 2026-08-10" or "2026-08-08/2026-08-10".
+    if let Some(ed) = try_iso_date_range(trimmed, text) {
+        return Ok(ed);
+    }
+
+    // 2. ISO 8601 single date: "2026-08-08" or "2026-08-08T10:00:00".
     //    Time-bearing variants (RFC 3339 / schema.org `datetime` attributes) are
     //    truncated at the first 'T' or space to extract the date component.
     let iso_date_part = trimmed
@@ -243,7 +258,7 @@ fn parse_date_inner(text: &str, year_hint: Option<i32>) -> Result<EventDate, Dat
         });
     }
 
-    // 2-7. Range / US / DMY patterns, tried in order; first match wins.
+    // 3-8. Range / US / DMY patterns, tried in order; first match wins.
     //      Invalid dates (e.g. Feb 30) fall through to Unknown via `?`.
     if let Some(ed) = try_us_full_date_range(trimmed, text)
         .or_else(|| try_same_month_range(trimmed, text))
@@ -262,6 +277,24 @@ fn parse_date_inner(text: &str, year_hint: Option<i32>) -> Result<EventDate, Dat
         timezone: None,
         original_text: text.to_string(),
         precision: DatePrecision::Unknown,
+    })
+}
+
+/// ISO 8601 date range: "2026-08-08 - 2026-08-10" or "2026-08-08/2026-08-10".
+/// Separator may be en-dash, ASCII hyphen, or slash (ISO 8601 interval).
+fn try_iso_date_range(trimmed: &str, original: &str) -> Option<EventDate> {
+    let caps = re_iso_date_range().captures(trimmed)?;
+    let start = NaiveDate::parse_from_str(&caps[1], "%Y-%m-%d").ok()?;
+    let end = NaiveDate::parse_from_str(&caps[2], "%Y-%m-%d").ok()?;
+    if start > end {
+        return None;
+    }
+    Some(EventDate {
+        start: Some(DateTimeOrDate::Date(start)),
+        end: Some(DateTimeOrDate::Date(end)),
+        timezone: None,
+        original_text: original.to_string(),
+        precision: DatePrecision::Range,
     })
 }
 
@@ -879,5 +912,57 @@ mod tests {
         assert_eq!(ed5.precision, DatePrecision::Range);
         assert_eq!(start_date(&ed5), d(2026, 7, 1));
         assert_eq!(end_date(&ed5), d(2027, 6, 30));
+    }
+
+    #[test]
+    fn date_007_iso_date_range() {
+        let ed = parse_date("2026-08-08 - 2026-08-10").unwrap();
+        assert_eq!(ed.precision, DatePrecision::Range);
+        assert_eq!(start_date(&ed), d(2026, 8, 8));
+        assert_eq!(end_date(&ed), d(2026, 8, 10));
+
+        let ed2 = parse_date("2026-08-08/2026-08-10").unwrap();
+        assert_eq!(ed2.precision, DatePrecision::Range);
+        assert_eq!(start_date(&ed2), d(2026, 8, 8));
+        assert_eq!(end_date(&ed2), d(2026, 8, 10));
+
+        let ed3 = parse_date("2026-12-30 – 2027-01-02").unwrap();
+        assert_eq!(ed3.precision, DatePrecision::Range);
+        assert_eq!(start_date(&ed3), d(2026, 12, 30));
+        assert_eq!(end_date(&ed3), d(2027, 1, 2));
+
+        let ed4 = parse_date("2026-08-08 - 2026-08-08").unwrap();
+        assert_eq!(ed4.precision, DatePrecision::Range);
+        assert_eq!(start_date(&ed4), d(2026, 8, 8));
+        assert_eq!(end_date(&ed4), d(2026, 8, 8));
+    }
+
+    #[test]
+    fn date_008_ordinal_suffixes() {
+        let ed = parse_date("August 1st, 2026").unwrap();
+        assert_eq!(ed.precision, DatePrecision::Day);
+        assert_eq!(start_date(&ed), d(2026, 8, 1));
+
+        let ed2 = parse_date("August 2nd, 2026").unwrap();
+        assert_eq!(start_date(&ed2), d(2026, 8, 2));
+
+        let ed3 = parse_date("August 3rd, 2026").unwrap();
+        assert_eq!(start_date(&ed3), d(2026, 8, 3));
+
+        let ed4 = parse_date("August 4th, 2026").unwrap();
+        assert_eq!(start_date(&ed4), d(2026, 8, 4));
+
+        let ed5 = parse_date("July 1st, 2026 - December 31st, 2026").unwrap();
+        assert_eq!(ed5.precision, DatePrecision::Range);
+        assert_eq!(start_date(&ed5), d(2026, 7, 1));
+        assert_eq!(end_date(&ed5), d(2026, 12, 31));
+
+        let ed6 = parse_date("1st August 2026").unwrap();
+        assert_eq!(start_date(&ed6), d(2026, 8, 1));
+
+        let ed7 = parse_date("1st–7th August 2026").unwrap();
+        assert_eq!(ed7.precision, DatePrecision::Range);
+        assert_eq!(start_date(&ed7), d(2026, 8, 1));
+        assert_eq!(end_date(&ed7), d(2026, 8, 7));
     }
 }

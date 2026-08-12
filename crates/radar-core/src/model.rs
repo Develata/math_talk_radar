@@ -39,9 +39,30 @@ pub fn deterministic_id(parts: &[&str]) -> String {
 /// hashing. All adapters MUST use this function so the same event discovered
 /// via different adapter kinds produces the same id (§24 cross-adapter
 /// identity consistency).
+///
+/// The URL is canonicalized before hashing: fragment is stripped and a
+/// trailing slash on the path is removed, so `…/e/1`, `…/e/1/`, and
+/// `…/e/1#top` produce the same id. Query parameters are preserved (they may
+/// be semantically meaningful for identity). Malformed URLs fall back to the
+/// raw string to preserve backward compatibility.
 pub fn event_id(title: &str, url: &str) -> EventId {
     let normalized = normalize_name(title);
-    EventId(deterministic_id(&[&normalized, url]))
+    let canon_url = canonicalize_url_for_id(url);
+    EventId(deterministic_id(&[&normalized, &canon_url]))
+}
+
+fn canonicalize_url_for_id(url: &str) -> String {
+    let mut parsed = match Url::parse(url) {
+        Ok(u) => u,
+        Err(_) => return url.to_string(),
+    };
+    parsed.set_fragment(None);
+    let path = parsed.path().to_string();
+    if path.len() > 1 && path.ends_with('/') {
+        let trimmed = &path[..path.len() - 1];
+        parsed.set_path(if trimmed.is_empty() { "/" } else { trimmed });
+    }
+    parsed.to_string()
 }
 
 // ---- Event (§5.1) --------------------------------------------------------
@@ -246,4 +267,43 @@ pub struct SourceHealth {
     pub duration_ms: u64,
     pub requests: u32,
     pub events: u32,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn event_id_canonicalizes_fragment() {
+        let a = event_id("Talk", "https://example.com/e/1");
+        let b = event_id("Talk", "https://example.com/e/1#top");
+        assert_eq!(a, b, "fragment must not affect event_id");
+    }
+
+    #[test]
+    fn event_id_canonicalizes_trailing_slash() {
+        let a = event_id("Talk", "https://example.com/e/1");
+        let b = event_id("Talk", "https://example.com/e/1/");
+        assert_eq!(a, b, "trailing slash must not affect event_id");
+    }
+
+    #[test]
+    fn event_id_preserves_query() {
+        let a = event_id("Talk", "https://example.com/e/1?session=abc");
+        let b = event_id("Talk", "https://example.com/e/1?session=def");
+        assert_ne!(a, b, "different query params must produce different ids");
+    }
+
+    #[test]
+    fn event_id_root_path_keeps_slash() {
+        let a = event_id("Talk", "https://example.com/");
+        let b = event_id("Talk", "https://example.com");
+        assert_eq!(a, b, "root path '/' and empty path must collide");
+    }
+
+    #[test]
+    fn event_id_malformed_url_falls_back_to_raw() {
+        let id = event_id("Talk", "not a url");
+        assert!(id.0.starts_with("blake3:"));
+    }
 }

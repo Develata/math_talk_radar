@@ -1,6 +1,6 @@
 //! Topic model (§7). MVP uses canonical topic + aliases + phrases, no semantic
 //! model. User interest weights alter ranking only; they never delete events.
-use crate::normalize::{normalize_name, word_boundaries};
+use crate::normalize::{contains_phrase, normalize_name};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -32,7 +32,6 @@ pub struct TopicRecord {
 /// normalized text.
 pub fn match_topics(text: &str, topics: &[TopicRecord]) -> Vec<TopicMatch> {
     let norm_text = normalize_name(text);
-    let text_words = word_boundaries(&norm_text);
 
     let mut matches: Vec<TopicMatch> = Vec::new();
     let mut seen: HashMap<String, usize> = HashMap::new();
@@ -54,14 +53,10 @@ pub fn match_topics(text: &str, topics: &[TopicRecord]) -> Vec<TopicMatch> {
             if norm_candidate.is_empty() {
                 continue;
             }
-            let is_match = if norm_candidate.contains(char::is_whitespace) {
-                // Multi-word phrase: substring match (distinctive enough per §6.2).
-                norm_text.contains(norm_candidate.as_str())
-            } else {
-                // Single token: word-boundary match so "analysis" does not match
-                // inside "psychoanalysis".
-                text_words.iter().any(|w| w.as_str() == norm_candidate)
-            };
+            // `contains_phrase` handles both single and multi-word candidates
+            // with word-boundary awareness, so "analysis" does not match inside
+            // "psychoanalysis" and "pde" matches "(pde)" or "pde,".
+            let is_match = contains_phrase(&norm_text, &norm_candidate);
             if is_match {
                 let take = match best {
                     None => true,
@@ -172,6 +167,39 @@ mod tests {
         let a = analysis();
         let result = match_topics("psychoanalysis is not math", std::slice::from_ref(&a));
         assert!(result.is_empty());
+    }
+
+    // T2-1: single-token alias must match when adjacent to punctuation.
+    // `unicode_words` strips punctuation, so the old `w == candidate` check
+    // failed for "pde" inside "(pde)" or "pde,". `contains_phrase` is
+    // boundary-aware and handles these cases.
+    #[test]
+    fn single_word_alias_matches_adjacent_to_punctuation() {
+        let a = analysis();
+        for text in [
+            "a course on (pde)",
+            "pde, and applications",
+            "topics: pde.",
+            "nonlinear pde; recent progress",
+        ] {
+            let result = match_topics(text, std::slice::from_ref(&a));
+            assert_eq!(
+                result.len(),
+                1,
+                "expected single-token alias 'pde' to match in {text:?}, got {result:?}"
+            );
+            assert_eq!(result[0].topic_id, "analysis");
+        }
+    }
+
+    #[test]
+    fn single_word_alias_still_rejects_substring_inside_word() {
+        let a = analysis();
+        let result = match_topics("the pdepde conference", std::slice::from_ref(&a));
+        assert!(
+            result.is_empty(),
+            "'pde' must not match inside 'pdepde' (no word boundary)"
+        );
     }
 
     // Supplementary: multiple topics match independently.
