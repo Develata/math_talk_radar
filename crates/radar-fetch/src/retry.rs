@@ -11,12 +11,13 @@ pub enum RetryDecision {
 }
 
 /// Classify an HTTP status for retry. Per §15: retry 408, 429, 5xx only.
-/// `retry_after` is forwarded for 429 but the caller is responsible for not
-/// breaching the global scan deadline.
+/// `retry_after` is forwarded for 429 and 5xx (many servers send `Retry-After`
+/// with 503/502/504) but the caller is responsible for not breaching the
+/// global scan deadline.
 pub fn retry_for_status(status: u16, retry_after: Option<Duration>) -> RetryDecision {
     match status {
         408 | 429 => RetryDecision::Retry { after: retry_after },
-        500..=599 => RetryDecision::Retry { after: None },
+        500..=599 => RetryDecision::Retry { after: retry_after },
         _ => RetryDecision::NoRetry,
     }
 }
@@ -49,7 +50,7 @@ pub fn is_transient_network_error(err: &reqwest::Error) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{RetryDecision, retry_for_status};
+    use super::{Duration, RetryDecision, retry_for_status};
 
     #[test]
     fn retries_transient_only() {
@@ -69,6 +70,40 @@ mod tests {
             retry_for_status(503, None),
             RetryDecision::Retry { .. }
         ));
+    }
+
+    #[test]
+    fn retry_after_passthrough_5xx() {
+        let d = Duration::from_secs(7);
+        assert_eq!(
+            retry_for_status(503, Some(d)),
+            RetryDecision::Retry { after: Some(d) }
+        );
+        assert_eq!(
+            retry_for_status(502, Some(d)),
+            RetryDecision::Retry { after: Some(d) }
+        );
+        assert_eq!(
+            retry_for_status(504, Some(d)),
+            RetryDecision::Retry { after: Some(d) }
+        );
+    }
+
+    #[test]
+    fn retry_after_passthrough_429() {
+        let d = Duration::from_secs(3);
+        assert_eq!(
+            retry_for_status(429, Some(d)),
+            RetryDecision::Retry { after: Some(d) }
+        );
+    }
+
+    #[test]
+    fn retry_after_none_when_absent() {
+        assert_eq!(
+            retry_for_status(503, None),
+            RetryDecision::Retry { after: None }
+        );
     }
 
     #[test]

@@ -29,6 +29,14 @@ pub struct RobotsRules {
 }
 
 impl RobotsRules {
+    /// Conservative rules: disallow every path. Used when robots.txt is
+    /// unavailable (5xx) or redirects to an unsafe scheme, per RFC 9309 §2.3.1.3.
+    pub fn disallow_all() -> Self {
+        Self {
+            rules: vec![RobotsRule::Disallow("/".to_string())],
+        }
+    }
+
     pub fn is_allowed(&self, url: &Url) -> bool {
         let path = url.path();
         let mut best_match: Option<(usize, bool)> = None; // (length, is_allow)

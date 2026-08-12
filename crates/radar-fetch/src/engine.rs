@@ -17,7 +17,7 @@ use crate::error::FetchError;
 use crate::fetch_policy::FetchPolicy;
 use crate::policy::HttpPolicy;
 use crate::retry::{is_transient_network_error, retry_for_status};
-use crate::robots::RobotsCache;
+use crate::robots::{RobotsCache, RobotsRules};
 
 pub struct SourceFetchResult {
     pub candidates: Vec<EventCandidate>,
@@ -32,6 +32,96 @@ fn remaining_time(deadline: Option<Instant>, default: std::time::Duration) -> st
     deadline
         .map(|d| d.saturating_duration_since(Instant::now()))
         .unwrap_or(default)
+}
+
+/// Fetch robots.txt following same-host redirects safely. Per RFC 9309
+/// §2.3.1: 4xx → allow-all, 5xx → disallow-all, cross-host/unsafe-scheme
+/// redirect → disallow-all. Body is capped at `max_response_body`.
+async fn fetch_robots_txt(
+    client: &FetchClient,
+    start_url: Url,
+    http_policy: &HttpPolicy,
+) -> Result<RobotsRules, FetchError> {
+    let mut current = start_url;
+    for _ in 0..=http_policy.redirect_limit {
+        let mut resp = client
+            .handle()
+            .get(current.as_str())
+            .timeout(http_policy.request_timeout)
+            .send()
+            .await
+            .map_err(FetchError::from)?;
+        let status = resp.status().as_u16();
+        if (300..400).contains(&status) {
+            let location = resp
+                .headers()
+                .get(reqwest::header::LOCATION)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("");
+            let new_url = match current.join(location) {
+                Ok(u) => u,
+                Err(_) => return Ok(RobotsRules::disallow_all()),
+            };
+            if current.scheme() == "https" && new_url.scheme() == "http" {
+                return Ok(RobotsRules::disallow_all());
+            }
+            if !matches!(new_url.scheme(), "http" | "https") {
+                return Ok(RobotsRules::disallow_all());
+            }
+            if new_url.host_str() != current.host_str() || new_url.port() != current.port() {
+                return Ok(RobotsRules::disallow_all());
+            }
+            current = new_url;
+            continue;
+        }
+        if resp.status().is_success() {
+            let mut buf = Vec::new();
+            let mut capped = false;
+            while let Some(chunk) = resp.chunk().await.map_err(FetchError::from)? {
+                if buf.len() + chunk.len() > http_policy.max_response_body {
+                    capped = true;
+                    break;
+                }
+                buf.extend_from_slice(&chunk);
+            }
+            if capped {
+                return Ok(RobotsRules::default());
+            }
+            let body = String::from_utf8_lossy(&buf);
+            return Ok(crate::robots::parse_robots(&body));
+        }
+        if (400..500).contains(&status) {
+            return Ok(RobotsRules::default());
+        }
+        return Ok(RobotsRules::disallow_all());
+    }
+    Ok(RobotsRules::disallow_all())
+}
+
+/// Fetch (or reuse cached) robots rules for `url`'s host and verify the URL
+/// is allowed. Called before the initial request and after every redirect
+/// that lands on a new host (H1: redirect must not bypass robots).
+async fn check_robots(
+    client: &FetchClient,
+    url: &Url,
+    http_policy: &HttpPolicy,
+    robots: &RobotsCache,
+) -> Result<(), FetchError> {
+    let owned_url = url.clone();
+    let client_clone = client.clone();
+    let hp = *http_policy;
+    let rules = robots
+        .get_or_init(url, move || async move {
+            match robots_url_for(&owned_url) {
+                Some(ru) => fetch_robots_txt(&client_clone, ru, &hp).await,
+                None => Ok(RobotsRules::default()),
+            }
+        })
+        .await?;
+    if !rules.is_allowed(url) {
+        return Err(FetchError::RobotsDenied { url: url.clone() });
+    }
+    Ok(())
 }
 
 /// Fetch a single URL with manual redirect loop, body cap, retry.
@@ -56,57 +146,17 @@ pub async fn fetch_one(
         return Err(FetchError::RedirectDisallowed);
     }
 
-    // Robots check (clone to owned so the fetch closure is 'static + Send).
-    let owned_url = url.clone();
-    let client_clone = client.clone();
-    let robots_body_cap = http_policy.max_response_body;
-    let rules = robots
-        .get_or_init(url, move || async move {
-            let robots_url = robots_url_for(&owned_url);
-            match robots_url {
-                Some(ru) => {
-                    let mut resp = client_clone
-                        .handle()
-                        .get(ru.as_str())
-                        .send()
-                        .await
-                        .map_err(FetchError::from)?;
-                    if resp.status().is_success() {
-                        // §66: cap robots.txt body — a malicious host could
-                        // otherwise exhaust the RSS budget with an enormous
-                        // robots.txt. On cap breach, return empty rules
-                        // (allow-all) so the host cannot DoS the crawl.
-                        let mut buf = Vec::new();
-                        let mut capped = false;
-                        while let Some(chunk) = resp.chunk().await.map_err(FetchError::from)? {
-                            if buf.len() + chunk.len() > robots_body_cap {
-                                capped = true;
-                                break;
-                            }
-                            buf.extend_from_slice(&chunk);
-                        }
-                        if capped {
-                            return Ok(crate::robots::RobotsRules::default());
-                        }
-                        let body = String::from_utf8_lossy(&buf);
-                        Ok(crate::robots::parse_robots(&body))
-                    } else {
-                        Ok(crate::robots::RobotsRules::default())
-                    }
-                }
-                None => Ok(crate::robots::RobotsRules::default()),
-            }
-        })
-        .await?;
-    if !rules.is_allowed(url) {
-        return Err(FetchError::RobotsDenied { url: url.clone() });
-    }
+    // Robots check (initial URL). check_robots caches rules per host; the
+    // redirect loop below re-checks when a hop lands on a new host.
+    check_robots(client, url, http_policy, robots).await?;
 
     // Manual redirect loop (Oracle #7). Network errors (B1, §15: connection
     // reset, transient) and status retries (§15: 408, 429, 5xx) share a single
     // retry budget bounded by `max_retry`. After any retry we loop back to the
     // top so a 3xx on the retried response is followed as a redirect (W5).
     let mut current_url = url.clone();
+    let mut last_host = url.host_str().map(|h| h.to_string());
+    let mut last_port = url.port();
     let mut hops = 0;
     let max_hops = http_policy.redirect_limit;
     let mut retries_used: u32 = 0;
@@ -151,6 +201,18 @@ pub async fn fetch_one(
             }
             if current_url.scheme() == "https" && new_url.scheme() == "http" {
                 return Err(FetchError::RedirectDisallowed);
+            }
+            if !matches!(new_url.scheme(), "http" | "https") {
+                return Err(FetchError::RedirectDisallowed);
+            }
+            // H1: a redirect to a new host must re-check robots for that host
+            // before the next request leaves. Same-host redirects reuse the
+            // cached rules.
+            let new_host = new_url.host_str().map(|h| h.to_string());
+            if new_host != last_host || new_url.port() != last_port {
+                check_robots(client, &new_url, http_policy, robots).await?;
+                last_host = new_host;
+                last_port = new_url.port();
             }
             current_url = new_url;
             continue;

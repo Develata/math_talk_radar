@@ -484,3 +484,104 @@ async fn rel002_global_deadline_bounds_fetch() {
         result.health.status
     );
 }
+
+// ---- SEC-001: robots.txt 5xx → disallow-all (RFC 9309 §2.3.1) -------------
+
+#[tokio::test]
+async fn sec001_robots_5xx_disallows_all() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/robots.txt"))
+        .respond_with(ResponseTemplate::new(503))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("ok"))
+        .mount(&server)
+        .await;
+
+    let client = FetchClient::new(HttpPolicy::default()).unwrap();
+    let url: Url = server.uri().parse().unwrap();
+    let fetch_policy = allow_server_host(&url);
+    let http_policy = client.policy();
+    let mut budget = RequestBudget::default();
+    let robots = RobotsCache::new();
+
+    let result = fetch_one(
+        &client,
+        &url,
+        &fetch_policy,
+        &http_policy,
+        &mut budget,
+        None,
+        &robots,
+    )
+    .await;
+
+    let err = result.unwrap_err();
+    assert!(
+        matches!(&err, FetchError::RobotsDenied { .. }),
+        "expected RobotsDenied (5xx robots → disallow-all), got {err:?}"
+    );
+}
+
+// ---- SEC-002: redirect to new host re-checks robots ------------------------
+
+#[tokio::test]
+async fn sec002_redirect_to_new_host_rechecks_robots() {
+    let server_a = MockServer::start().await;
+    let server_b = MockServer::start().await;
+    let uri_b = server_b.uri();
+
+    Mock::given(method("GET"))
+        .and(path("/robots.txt"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(""))
+        .mount(&server_a)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/"))
+        .respond_with(ResponseTemplate::new(302).insert_header("location", uri_b.as_str()))
+        .mount(&server_a)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/robots.txt"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("User-agent: *\nDisallow: /\n"))
+        .mount(&server_b)
+        .await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("ok"))
+        .mount(&server_b)
+        .await;
+
+    let client = FetchClient::new(HttpPolicy::default()).unwrap();
+    let url_a: Url = server_a.uri().parse().unwrap();
+    let url_b: Url = uri_b.parse().unwrap();
+    let fetch_policy = FetchPolicy {
+        allowed_hosts: vec![
+            url_a.host_str().unwrap().to_string(),
+            url_b.host_str().unwrap().to_string(),
+        ],
+    };
+    let http_policy = client.policy();
+    let mut budget = RequestBudget::default();
+    let robots = RobotsCache::new();
+
+    let result = fetch_one(
+        &client,
+        &url_a,
+        &fetch_policy,
+        &http_policy,
+        &mut budget,
+        None,
+        &robots,
+    )
+    .await;
+
+    let err = result.unwrap_err();
+    assert!(
+        matches!(&err, FetchError::RobotsDenied { .. }),
+        "expected RobotsDenied after redirect to host with disallow-all robots, got {err:?}"
+    );
+}
