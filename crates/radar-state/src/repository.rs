@@ -170,6 +170,16 @@ impl Repository {
     /// and the resulting in-memory map is reused for `first_seen_at` lookup,
     /// avoiding the per-upsert full re-deserialization that `store_event`
     /// performs (ST-2).
+    ///
+    /// Memory: both the previous and current event sets are materialized
+    /// simultaneously (peak ≈ 2× corpus) because `detect_changes` takes
+    /// `&[Event]` slices. Adequate for v0.1 batch sizes (low thousands); a
+    /// future iterator-based signature would bound peak memory.
+    /// The full scored `Event` is persisted verbatim — `score` /
+    /// `score_components` / `rank_reasons` are transient ranking output that
+    /// is recomputed each scan, so persisting them is redundant; a projected
+    /// fingerprint struct would be leaner but is deferred to avoid a schema
+    /// migration before v0.1.
     pub fn store_scan(
         &self,
         events: &[Event],

@@ -14,6 +14,14 @@ pub struct CliError {
 }
 
 impl CliError {
+    /// §32 exit 2: usage error.
+    pub fn usage(message: impl Into<String>) -> Self {
+        Self {
+            code: 2,
+            message: message.into(),
+        }
+    }
+
     /// §32 exit 2: usage error. Returned by stubs for commands not yet
     /// implemented; exit 1 is deliberately absent from the §32 enum.
     pub fn not_implemented(cmd: &str) -> Self {

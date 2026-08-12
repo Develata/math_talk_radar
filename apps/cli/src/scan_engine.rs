@@ -43,6 +43,9 @@ pub async fn run_scan(args: ScanArgs) -> Result<ScanOutput, CliError> {
     let interests_ref = interests.as_ref();
 
     let mut http_policy = radar_fetch::policy::HttpPolicy::default();
+    if args.jobs == 0 {
+        return Err(CliError::usage("--jobs must be >= 1"));
+    }
     if args.jobs > 0 {
         http_policy.global_concurrency = args.jobs as usize;
     }

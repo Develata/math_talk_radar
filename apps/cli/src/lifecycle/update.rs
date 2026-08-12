@@ -2,6 +2,7 @@
 //! SHA-256, self-test, rollback, atomic replace.
 use std::path::{Path, PathBuf};
 
+use futures::StreamExt;
 use semver::Version;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -118,6 +119,41 @@ async fn download_bytes(url: &str) -> Result<Vec<u8>, CliError> {
         .map_err(|e| CliError::update(format!("download body read failed: {e}")))
 }
 
+/// Stream the download body to `dest` while hashing incrementally, returning
+/// the SHA-256 hex digest. Bounds memory to the chunk size instead of
+/// buffering the entire binary in RAM.
+async fn download_to_file_with_hash(url: &str, dest: &Path) -> Result<String, CliError> {
+    let client = http_client()?;
+    let resp = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| CliError::update(format!("download failed: {e}")))?;
+    if !resp.status().is_success() {
+        return Err(CliError::update(format!(
+            "download returned {}",
+            resp.status()
+        )));
+    }
+    let mut file = std::fs::File::create(dest)
+        .map_err(|e| CliError::update(format!("create temp file failed: {e}")))?;
+    let mut hasher = Sha256::new();
+    let mut stream = resp.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| CliError::update(format!("download stream error: {e}")))?;
+        hasher.update(&chunk);
+        std::io::Write::write_all(&mut file, &chunk)
+            .map_err(|e| CliError::update(format!("write temp file failed: {e}")))?;
+    }
+    let digest = hasher.finalize();
+    let mut hex = String::with_capacity(64);
+    for byte in digest {
+        use std::fmt::Write;
+        let _ = write!(hex, "{byte:02x}");
+    }
+    Ok(hex)
+}
+
 /// Parse a `.sha256` file: first hex token is the digest, rest is filename.
 fn parse_checksum_file(contents: &str) -> Result<String, CliError> {
     let first_token = contents
@@ -130,18 +166,6 @@ fn parse_checksum_file(contents: &str) -> Result<String, CliError> {
         )));
     }
     Ok(first_token.to_lowercase())
-}
-
-fn sha256_hex(data: &[u8]) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(data);
-    let digest = hasher.finalize();
-    let mut s = String::with_capacity(64);
-    for byte in digest {
-        use std::fmt::Write;
-        let _ = write!(s, "{byte:02x}");
-    }
-    s
 }
 
 /// Run `binary --version` and check exit 0 (self-test, §34.2).
@@ -187,18 +211,16 @@ pub async fn run(force_unmanaged: bool) -> Result<String, CliError> {
     let checksum_bytes = download_bytes(&checksum_asset.browser_download_url).await?;
     let expected_hash = parse_checksum_file(&String::from_utf8_lossy(&checksum_bytes))?;
 
-    let binary_bytes = download_bytes(&binary_asset.browser_download_url).await?;
-    let actual_hash = sha256_hex(&binary_bytes);
+    let temp_path = paths::temp_dir_for_binary(&current_binary);
+    let actual_hash =
+        download_to_file_with_hash(&binary_asset.browser_download_url, &temp_path).await?;
     if actual_hash != expected_hash {
+        let _ = std::fs::remove_file(&temp_path);
         return Err(CliError::update(format!(
             "checksum mismatch: expected {expected_hash}, got {actual_hash}"
         )));
     }
 
-    let temp_path = paths::temp_dir_for_binary(&current_binary);
-
-    std::fs::write(&temp_path, &binary_bytes)
-        .map_err(|e| CliError::update(format!("write temp binary failed: {e}")))?;
     set_executable(&temp_path)?;
     fsync_file(&temp_path)?;
 
