@@ -241,11 +241,8 @@ pub async fn fetch_one(
             }
         }
 
-        let final_status = resp.status().as_u16();
         if !resp.status().is_success() {
-            return Err(FetchError::HttpError {
-                status: final_status,
-            });
+            return Err(FetchError::HttpError { status });
         }
 
         if let Some(len) = resp.content_length()
@@ -279,7 +276,7 @@ pub async fn fetch_one(
         return Ok(make_document(
             url.clone(),
             final_url,
-            final_status,
+            status,
             content_type,
             body,
             Utc::now(),
@@ -288,13 +285,11 @@ pub async fn fetch_one(
 }
 
 fn robots_url_for(url: &Url) -> Option<Url> {
-    let host = url.host_str()?;
-    let scheme = url.scheme();
-    let port = match url.port() {
-        Some(p) => format!(":{p}"),
-        None => String::new(),
-    };
-    Url::parse(&format!("{scheme}://{host}{port}/robots.txt")).ok()
+    url.host_str()?;
+    let mut robots = url.clone();
+    robots.set_path("/robots.txt");
+    robots.set_fragment(None);
+    Some(robots)
 }
 
 /// Fetch a single source: entrypoint -> discover -> enrich (Oracle #4: inline enrich).
