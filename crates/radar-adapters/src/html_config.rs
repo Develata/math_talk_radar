@@ -247,6 +247,14 @@ fn direct_text(element: &ElementRef) -> String {
 
 fn first_text(document: &Html, selector: &Selector) -> Option<String> {
     let element = document.select(selector).next()?;
+    // Prefer direct text nodes so a titled element that wraps links/spans
+    // (e.g. `<h1>Title <a>Live stream</a></h1>`) is not polluted by descendant
+    // text. Fall back to all descendant text when the direct text is empty
+    // (e.g. the title lives entirely inside a nested <span>).
+    let direct = crate::helpers::clean_text(&direct_text(&element));
+    if !direct.is_empty() {
+        return Some(direct);
+    }
     let text = crate::helpers::clean_text(&element.text().collect::<String>());
     if text.is_empty() { None } else { Some(text) }
 }

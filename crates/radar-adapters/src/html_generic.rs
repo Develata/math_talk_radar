@@ -254,7 +254,7 @@ impl SourceAdapter for HtmlGenericAdapter {
                 let body = crate::helpers::doc_body(&doc.body);
                 let base_url = &doc.url;
                 let document = scraper::Html::parse_document(&body);
-                let fields = helpers::extract_html_fields(&document, base_url);
+                let fields = helpers::extract_html_fields(&document);
                 let media = helpers::detect_media(&document, base_url);
                 let access = helpers::classify_access(&document);
 

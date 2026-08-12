@@ -85,7 +85,7 @@ impl SourceAdapter for RssAdapter {
                 let body = crate::helpers::doc_body(&doc.body);
                 let document = scraper::Html::parse_document(&body);
                 (
-                    helpers::extract_html_fields(&document, &doc.url),
+                    helpers::extract_html_fields(&document),
                     helpers::detect_media(&document, &doc.url),
                     helpers::classify_access(&document),
                 )

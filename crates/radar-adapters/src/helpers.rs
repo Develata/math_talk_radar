@@ -68,7 +68,7 @@ pub struct HtmlFields {
 
 /// Extract title, description, date, and location text from an HTML page using
 /// simple heuristics. Returns all-`None` for empty or malformed input.
-pub fn extract_html_fields(document: &Html, _base_url: &Url) -> HtmlFields {
+pub fn extract_html_fields(document: &Html) -> HtmlFields {
     HtmlFields {
         title: extract_title(document),
         description: extract_description(document),
@@ -319,24 +319,53 @@ fn make_source_evidence(base_url: &Url) -> SourceEvidence {
 // classify_access
 // ===========================================================================
 
+/// Stream `s` into `buf` lowercased with internal whitespace collapsed to
+/// single spaces. `prev_space` tracks whether the last emitted char was a
+/// space (start `true` to trim leading whitespace). Mirrors `normalize_text`
+/// semantics but appends into an existing buffer so the access classifier can
+/// build one lowercase-collapsed buffer in a single pass instead of allocating
+/// a full-body String and re-normalizing it.
+fn push_lower_collapsed(s: &str, buf: &mut String, prev_space: &mut bool) {
+    for ch in s.chars() {
+        if ch.is_whitespace() {
+            if !*prev_space {
+                buf.push(' ');
+            }
+            *prev_space = true;
+        } else {
+            for lc in ch.to_lowercase() {
+                buf.push(lc);
+            }
+            *prev_space = false;
+        }
+    }
+}
+
 /// Conservatively classify the public access level from an HTML document's
 /// visible text and meta tags. Uses word-boundary matching to avoid
 /// false positives like "free" inside "freedom" or "sso" inside a longer word.
 pub fn classify_access(document: &Html) -> PublicAccess {
+    // Build a single lowercase, whitespace-collapsed buffer in one pass over
+    // the document's text nodes and <meta content> values. The keyword
+    // matching only needs a lowercase substring search, so this avoids the
+    // intermediate full-body String plus the `normalize_text` re-allocation
+    // (O(2× body size) → O(body size)).
     let mut text = String::new();
+    let mut prev_space = true;
     for t in document.root_element().text() {
-        text.push_str(t);
-        text.push(' ');
+        push_lower_collapsed(t, &mut text, &mut prev_space);
     }
     if let Some(selector) = cached_selector("meta") {
         for element in document.select(selector) {
             if let Some(content) = element.attr("content") {
-                text.push_str(content);
-                text.push(' ');
+                push_lower_collapsed(content, &mut text, &mut prev_space);
             }
         }
     }
-    let text = normalize_text(&text);
+    // Trim trailing whitespace (mirrors `normalize_text`'s `trim_end`).
+    while text.ends_with(' ') {
+        text.pop();
+    }
 
     const PAYWALLED: &[&str] = &[
         "subscription",
@@ -468,7 +497,7 @@ mod tests {
             <p class="location">Berlin, Germany</p>
         </body>
         </html>"#;
-        let fields = extract_html_fields(&doc(html), &base());
+        let fields = extract_html_fields(&doc(html));
         assert_eq!(fields.title.as_deref(), Some("Real Title"));
         assert_eq!(fields.description.as_deref(), Some("A test description"));
         assert_eq!(fields.date_text.as_deref(), Some("2026-08-08"));
@@ -477,7 +506,7 @@ mod tests {
 
     #[test]
     fn html_fields_empty() {
-        let fields = extract_html_fields(&doc(""), &base());
+        let fields = extract_html_fields(&doc(""));
         assert!(fields.title.is_none());
         assert!(fields.description.is_none());
         assert!(fields.date_text.is_none());
@@ -487,25 +516,25 @@ mod tests {
     #[test]
     fn html_fields_malformed_no_panic() {
         let html = "<<<>><html><head><body>broken";
-        let fields = extract_html_fields(&doc(html), &base());
+        let fields = extract_html_fields(&doc(html));
         let _ = fields;
     }
 
     #[test]
     fn html_fields_title_fallbacks() {
         let html = "<html><head><title>Title Tag</title></head><body></body></html>";
-        let fields = extract_html_fields(&doc(html), &base());
+        let fields = extract_html_fields(&doc(html));
         assert_eq!(fields.title.as_deref(), Some("Title Tag"));
 
         let html = r#"<html><head><meta property="og:title" content="OG Title"></head><body></body></html>"#;
-        let fields = extract_html_fields(&doc(html), &base());
+        let fields = extract_html_fields(&doc(html));
         assert_eq!(fields.title.as_deref(), Some("OG Title"));
     }
 
     #[test]
     fn html_fields_description_fallback_to_p() {
         let html = r#"<html><body><p>short</p><p>This is a longer paragraph with more than twenty characters.</p></body></html>"#;
-        let fields = extract_html_fields(&doc(html), &base());
+        let fields = extract_html_fields(&doc(html));
         assert_eq!(
             fields.description.as_deref(),
             Some("This is a longer paragraph with more than twenty characters.")
@@ -515,7 +544,7 @@ mod tests {
     #[test]
     fn html_fields_date_from_class() {
         let html = r#"<html><body><div class="event-date">August 8, 2026</div></body></html>"#;
-        let fields = extract_html_fields(&doc(html), &base());
+        let fields = extract_html_fields(&doc(html));
         assert_eq!(fields.date_text.as_deref(), Some("August 8, 2026"));
     }
 

@@ -64,6 +64,15 @@ impl SourceAdapter for JsonLdAdapter {
     }
 
     fn plan_enrichment(&self, event: &EventStub, _source: &SourceSpec) -> Vec<FetchPlan> {
+        // When a JSON-LD Event had no `url`, `discover` synthesized the stub's
+        // url from the listing page (`document.url`), which equals
+        // `event.source.source_url`. Re-fetching that same listing page once
+        // per url-less stub would burn the request budget N times for data
+        // already obtained during discover. Emit no fetch; `enrich` then
+        // builds a minimal event from the stub fields (title, date_hint).
+        if event.url == event.source.source_url {
+            return Vec::new();
+        }
         vec![FetchPlan {
             url: event.url.clone(),
             depth: 1,
