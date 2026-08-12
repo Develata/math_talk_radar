@@ -7,13 +7,13 @@
 //! (§47: precision ≥90%). `enrich` extracts fields from the detail page using
 //! the shared HTML helpers.
 
-use scraper::{Html, Selector};
+use scraper::Html;
 
 use radar_core::date::parse_date;
 use radar_core::{
-    AccessInfo, AdapterError, DatePrecision, Event, EventCandidate, EventDate, EventStatus,
-    EventStub, FetchPlan, FetchedDocument, Location, OnlineAvailability, PublicAccess,
-    ScoreComponents, SourceAdapter, SourceEvidence, SourceSpec, event_id,
+    AccessInfo, AdapterError, Event, EventCandidate, EventDate, EventStatus, EventStub, FetchPlan,
+    FetchedDocument, Location, OnlineAvailability, PublicAccess, ScoreComponents, SourceAdapter,
+    SourceEvidence, SourceSpec, event_id,
 };
 
 use crate::helpers;
@@ -145,26 +145,12 @@ fn contains_event_keyword(text: &str) -> bool {
 // Text + event helpers
 // ===========================================================================
 
-/// Collapse runs of whitespace into single spaces and trim. Matches the
-/// behavior of `helpers::clean_text` (kept local to avoid widening visibility).
-fn clean_text(text: &str) -> String {
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
-/// Construct an `EventDate` with `precision = Unknown` and empty original text.
-fn unknown_event_date() -> EventDate {
-    EventDate {
-        start: None,
-        end: None,
-        timezone: None,
-        original_text: String::new(),
-        precision: DatePrecision::Unknown,
-    }
-}
-
 /// Build a minimal [`Event`] from a stub when no detail document is available.
 fn minimal_event_from_stub(stub: &EventStub) -> Event {
-    let date = stub.date_hint.clone().unwrap_or_else(unknown_event_date);
+    let date = stub
+        .date_hint
+        .clone()
+        .unwrap_or_else(|| EventDate::unknown(String::new()));
     Event {
         id: event_id(&stub.title, stub.url.as_str()),
         title: stub.title.clone(),
@@ -206,16 +192,16 @@ impl SourceAdapter for HtmlGenericAdapter {
             return Ok(Vec::new());
         }
         let parsed = Html::parse_document(&body);
-        let Ok(selector) = Selector::parse("a") else {
+        let Some(selector) = helpers::cached_selector("a") else {
             return Ok(Vec::new());
         };
         let base_url = &document.url;
         let mut stubs = Vec::new();
-        for element in parsed.select(&selector) {
+        for element in parsed.select(selector) {
             let Some(href) = element.attr("href") else {
                 continue;
             };
-            let text = clean_text(&element.text().collect::<String>());
+            let text = crate::helpers::clean_text(&element.text().collect::<String>());
             if text.is_empty() {
                 continue;
             }
@@ -281,8 +267,11 @@ impl SourceAdapter for HtmlGenericAdapter {
 
                 // Date: prefer detail page, fall back to stub hint, else Unknown.
                 let date = match fields.date_text.as_deref() {
-                    Some(t) => parse_date(t).unwrap_or_else(|_| unknown_event_date()),
-                    None => stub.date_hint.clone().unwrap_or_else(unknown_event_date),
+                    Some(t) => parse_date(t).unwrap_or_else(|_| EventDate::unknown(String::new())),
+                    None => stub
+                        .date_hint
+                        .clone()
+                        .unwrap_or_else(|| EventDate::unknown(String::new())),
                 };
 
                 let location = fields.location_text.map(|name| Location {

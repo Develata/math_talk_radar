@@ -3,7 +3,32 @@
 
 pub use scraper::Html;
 use scraper::Selector;
+use std::sync::OnceLock;
 use url::Url;
+
+pub(crate) fn cached_selector(selector_str: &'static str) -> Option<&'static Selector> {
+    static SELECTORS: OnceLock<std::collections::HashMap<&'static str, Selector>> = OnceLock::new();
+    let map = SELECTORS.get_or_init(|| {
+        let mut m = std::collections::HashMap::new();
+        let candidates: &[&'static str] = &[
+            "p",
+            "time",
+            r#"[class*="date"], [id*="date"], [class*="time"], [id*="time"], [class*="when"], [id*="when"]"#,
+            r#"[class*="location"], [id*="location"], [class*="venue"], [id*="venue"], [class*="place"], [id*="place"], [class*="address"], [id*="address"]"#,
+            "a",
+            "iframe",
+            "video",
+            "meta",
+        ];
+        for &s in candidates {
+            if let Ok(sel) = Selector::parse(s) {
+                m.insert(s, sel);
+            }
+        }
+        m
+    });
+    map.get(selector_str)
+}
 
 use radar_core::{
     EventType, MediaId, MediaResource, MediaType, PublicAccess, SourceEvidence, contains_phrase,
@@ -69,8 +94,8 @@ fn extract_description(document: &Html) -> Option<String> {
     if let Some(content) = select_meta_content(document, "property", "og:description") {
         return Some(content);
     }
-    let selector = Selector::parse("p").ok()?;
-    for element in document.select(&selector) {
+    let selector = cached_selector("p")?;
+    for element in document.select(selector) {
         let text = clean_text(&element.text().collect::<String>());
         if text.chars().count() > 20 {
             return Some(text);
@@ -80,8 +105,8 @@ fn extract_description(document: &Html) -> Option<String> {
 }
 
 fn extract_date_text(document: &Html) -> Option<String> {
-    if let Ok(selector) = Selector::parse("time") {
-        for element in document.select(&selector) {
+    if let Some(selector) = cached_selector("time") {
+        for element in document.select(selector) {
             if let Some(dt) = element.attr("datetime") {
                 let cleaned = clean_text(dt);
                 if !cleaned.is_empty() {
@@ -94,10 +119,10 @@ fn extract_date_text(document: &Html) -> Option<String> {
             }
         }
     }
-    if let Ok(selector) = Selector::parse(
+    if let Some(selector) = cached_selector(
         r#"[class*="date"], [id*="date"], [class*="time"], [id*="time"], [class*="when"], [id*="when"]"#,
     ) {
-        for element in document.select(&selector) {
+        for element in document.select(selector) {
             let text = clean_text(&element.text().collect::<String>());
             if !text.is_empty() {
                 return Some(text);
@@ -108,10 +133,10 @@ fn extract_date_text(document: &Html) -> Option<String> {
 }
 
 fn extract_location_text(document: &Html) -> Option<String> {
-    if let Ok(selector) = Selector::parse(
+    if let Some(selector) = cached_selector(
         r#"[class*="location"], [id*="location"], [class*="venue"], [id*="venue"], [class*="place"], [id*="place"], [class*="address"], [id*="address"]"#,
     ) {
-        for element in document.select(&selector) {
+        for element in document.select(selector) {
             let text = clean_text(&element.text().collect::<String>());
             if !text.is_empty() {
                 return Some(text);
@@ -140,8 +165,15 @@ fn select_meta_content(document: &Html, attr: &str, value: &str) -> Option<Strin
     }
 }
 
-fn clean_text(text: &str) -> String {
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
+pub(crate) fn clean_text(text: &str) -> String {
+    let mut result = String::with_capacity(text.len());
+    for (i, word) in text.split_whitespace().enumerate() {
+        if i > 0 {
+            result.push(' ');
+        }
+        result.push_str(word);
+    }
+    result
 }
 
 // ===========================================================================
@@ -152,8 +184,8 @@ fn clean_text(text: &str) -> String {
 pub fn detect_media(document: &Html, base_url: &Url) -> Vec<MediaResource> {
     let mut results = Vec::new();
 
-    if let Ok(selector) = Selector::parse("a") {
-        for element in document.select(&selector) {
+    if let Some(selector) = cached_selector("a") {
+        for element in document.select(selector) {
             if let Some(href) = element.attr("href")
                 && let Ok(resolved) = base_url.join(href)
             {
@@ -166,8 +198,8 @@ pub fn detect_media(document: &Html, base_url: &Url) -> Vec<MediaResource> {
         }
     }
 
-    if let Ok(selector) = Selector::parse("iframe") {
-        for element in document.select(&selector) {
+    if let Some(selector) = cached_selector("iframe") {
+        for element in document.select(selector) {
             if let Some(src) = element.attr("src")
                 && let Ok(resolved) = base_url.join(src)
             {
@@ -176,8 +208,8 @@ pub fn detect_media(document: &Html, base_url: &Url) -> Vec<MediaResource> {
         }
     }
 
-    if let Ok(selector) = Selector::parse("video") {
-        for element in document.select(&selector) {
+    if let Some(selector) = cached_selector("video") {
+        for element in document.select(selector) {
             if let Some(src) = element.attr("src")
                 && let Ok(resolved) = base_url.join(src)
             {
@@ -296,8 +328,8 @@ pub fn classify_access(document: &Html) -> PublicAccess {
         text.push_str(t);
         text.push(' ');
     }
-    if let Ok(selector) = Selector::parse("meta") {
-        for element in document.select(&selector) {
+    if let Some(selector) = cached_selector("meta") {
+        for element in document.select(selector) {
             if let Some(content) = element.attr("content") {
                 text.push_str(content);
                 text.push(' ');

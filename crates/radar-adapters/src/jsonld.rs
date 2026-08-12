@@ -9,10 +9,10 @@
 //! unlike a name in body text or a title).
 use radar_core::date::parse_date;
 use radar_core::{
-    AccessInfo, AdapterError, DatePrecision, Event, EventCandidate, EventDate, EventStatus,
-    EventStub, FetchPlan, FetchedDocument, Location, OnlineAvailability, PersonHit, PersonRole,
-    PublicAccess, ScoreComponents, SourceAdapter, SourceEvidence, SourceSpec, Talk, TalkId,
-    deterministic_id, event_id,
+    AccessInfo, AdapterError, Event, EventCandidate, EventDate, EventStatus, EventStub, FetchPlan,
+    FetchedDocument, Location, OnlineAvailability, PersonHit, PersonRole, PublicAccess,
+    ScoreComponents, SourceAdapter, SourceEvidence, SourceSpec, Talk, TalkId, deterministic_id,
+    event_id,
 };
 use scraper::{Html, Selector};
 use url::Url;
@@ -42,15 +42,10 @@ impl SourceAdapter for JsonLdAdapter {
                     .and_then(|v| v.as_str())
                     .and_then(|s| Url::parse(s).ok())
                     .unwrap_or_else(|| document.url.clone());
-                let date_hint = ev.get("startDate").and_then(|v| v.as_str()).map(|s| {
-                    parse_date(s).unwrap_or_else(|_| EventDate {
-                        start: None,
-                        end: None,
-                        timezone: None,
-                        original_text: s.to_string(),
-                        precision: DatePrecision::Unknown,
-                    })
-                });
+                let date_hint = ev
+                    .get("startDate")
+                    .and_then(|v| v.as_str())
+                    .map(|s| parse_date(s).unwrap_or_else(|_| EventDate::unknown(s.to_string())));
                 stubs.push(EventStub {
                     title,
                     url,
@@ -151,13 +146,10 @@ impl SourceAdapter for JsonLdAdapter {
             }
         }
 
-        let date = stub.date_hint.clone().unwrap_or_else(|| EventDate {
-            start: None,
-            end: None,
-            timezone: None,
-            original_text: String::new(),
-            precision: DatePrecision::Unknown,
-        });
+        let date = stub
+            .date_hint
+            .clone()
+            .unwrap_or_else(|| EventDate::unknown(String::new()));
 
         let event = Event {
             id: event_id(&stub.title, stub.url.as_str()),

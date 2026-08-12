@@ -11,9 +11,9 @@ use url::Url;
 
 use radar_core::date::parse_date;
 use radar_core::{
-    AccessInfo, AdapterError, DatePrecision, Event, EventCandidate, EventDate, EventStatus,
-    EventStub, FetchPlan, FetchedDocument, Location, OnlineAvailability, PublicAccess,
-    ScoreComponents, SourceAdapter, SourceEvidence, SourceSpec, event_id,
+    AccessInfo, AdapterError, Event, EventCandidate, EventDate, EventStatus, EventStub, FetchPlan,
+    FetchedDocument, Location, OnlineAvailability, PublicAccess, ScoreComponents, SourceAdapter,
+    SourceEvidence, SourceSpec, event_id,
 };
 
 use crate::helpers;
@@ -41,13 +41,8 @@ impl SourceAdapter for RssAdapter {
                 let link = entry.links.first()?;
                 let url = Url::parse(&link.href).ok()?;
                 let date_hint = entry.published.or(entry.updated).map(|dt| {
-                    parse_date(&dt.date_naive().to_string()).unwrap_or_else(|_| EventDate {
-                        start: None,
-                        end: None,
-                        timezone: None,
-                        original_text: String::new(),
-                        precision: DatePrecision::Unknown,
-                    })
+                    parse_date(&dt.date_naive().to_string())
+                        .unwrap_or_else(|_| EventDate::unknown(String::new()))
                 });
                 Some(EventStub {
                     title,
@@ -103,13 +98,7 @@ impl SourceAdapter for RssAdapter {
         };
 
         let date = stub.date_hint.clone().unwrap_or_else(|| {
-            parse_date("").unwrap_or_else(|_| EventDate {
-                start: None,
-                end: None,
-                timezone: None,
-                original_text: String::new(),
-                precision: DatePrecision::Unknown,
-            })
+            parse_date("").unwrap_or_else(|_| EventDate::unknown(String::new()))
         });
 
         let event = Event {

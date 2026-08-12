@@ -60,7 +60,7 @@ impl SourceAdapter for HtmlConfigAdapter {
                         Some(t) => t,
                         None => continue,
                     },
-                    None => clean_text(&link.text().collect::<String>()),
+                    None => crate::helpers::clean_text(&link.text().collect::<String>()),
                 };
                 if title.is_empty() {
                     continue;
@@ -231,10 +231,6 @@ fn parse_selector(
     })
 }
 
-fn clean_text(text: &str) -> String {
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
 /// Collect text from direct `Node::Text` children only, ignoring text inside
 /// nested elements. Used for date extraction where a `<dt>` or `<span>` wraps
 /// the date text alongside `<a>` links (e.g. ams-calendar's `dt.event_dates`
@@ -251,7 +247,7 @@ fn direct_text(element: &ElementRef) -> String {
 
 fn first_text(document: &Html, selector: &Selector) -> Option<String> {
     let element = document.select(selector).next()?;
-    let text = clean_text(&element.text().collect::<String>());
+    let text = crate::helpers::clean_text(&element.text().collect::<String>());
     if text.is_empty() { None } else { Some(text) }
 }
 
@@ -263,14 +259,14 @@ fn first_date(document: &Html, selector: &Selector) -> Option<EventDate> {
     {
         return Some(d);
     }
-    let direct = clean_text(&direct_text(&element));
+    let direct = crate::helpers::clean_text(&direct_text(&element));
     if !direct.is_empty()
         && let Ok(d) = parse_date(&direct)
         && d.precision != DatePrecision::Unknown
     {
         return Some(d);
     }
-    let text = clean_text(&element.text().collect::<String>());
+    let text = crate::helpers::clean_text(&element.text().collect::<String>());
     if text.is_empty() {
         return None;
     }
@@ -280,7 +276,7 @@ fn first_date(document: &Html, selector: &Selector) -> Option<EventDate> {
 
 fn first_text_in(scope: &ElementRef, selector: &Selector) -> Option<String> {
     let element = scope.select(selector).next()?;
-    let text = clean_text(&element.text().collect::<String>());
+    let text = crate::helpers::clean_text(&element.text().collect::<String>());
     if text.is_empty() { None } else { Some(text) }
 }
 
@@ -292,14 +288,14 @@ fn first_date_in(scope: &ElementRef, selector: &Selector, year_hint: i32) -> Opt
     {
         return Some(d);
     }
-    let direct = clean_text(&direct_text(&element));
+    let direct = crate::helpers::clean_text(&direct_text(&element));
     if !direct.is_empty()
         && let Ok(d) = parse_date_with_year_hint(&direct, year_hint)
         && d.precision != DatePrecision::Unknown
     {
         return Some(d);
     }
-    let text = clean_text(&element.text().collect::<String>());
+    let text = crate::helpers::clean_text(&element.text().collect::<String>());
     if text.is_empty() {
         return None;
     }
@@ -311,7 +307,7 @@ fn all_texts(document: &Html, selector: &Selector) -> Vec<String> {
     document
         .select(selector)
         .filter_map(|el| {
-            let text = clean_text(&el.text().collect::<String>());
+            let text = crate::helpers::clean_text(&el.text().collect::<String>());
             if text.is_empty() { None } else { Some(text) }
         })
         .collect()
@@ -348,15 +344,7 @@ fn optional_all_texts(
 }
 
 fn parse_or_unknown(text: &str) -> EventDate {
-    // parse_date is documented to always return Ok; the fallback is a defensive
-    // guard, not a reachable branch.
-    parse_date(text).unwrap_or_else(|_| EventDate {
-        start: None,
-        end: None,
-        timezone: None,
-        original_text: text.to_string(),
-        precision: DatePrecision::Unknown,
-    })
+    parse_date(text).unwrap_or_else(|_| EventDate::unknown(text.to_string()))
 }
 
 fn speaker_hit(name: &str) -> PersonHit {
