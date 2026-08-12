@@ -168,6 +168,18 @@ fn re_iso_date_range() -> &'static Regex {
     })
 }
 
+// Space-separated ISO date range: "2026-08-08 2026-08-10" (no dash/slash).
+// Distinct from `re_iso_date_range` which requires an explicit separator; a
+// bare space would otherwise be truncated at the first space by the
+// single-date path, silently degrading a range to a single Day.
+fn re_iso_date_range_space() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r"^(\d{4}-\d{2}-\d{2})\s+(\d{4}-\d{2}-\d{2})$")
+            .expect("statically verified regex literal")
+    })
+}
+
 // --- Year-less variants (used by `parse_date_with_year_hint`) ---------------
 //
 // Mirrors the five patterns above but without the year capture. Anchored with
@@ -249,8 +261,11 @@ pub fn parse_date_with_year_hint(text: &str, year_hint: i32) -> Result<EventDate
 fn parse_date_inner(text: &str, year_hint: Option<i32>) -> Result<EventDate, DateError> {
     let trimmed = text.trim();
 
-    // 1. ISO 8601 date range: "2026-08-08 - 2026-08-10" or "2026-08-08/2026-08-10".
-    if let Some(ed) = try_iso_date_range(trimmed, text) {
+    // 1. ISO 8601 date range: "2026-08-08 - 2026-08-10" or "2026-08-08/2026-08-10",
+    //    including the space-separated form "2026-08-08 2026-08-10".
+    if let Some(ed) =
+        try_iso_date_range(trimmed, text).or_else(|| try_iso_date_range_space(trimmed, text))
+    {
         return Ok(ed);
     }
 
@@ -297,6 +312,23 @@ fn parse_date_inner(text: &str, year_hint: Option<i32>) -> Result<EventDate, Dat
 /// Separator may be en-dash, ASCII hyphen, or slash (ISO 8601 interval).
 fn try_iso_date_range(trimmed: &str, original: &str) -> Option<EventDate> {
     let caps = re_iso_date_range().captures(trimmed)?;
+    let start = NaiveDate::parse_from_str(&caps[1], "%Y-%m-%d").ok()?;
+    let end = NaiveDate::parse_from_str(&caps[2], "%Y-%m-%d").ok()?;
+    if start > end {
+        return None;
+    }
+    Some(EventDate {
+        start: Some(DateTimeOrDate::Date(start)),
+        end: Some(DateTimeOrDate::Date(end)),
+        timezone: None,
+        original_text: original.to_string(),
+        precision: DatePrecision::Range,
+    })
+}
+
+/// Space-separated ISO date range: "2026-08-08 2026-08-10" (no dash/slash).
+fn try_iso_date_range_space(trimmed: &str, original: &str) -> Option<EventDate> {
+    let caps = re_iso_date_range_space().captures(trimmed)?;
     let start = NaiveDate::parse_from_str(&caps[1], "%Y-%m-%d").ok()?;
     let end = NaiveDate::parse_from_str(&caps[2], "%Y-%m-%d").ok()?;
     if start > end {
@@ -948,6 +980,36 @@ mod tests {
         assert_eq!(ed4.precision, DatePrecision::Range);
         assert_eq!(start_date(&ed4), d(2026, 8, 8));
         assert_eq!(end_date(&ed4), d(2026, 8, 8));
+    }
+
+    // Space-separated ISO range (no dash/slash) must not silently degrade to a
+    // single Day by truncating at the first space.
+    #[test]
+    fn date_007_iso_date_range_space_separated() {
+        let ed = parse_date("2026-08-08 2026-08-10").unwrap();
+        assert_eq!(ed.precision, DatePrecision::Range);
+        assert_eq!(start_date(&ed), d(2026, 8, 8));
+        assert_eq!(end_date(&ed), d(2026, 8, 10));
+        assert_eq!(ed.original_text, "2026-08-08 2026-08-10");
+
+        // Cross-year variant.
+        let ed2 = parse_date("2026-12-30 2027-01-02").unwrap();
+        assert_eq!(ed2.precision, DatePrecision::Range);
+        assert_eq!(start_date(&ed2), d(2026, 12, 30));
+        assert_eq!(end_date(&ed2), d(2027, 1, 2));
+
+        // Multiple spaces between the two dates.
+        let ed3 = parse_date("2026-08-08   2026-08-10").unwrap();
+        assert_eq!(ed3.precision, DatePrecision::Range);
+        assert_eq!(start_date(&ed3), d(2026, 8, 8));
+        assert_eq!(end_date(&ed3), d(2026, 8, 10));
+
+        // A datetime with a space (e.g. "2026-08-08 10:00:00") must NOT be
+        // mistaken for a range — it falls through to single-date truncation.
+        let ed4 = parse_date("2026-08-08 10:00:00").unwrap();
+        assert_eq!(ed4.precision, DatePrecision::Day);
+        assert_eq!(start_date(&ed4), d(2026, 8, 8));
+        assert!(ed4.end.is_none());
     }
 
     #[test]

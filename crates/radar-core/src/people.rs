@@ -154,7 +154,10 @@ pub fn match_scholars(
             canonical_name: scholar.canonical_name.clone(),
             matched_text: matched_text.to_string(),
             role,
-            evidence: Some(matched_text.to_string()),
+            // `evidence` is reserved for a longer context span (e.g. the
+            // sentence around the match). v0.1 does not extract context spans,
+            // so it stays `None` rather than duplicating `matched_text`.
+            evidence: None,
             confidence,
             scholar_tags: scholar.tags.clone(),
         });

@@ -505,6 +505,31 @@ mod tests {
         assert_eq!(a, b, "tracking params must be dropped");
     }
 
+    // Generic keys `ref`, `source`, `ver` are NOT tracking params — they may
+    // distinguish distinct calendar references, so they must be preserved to
+    // avoid over-merging (§47).
+    #[test]
+    fn canonicalize_url_preserves_generic_ref_source_ver() {
+        let a = canonicalize_url(&Url::parse("https://example.com/e?ref=calendar_a").unwrap());
+        let b = canonicalize_url(&Url::parse("https://example.com/e?ref=calendar_b").unwrap());
+        assert_ne!(a, b, "distinct ref values must not canonicalize equal");
+
+        let c = canonicalize_url(&Url::parse("https://example.com/e?source=feed_a").unwrap());
+        let d = canonicalize_url(&Url::parse("https://example.com/e?source=feed_b").unwrap());
+        assert_ne!(c, d, "distinct source values must not canonicalize equal");
+
+        let e = canonicalize_url(&Url::parse("https://example.com/e?ver=1").unwrap());
+        let f = canonicalize_url(&Url::parse("https://example.com/e?ver=2").unwrap());
+        assert_ne!(e, f, "distinct ver values must not canonicalize equal");
+
+        // A tracking param alongside a generic ref: tracking dropped, ref kept.
+        let g = canonicalize_url(
+            &Url::parse("https://example.com/e?utm_source=nl&ref=calendar_a").unwrap(),
+        );
+        let h = canonicalize_url(&Url::parse("https://example.com/e?ref=calendar_a").unwrap());
+        assert_eq!(g, h, "utm_source dropped, ref preserved");
+    }
+
     #[test]
     fn canonicalize_url_sorts_query_params() {
         let a = canonicalize_url(&Url::parse("https://example.com/e?b=2&a=1").unwrap());

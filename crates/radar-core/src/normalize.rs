@@ -12,6 +12,12 @@ use url::Url;
 /// URL canonicalization (tracking, analytics, session surface forms). All
 /// other params are preserved — dropping them risks merging distinct recurring
 /// sessions distinguished by `?session=N`, `?date=...`, etc. (§47).
+///
+/// Generic keys like `ref`, `source`, and `ver` are intentionally excluded:
+/// they are too ambiguous (a `?ref=calendar_a` vs `?ref=calendar_b` pair may
+/// distinguish distinct calendar references) and dropping them risks
+/// over-merging (§47). Only well-known analytics/tracking namespaces belong
+/// here.
 const TRACKING_PARAM_KEYS: &[&str] = &[
     "utm_source",
     "utm_medium",
@@ -22,8 +28,6 @@ const TRACKING_PARAM_KEYS: &[&str] = &[
     "utm_referrer",
     "fbclid",
     "gclid",
-    "ref",
-    "source",
     "mc_cid",
     "mc_eid",
     "_ga",
@@ -35,7 +39,6 @@ const TRACKING_PARAM_KEYS: &[&str] = &[
     "_hsenc",
     "_hsmi",
     "hsctatracking",
-    "ver",
 ];
 
 fn is_tracking_param(key: &str) -> bool {

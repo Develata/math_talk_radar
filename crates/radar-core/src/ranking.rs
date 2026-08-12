@@ -151,20 +151,30 @@ pub fn score_event(
     //    wolf/crafoord tags) with Speaker/Lecturer → 10, Organizer/Panelist → 5;
     //    any non-TitleMention/Unknown role → 3. TitleMention and Unknown → 0.
     let mut people_score: u8 = 0;
-    let mut people_winner: Option<&str> = None;
+    let mut people_winner: Option<(&str, PersonRole)> = None;
     for person in &event.people {
         let important = is_important_scholar(&person.scholar_tags);
         let s = person_signal(person.role, important);
         if s > people_score {
             people_score = s;
-            people_winner = Some(person.canonical_name.as_str());
+            people_winner = Some((person.canonical_name.as_str(), person.role));
         }
     }
     let people = people_score.min(MAX_PEOPLE);
     if people >= 5
-        && let Some(name) = people_winner
+        && let Some((name, role)) = people_winner
     {
-        rank_reasons.push(format!("important_speaker: {}", name));
+        // Role-specific reason: the threshold (≥5) is reached only by an
+        // important Speaker/Lecturer (signal 10) or an important
+        // Organizer/Panelist (signal 5), so the label must reflect the
+        // winner's actual role rather than defaulting to "important_speaker".
+        let label = match role {
+            PersonRole::Speaker | PersonRole::Lecturer => "important_speaker",
+            PersonRole::Organizer => "important_organizer",
+            PersonRole::Panelist => "important_panelist",
+            _ => "important_person",
+        };
+        rank_reasons.push(format!("{}: {}", label, name));
     }
 
     // 6. Completeness component (cap MAX_COMPLETENESS).
@@ -227,12 +237,15 @@ fn access_signal(online: OnlineAvailability) -> u8 {
 }
 
 /// Whether `scholar_tags` mark an "important" scholar (Fields/Abel/Wolf/
-/// Crafoord laureate), case-insensitive substring match.
+/// Crafoord laureate). Exact case-insensitive match: scholar tags are
+/// curator-controlled values from `config/scholars.toml` (e.g. "fields",
+/// "wolf", "abel", "crafoord"), so a substring test would false-positive on
+/// tags like "wolfram" containing "wolf".
 fn is_important_scholar(scholar_tags: &[String]) -> bool {
     const MARKERS: [&str; 4] = ["fields", "abel", "wolf", "crafoord"];
     scholar_tags
         .iter()
-        .any(|tag| MARKERS.iter().any(|m| tag.to_lowercase().contains(m)))
+        .any(|tag| MARKERS.iter().any(|m| tag.to_lowercase() == *m))
 }
 
 /// People signal: important Speaker/Lecturer → 10, important Organizer/Panelist

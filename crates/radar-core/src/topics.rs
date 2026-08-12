@@ -21,8 +21,45 @@ pub struct TopicRecord {
     pub aliases: Vec<String>,
 }
 
-/// Match `text` against `topics`, returning one [`TopicMatch`] per matched
-/// topic (§7, §6.2).
+/// Pre-normalized topic representation: canonical name and every candidate
+/// (canonical + aliases) already run through [`normalize_name`]. Built once
+/// per scan via [`normalize_topics`] and reused across every event by
+/// [`match_topics_normalized`], so the per-event hot path skips the
+/// normalization it would otherwise repeat for each candidate.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NormalizedTopic {
+    pub id: String,
+    pub canonical_name: String,
+    /// (original surface form, normalized form, is_canonical). Canonical name
+    /// is first so a canonical match beats alias matches; aliases follow in
+    /// declared order so the first alias wins on a tie.
+    candidates: Vec<(String, String, bool)>,
+}
+
+/// Pre-normalize `topics` once per scan so the per-event matching path no
+/// longer re-normalizes each candidate. The returned [`Vec<NormalizedTopic>`]
+/// is fed to [`match_topics_normalized`].
+pub fn normalize_topics(topics: &[TopicRecord]) -> Vec<NormalizedTopic> {
+    topics
+        .iter()
+        .map(|topic| {
+            let mut candidates = Vec::with_capacity(topic.aliases.len() + 1);
+            candidates.push((topic.name.clone(), normalize_name(&topic.name), true));
+            for alias in &topic.aliases {
+                candidates.push((alias.clone(), normalize_name(alias), false));
+            }
+            NormalizedTopic {
+                id: topic.id.clone(),
+                canonical_name: topic.name.clone(),
+                candidates,
+            }
+        })
+        .collect()
+}
+
+/// Match `text` against pre-normalized `topics`, returning one [`TopicMatch`]
+/// per matched topic (§7, §6.2). This is the hot path used per event during a
+/// scan; callers build `topics` once via [`normalize_topics`].
 ///
 /// Each topic contributes at most one match: the canonical name (confidence
 /// `1.0`) beats any alias match (confidence `0.8`); on a tie the first
@@ -30,40 +67,31 @@ pub struct TopicRecord {
 /// word-boundary matching so "analysis" does not match inside
 /// "psychoanalysis"; multi-word phrases use substring matching on the
 /// normalized text.
-pub fn match_topics(text: &str, topics: &[TopicRecord]) -> Vec<TopicMatch> {
+pub fn match_topics_normalized(text: &str, topics: &[NormalizedTopic]) -> Vec<TopicMatch> {
     let norm_text = normalize_name(text);
 
     let mut matches: Vec<TopicMatch> = Vec::new();
     let mut seen: HashMap<String, usize> = HashMap::new();
 
     for topic in topics {
-        // Candidates: (original surface form, is_canonical). Canonical name is
-        // first so a canonical match beats alias matches; aliases follow in
-        // declared order so the first alias wins on a tie.
-        let mut candidates: Vec<(&str, bool)> = vec![(&topic.name, true)];
-        for alias in &topic.aliases {
-            candidates.push((alias, false));
-        }
-
         // Select the best matching candidate. Replace only when a canonical
         // match supersedes a prior alias match; otherwise the first match wins.
         let mut best: Option<(&str, bool)> = None;
-        for &(candidate, is_canonical) in &candidates {
-            let norm_candidate = normalize_name(candidate);
-            if norm_candidate.is_empty() {
+        for (surface, normalized, is_canonical) in &topic.candidates {
+            if normalized.is_empty() {
                 continue;
             }
             // `contains_phrase` handles both single and multi-word candidates
             // with word-boundary awareness, so "analysis" does not match inside
             // "psychoanalysis" and "pde" matches "(pde)" or "pde,".
-            let is_match = contains_phrase(&norm_text, &norm_candidate);
+            let is_match = contains_phrase(&norm_text, normalized);
             if is_match {
                 let take = match best {
                     None => true,
-                    Some((_, prev_canonical)) => is_canonical && !prev_canonical,
+                    Some((_, prev_canonical)) => *is_canonical && !prev_canonical,
                 };
                 if take {
-                    best = Some((candidate, is_canonical));
+                    best = Some((surface, *is_canonical));
                 }
             }
         }
@@ -72,7 +100,7 @@ pub fn match_topics(text: &str, topics: &[TopicRecord]) -> Vec<TopicMatch> {
             let confidence = if is_canonical { 1.0 } else { 0.8 };
             let m = TopicMatch {
                 topic_id: topic.id.clone(),
-                canonical_name: topic.name.clone(),
+                canonical_name: topic.canonical_name.clone(),
                 matched_text: original.to_string(),
                 confidence,
             };
@@ -88,6 +116,15 @@ pub fn match_topics(text: &str, topics: &[TopicRecord]) -> Vec<TopicMatch> {
     }
 
     matches
+}
+
+/// Match `text` against `topics`, returning one [`TopicMatch`] per matched
+/// topic (§7, §6.2). Convenience wrapper that pre-normalizes `topics` on each
+/// call; for scan hot paths prefer building a [`NormalizedTopic`] list once
+/// via [`normalize_topics`] and calling [`match_topics_normalized`] per event.
+pub fn match_topics(text: &str, topics: &[TopicRecord]) -> Vec<TopicMatch> {
+    let normalized = normalize_topics(topics);
+    match_topics_normalized(text, &normalized)
 }
 
 #[cfg(test)]
