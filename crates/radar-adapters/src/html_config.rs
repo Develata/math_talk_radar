@@ -29,7 +29,7 @@ impl SourceAdapter for HtmlConfigAdapter {
         source: &SourceSpec,
     ) -> Result<Vec<EventStub>, AdapterError> {
         let selectors = require_selectors(source)?;
-        let body = doc_body(&document.body);
+        let body = crate::helpers::doc_body(&document.body);
         let html = Html::parse_document(&body);
         let list_selector = parse_selector(&source.id, "list", &selectors.list)?;
         let link_selector = parse_selector(&source.id, "list_link", &selectors.list_link)?;
@@ -116,7 +116,7 @@ impl SourceAdapter for HtmlConfigAdapter {
         let stub_source = event.source.clone();
         let date_hint = event.date_hint.clone();
 
-        let body = doc_body(&doc.body);
+        let body = crate::helpers::doc_body(&doc.body);
         let base_url = doc.final_url.clone();
         let html = Html::parse_document(&body);
 
@@ -218,21 +218,6 @@ fn require_selectors(source: &SourceSpec) -> Result<&HtmlSelectors, AdapterError
             source_id: source.id.clone(),
             message: "configured HTML adapter requires selectors".into(),
         })
-}
-
-fn doc_body<'a>(body: &'a [u8]) -> std::borrow::Cow<'a, str> {
-    match std::str::from_utf8(body) {
-        Ok(s) => std::borrow::Cow::Borrowed(s),
-        Err(_) => std::borrow::Cow::Owned(
-            body.utf8_chunks()
-                .flat_map(|c| {
-                    c.valid()
-                        .chars()
-                        .chain(std::iter::repeat_n('\u{FFFD}', c.invalid().len()))
-                })
-                .collect(),
-        ),
-    }
 }
 
 fn parse_selector(
@@ -799,7 +784,7 @@ mod tests {
     #[test]
     fn doc_body_valid_utf8_is_borrowed() {
         let body = b"<html><body>hello</body></html>";
-        let s = doc_body(body);
+        let s = crate::helpers::doc_body(body);
         assert!(matches!(s, std::borrow::Cow::Borrowed(_)));
         assert_eq!(s.as_ref(), "<html><body>hello</body></html>");
     }
@@ -808,7 +793,7 @@ mod tests {
     fn doc_body_invalid_utf8_replaces_with_replacement_char() {
         // 0xf6 is 'ö' in ISO-8859-1, invalid in UTF-8.
         let body: &[u8] = b"<html><body>G\xf6del Seminar</body></html>";
-        let s = doc_body(body);
+        let s = crate::helpers::doc_body(body);
         assert!(matches!(s, std::borrow::Cow::Owned(_)));
         assert_eq!(s.as_ref(), "<html><body>G\u{FFFD}del Seminar</body></html>");
     }

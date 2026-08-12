@@ -37,8 +37,8 @@ impl SourceAdapter for IcsAdapter {
             });
         }
 
-        let text = std::str::from_utf8(&document.body).unwrap_or("");
-        let unfolded = icalendar::parser::unfold(text);
+        let text = crate::helpers::doc_body(&document.body);
+        let unfolded = icalendar::parser::unfold(&text);
         let calendar =
             icalendar::parser::read_calendar(&unfolded).map_err(|e| AdapterError::Parse {
                 source_id: source.id.clone(),
@@ -168,7 +168,7 @@ impl SourceAdapter for IcsAdapter {
 /// (VCALENDAR > VEVENT), while a malicious deeply nested payload has depth
 /// proportional to the nesting.
 fn max_nesting_depth(body: &[u8]) -> usize {
-    let text = std::str::from_utf8(body).unwrap_or("");
+    let text = crate::helpers::doc_body(body);
     let mut depth: usize = 0;
     let mut max_depth: usize = 0;
     for line in text.lines() {

@@ -28,9 +28,9 @@ impl SourceAdapter for JsonLdAdapter {
         document: &FetchedDocument,
         source: &SourceSpec,
     ) -> Result<Vec<EventStub>, AdapterError> {
-        let html = std::str::from_utf8(&document.body).unwrap_or("");
+        let html = crate::helpers::doc_body(&document.body);
         let mut stubs = Vec::new();
-        for block in extract_jsonld_blocks(html) {
+        for block in extract_jsonld_blocks(&html) {
             for ev in find_events(&block).into_iter().flatten() {
                 let title = ev
                     .get("name")
@@ -88,10 +88,10 @@ impl SourceAdapter for JsonLdAdapter {
         let mut access = PublicAccess::Unknown;
 
         if let Some(doc) = documents.first() {
-            let html = std::str::from_utf8(&doc.body).unwrap_or("");
-            let document = scraper::Html::parse_document(html);
+            let html = crate::helpers::doc_body(&doc.body);
+            let document = scraper::Html::parse_document(&html);
             access = helpers::classify_access(&document);
-            for block in extract_jsonld_blocks(html) {
+            for block in extract_jsonld_blocks(&html) {
                 for ev in find_events(&block).into_iter().flatten() {
                     if ev.get("name").and_then(|v| v.as_str()) != Some(&stub.title) {
                         continue;

@@ -265,9 +265,9 @@ impl SourceAdapter for HtmlGenericAdapter {
         let event = match documents.first() {
             None => minimal_event_from_stub(&stub),
             Some(doc) => {
-                let body = std::str::from_utf8(&doc.body).unwrap_or("");
+                let body = crate::helpers::doc_body(&doc.body);
                 let base_url = &doc.url;
-                let document = scraper::Html::parse_document(body);
+                let document = scraper::Html::parse_document(&body);
                 let fields = helpers::extract_html_fields(&document, base_url);
                 let media = helpers::detect_media(&document, base_url);
                 let access = helpers::classify_access(&document);

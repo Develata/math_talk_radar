@@ -10,6 +10,24 @@ use radar_core::{
     deterministic_id, normalize_text,
 };
 
+/// Decode a document body as UTF-8 with U+FFFD replacement for invalid bytes.
+/// Non-UTF-8 pages preserve their valid bytes instead of becoming empty
+/// strings (§66 — parser cannot silently drop data on encoding errors).
+pub(crate) fn doc_body<'a>(body: &'a [u8]) -> std::borrow::Cow<'a, str> {
+    match std::str::from_utf8(body) {
+        Ok(s) => std::borrow::Cow::Borrowed(s),
+        Err(_) => std::borrow::Cow::Owned(
+            body.utf8_chunks()
+                .flat_map(|c| {
+                    c.valid()
+                        .chars()
+                        .chain(std::iter::repeat_n('\u{FFFD}', c.invalid().len()))
+                })
+                .collect(),
+        ),
+    }
+}
+
 // ===========================================================================
 // HtmlFields + extract_html_fields
 // ===========================================================================

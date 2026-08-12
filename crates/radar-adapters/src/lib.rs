@@ -14,8 +14,8 @@ pub mod jsonld;
 pub mod rss;
 pub mod sites;
 
-use radar_core::{AdapterError, EventCandidate};
-use radar_core::{AdapterKind, EventStub, FetchPlan, FetchedDocument, SourceAdapter, SourceSpec};
+use radar_core::AdapterKind;
+use radar_core::SourceAdapter;
 
 /// Select the default [`SourceAdapter`] for a source's declared adapter kind.
 /// `None` falls back to the generic HTML adapter (last resort, §P-5).
@@ -28,27 +28,4 @@ pub fn default_adapter(kind: AdapterKind) -> Box<dyn SourceAdapter> {
         AdapterKind::HtmlConfig => Box::new(html_config::HtmlConfigAdapter),
         AdapterKind::HtmlGeneric | AdapterKind::None => Box::new(html_generic::HtmlGenericAdapter),
     }
-}
-
-// Shared, empty M0 impl used by every adapter. Real parsing lands in M2.
-fn empty_discover(
-    _document: &FetchedDocument,
-    _source: &SourceSpec,
-) -> Result<Vec<EventStub>, AdapterError> {
-    Ok(Vec::new())
-}
-
-fn empty_plan(_event: &EventStub, _source: &SourceSpec) -> Vec<FetchPlan> {
-    Vec::new()
-}
-
-fn not_implemented_enrich(
-    event: EventStub,
-    source: &SourceSpec,
-) -> Result<EventCandidate, AdapterError> {
-    let _ = event;
-    Err(AdapterError::Parse {
-        source_id: source.id.clone(),
-        message: "enrich not implemented in M0".into(),
-    })
 }
