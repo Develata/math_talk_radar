@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 
 use crate::model::{Event, Location, MediaResource, SourceEvidence, Talk};
-use crate::normalize::normalize_name;
+use crate::normalize::{canonicalize_url, normalize_name};
 use crate::people::{PersonHit, PersonRole};
 
 /// Identity signal used to decide whether two events are the same (§25).
@@ -40,92 +40,6 @@ impl DedupSignal {
         DedupSignal::TitleDateOrganizer,
         DedupSignal::TitleDateLocation,
     ];
-}
-
-/// Query parameter keys that carry no event identity and are dropped during
-/// URL canonicalization (tracking, analytics, session surface forms). All
-/// other params are preserved — dropping them risks merging distinct recurring
-/// sessions distinguished by `?session=N`, `?date=...`, etc. (§47).
-const TRACKING_PARAM_KEYS: &[&str] = &[
-    "utm_source",
-    "utm_medium",
-    "utm_campaign",
-    "utm_term",
-    "utm_content",
-    "utm_id",
-    "utm_referrer",
-    "fbclid",
-    "gclid",
-    "ref",
-    "source",
-    "mc_cid",
-    "mc_eid",
-    "_ga",
-    "_gl",
-    "igshid",
-    "fb_ref",
-    "ref_src",
-    "ref_url",
-    "_hsenc",
-    "_hsmi",
-    "hsctatracking",
-    "ver",
-];
-
-fn is_tracking_param(key: &str) -> bool {
-    let key = key.to_ascii_lowercase();
-    TRACKING_PARAM_KEYS.contains(&key.as_str())
-}
-
-/// Normalize a URL for comparison: lowercase scheme+host, strip fragment,
-/// strip trailing slash, strip default port, strip `www.` prefix, drop known
-/// tracking params, sort remaining params. Two URLs that differ only in these
-/// surface forms are the same canonical URL. Meaningful query params (session,
-/// date, id, etc.) are preserved so that distinct recurring sessions are not
-/// wrongly merged (§47).
-fn canonicalize_url(url: &Url) -> String {
-    let mut s = String::new();
-    s.push_str(url.scheme());
-    s.push_str("://");
-    if let Some(host) = url.host_str() {
-        let host = host.to_lowercase();
-        let host = host.strip_prefix("www.").unwrap_or(&host);
-        s.push_str(host);
-    }
-    if let Some(port) = url.port() {
-        let is_default = matches!((url.scheme(), port), ("http", 80) | ("https", 443));
-        if !is_default {
-            s.push(':');
-            s.push_str(&port.to_string());
-        }
-    }
-    let path = url.path().trim_end_matches('/');
-    if path.is_empty() {
-        s.push('/');
-    } else {
-        s.push_str(path);
-    }
-    // Preserve query params except known tracking params; sort for determinism.
-    let mut pairs: Vec<(String, String)> = url
-        .query_pairs()
-        .filter(|(k, _)| !is_tracking_param(k))
-        .map(|(k, v)| (k.to_string(), v.to_string()))
-        .collect();
-    if !pairs.is_empty() {
-        pairs.sort();
-        s.push('?');
-        let mut first = true;
-        for (k, v) in &pairs {
-            if !first {
-                s.push('&');
-            }
-            first = false;
-            s.push_str(k);
-            s.push('=');
-            s.push_str(v);
-        }
-    }
-    s
 }
 
 /// Earliest calendar start date among an event's sources, or `None` if the
@@ -199,6 +113,85 @@ fn location_key(loc: &Location) -> Option<String> {
         None
     } else {
         Some(normalize_name(raw))
+    }
+}
+
+/// Precomputed dedup identity fields for one event. Computed once per event
+/// and reused across the O(n²) cluster scan in `dedup_events`, instead of
+/// re-normalizing title/organizer/location/URL on every pairwise comparison.
+/// Must be recomputed for a cluster representative after a merge, since the
+/// merge can union in new sources, location, or people.
+struct DedupKeys {
+    canonical_url: Option<String>,
+    source_ids: Vec<(String, String)>,
+    title: String,
+    start_date: Option<NaiveDate>,
+    organizer: Option<String>,
+    location: Option<String>,
+}
+
+impl DedupKeys {
+    fn from_event(event: &Event) -> DedupKeys {
+        let source_ids = event
+            .sources
+            .iter()
+            .filter_map(|s| {
+                s.native_id
+                    .as_ref()
+                    .map(|id| (s.source_id.clone(), id.clone()))
+            })
+            .collect();
+        DedupKeys {
+            canonical_url: event.url.as_ref().map(canonicalize_url),
+            source_ids,
+            title: normalize_name(&event.title),
+            start_date: start_date(event),
+            organizer: organizer_key(event),
+            location: event.location.as_ref().and_then(location_key),
+        }
+    }
+
+    fn duplicate_signal(&self, other: &DedupKeys) -> Option<DedupSignal> {
+        DedupSignal::PRIORITY
+            .into_iter()
+            .find(|&sig| self.are_duplicates(other, sig))
+    }
+
+    fn are_duplicates(&self, other: &DedupKeys, signal: DedupSignal) -> bool {
+        match signal {
+            DedupSignal::CanonicalUrl => match (&self.canonical_url, &other.canonical_url) {
+                (Some(ua), Some(ub)) => ua == ub,
+                _ => false,
+            },
+            DedupSignal::SourceCanonicalId => self.source_ids.iter().any(|(sa, ida)| {
+                other
+                    .source_ids
+                    .iter()
+                    .any(|(sb, idb)| sb == sa && idb == ida)
+            }),
+            DedupSignal::TitleDateOrganizer => {
+                let (Some(da), Some(db)) = (self.start_date, other.start_date) else {
+                    return false;
+                };
+                da == db
+                    && self.title == other.title
+                    && match (&self.organizer, &other.organizer) {
+                        (Some(oa), Some(ob)) => oa == ob,
+                        _ => false,
+                    }
+            }
+            DedupSignal::TitleDateLocation => {
+                let (Some(da), Some(db)) = (self.start_date, other.start_date) else {
+                    return false;
+                };
+                da == db
+                    && self.title == other.title
+                    && match (&self.location, &other.location) {
+                        (Some(la), Some(lb)) => la == lb,
+                        _ => false,
+                    }
+            }
+        }
     }
 }
 
@@ -383,21 +376,28 @@ pub fn dedup_events(events: Vec<Event>) -> Vec<Event> {
     sorted.sort_by(|a, b| a.id.0.cmp(&b.id.0));
 
     let mut clusters: Vec<Event> = Vec::with_capacity(sorted.len());
+    let mut cluster_keys: Vec<DedupKeys> = Vec::with_capacity(sorted.len());
     for ev in sorted {
+        let incoming = DedupKeys::from_event(&ev);
         let mut current = Some(ev);
-        for rep in clusters.iter_mut() {
-            let Some(remaining) = current.take() else {
+        let mut current_keys = Some(incoming);
+        for (rep, rep_keys) in clusters.iter_mut().zip(cluster_keys.iter_mut()) {
+            let (Some(remaining), Some(remaining_keys)) = (current.take(), current_keys.take())
+            else {
                 break;
             };
-            if duplicate_signal(rep, &remaining).is_some() {
+            if rep_keys.duplicate_signal(&remaining_keys).is_some() {
                 let old = rep.clone();
                 *rep = merge_events(old, remaining);
+                *rep_keys = DedupKeys::from_event(rep);
             } else {
                 current = Some(remaining);
+                current_keys = Some(remaining_keys);
             }
         }
         if let Some(remaining) = current {
             clusters.push(remaining);
+            cluster_keys.push(current_keys.unwrap());
         }
     }
     clusters

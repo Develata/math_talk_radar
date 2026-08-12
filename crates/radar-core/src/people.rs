@@ -79,7 +79,12 @@ pub fn match_scholars(
     context: MatchContext,
 ) -> Vec<PersonHit> {
     let norm_text = normalize_name(text);
-    let text_words = word_boundaries(&norm_text);
+    // Only the BodyText ambiguous-surname guard needs word boundaries.
+    let text_words = if context == MatchContext::BodyText {
+        word_boundaries(&norm_text)
+    } else {
+        Vec::new()
+    };
 
     let mut hits = Vec::new();
     for scholar in scholars {

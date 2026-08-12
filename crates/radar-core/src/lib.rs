@@ -15,6 +15,7 @@ pub mod config;
 pub mod date;
 pub mod dedup;
 pub mod document;
+pub mod filter;
 pub mod model;
 pub mod normalize;
 pub mod people;

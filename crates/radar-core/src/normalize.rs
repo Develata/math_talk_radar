@@ -6,6 +6,92 @@
 
 use unicode_normalization::UnicodeNormalization;
 use unicode_segmentation::UnicodeSegmentation;
+use url::Url;
+
+/// Query parameter keys that carry no event identity and are dropped during
+/// URL canonicalization (tracking, analytics, session surface forms). All
+/// other params are preserved — dropping them risks merging distinct recurring
+/// sessions distinguished by `?session=N`, `?date=...`, etc. (§47).
+const TRACKING_PARAM_KEYS: &[&str] = &[
+    "utm_source",
+    "utm_medium",
+    "utm_campaign",
+    "utm_term",
+    "utm_content",
+    "utm_id",
+    "utm_referrer",
+    "fbclid",
+    "gclid",
+    "ref",
+    "source",
+    "mc_cid",
+    "mc_eid",
+    "_ga",
+    "_gl",
+    "igshid",
+    "fb_ref",
+    "ref_src",
+    "ref_url",
+    "_hsenc",
+    "_hsmi",
+    "hsctatracking",
+    "ver",
+];
+
+fn is_tracking_param(key: &str) -> bool {
+    let key = key.to_ascii_lowercase();
+    TRACKING_PARAM_KEYS.contains(&key.as_str())
+}
+
+/// Normalize a URL for comparison and identity hashing: lowercase scheme+host,
+/// strip fragment, strip trailing slash, strip default port, strip `www.`
+/// prefix, drop known tracking params, sort remaining params. Two URLs that
+/// differ only in these surface forms are the same canonical URL. Meaningful
+/// query params (session, date, id, etc.) are preserved so that distinct
+/// recurring sessions are not wrongly merged (§47).
+pub fn canonicalize_url(url: &Url) -> String {
+    let mut s = String::new();
+    s.push_str(url.scheme());
+    s.push_str("://");
+    if let Some(host) = url.host_str() {
+        let host = host.to_lowercase();
+        let host = host.strip_prefix("www.").unwrap_or(&host);
+        s.push_str(host);
+    }
+    if let Some(port) = url.port() {
+        let is_default = matches!((url.scheme(), port), ("http", 80) | ("https", 443));
+        if !is_default {
+            s.push(':');
+            s.push_str(&port.to_string());
+        }
+    }
+    let path = url.path().trim_end_matches('/');
+    if path.is_empty() {
+        s.push('/');
+    } else {
+        s.push_str(path);
+    }
+    let mut pairs: Vec<(String, String)> = url
+        .query_pairs()
+        .filter(|(k, _)| !is_tracking_param(k))
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+    if !pairs.is_empty() {
+        pairs.sort();
+        s.push('?');
+        let mut first = true;
+        for (k, v) in &pairs {
+            if !first {
+                s.push('&');
+            }
+            first = false;
+            s.push_str(k);
+            s.push('=');
+            s.push_str(v);
+        }
+    }
+    s
+}
 
 /// Lowercase + collapse internal whitespace + trim. A pre-normalization step
 /// used before alias and word-boundary matching.

@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 
 use crate::date::{DateTimeRange, EventDate};
-use crate::normalize::normalize_name;
+use crate::normalize::{canonicalize_url, normalize_name};
 use crate::people::PersonHit;
 use crate::ranking::ScoreComponents;
 use crate::topics::TopicMatch;
@@ -47,22 +47,11 @@ pub fn deterministic_id(parts: &[&str]) -> String {
 /// raw string to preserve backward compatibility.
 pub fn event_id(title: &str, url: &str) -> EventId {
     let normalized = normalize_name(title);
-    let canon_url = canonicalize_url_for_id(url);
-    EventId(deterministic_id(&[&normalized, &canon_url]))
-}
-
-fn canonicalize_url_for_id(url: &str) -> String {
-    let mut parsed = match Url::parse(url) {
-        Ok(u) => u,
-        Err(_) => return url.to_string(),
+    let canon_url = match Url::parse(url) {
+        Ok(parsed) => canonicalize_url(&parsed),
+        Err(_) => url.to_string(),
     };
-    parsed.set_fragment(None);
-    let path = parsed.path().to_string();
-    if path.len() > 1 && path.ends_with('/') {
-        let trimmed = &path[..path.len() - 1];
-        parsed.set_path(if trimmed.is_empty() { "/" } else { trimmed });
-    }
-    parsed.to_string()
+    EventId(deterministic_id(&[&normalized, &canon_url]))
 }
 
 // ---- Event (§5.1) --------------------------------------------------------
