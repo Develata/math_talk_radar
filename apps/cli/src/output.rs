@@ -29,19 +29,41 @@ pub struct QuerySpec {
 }
 
 /// Render a `ScanOutput` to the requested format and detail level (§31).
-/// `Json` pretty-prints the full envelope; `Jsonl` emits one JSON object.
-/// Detail level truncates long text fields: compact ≤1200 chars, full ≤8000.
+/// `Json` pretty-prints the full envelope; `Jsonl` emits one JSON object per
+/// event. Detail level truncates long text fields in place: compact ≤1200
+/// chars, full ≤8000. Takes `output` by value so truncation mutates in place
+/// without cloning the (potentially large) event vector.
 pub fn render(
-    output: &ScanOutput,
+    mut output: ScanOutput,
     format: crate::cli::OutputFormat,
     detail: crate::cli::DetailLevel,
 ) -> anyhow::Result<String> {
-    let mut output = output.clone();
     truncate_for_detail(&mut output, detail);
     match format {
         crate::cli::OutputFormat::Json => Ok(serde_json::to_string_pretty(&output)?),
-        crate::cli::OutputFormat::Jsonl => Ok(serde_json::to_string(&output)?),
+        crate::cli::OutputFormat::Jsonl => Ok(render_jsonl(&output)?),
     }
+}
+
+/// §31 JSONL: one JSON object per line — the envelope metadata first, then one
+/// line per event.
+fn render_jsonl(output: &ScanOutput) -> anyhow::Result<String> {
+    let mut out = String::new();
+    let envelope = serde_json::json!({
+        "kind": "scan",
+        "schema_version": output.schema_version,
+        "generated_at": output.generated_at,
+        "query": output.query,
+        "source_health": output.source_health,
+        "changes": output.changes,
+    });
+    out.push_str(&envelope.to_string());
+    out.push('\n');
+    for event in &output.events {
+        out.push_str(&serde_json::to_string(event)?);
+        out.push('\n');
+    }
+    Ok(out)
 }
 
 fn truncate_for_detail(output: &mut ScanOutput, detail: crate::cli::DetailLevel) {
