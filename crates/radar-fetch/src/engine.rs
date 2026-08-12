@@ -5,7 +5,6 @@ use radar_core::{
     AdapterError, EventCandidate, FetchedDocument, SourceAdapter, SourceHealth, SourceStatus,
     config::SourceSpec,
 };
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::Semaphore;
@@ -167,6 +166,11 @@ pub async fn fetch_one(
             return Err(FetchError::Timeout);
         }
 
+        // FS-2: per-host concurrency limit keyed on the actual request URL,
+        // not the source entrypoint. The permit is released when it drops at
+        // the end of the iteration (redirect/retry) or on return.
+        let _host_permit = client.acquire_host_permit(&current_url).await;
+
         let mut resp = match client
             .handle()
             .get(current_url.as_str())
@@ -228,12 +232,24 @@ pub async fn fetch_one(
         if let crate::retry::RetryDecision::Retry { after } = retry {
             if retries_used < http_policy.max_retry {
                 retries_used += 1;
-                if let Some(delay) = after {
-                    let capped =
-                        std::cmp::min(delay, remaining_time(deadline, http_policy.request_timeout));
-                    if !capped.is_zero() {
-                        tokio::time::sleep(capped).await;
+                let delay = match after {
+                    Some(d) => {
+                        std::cmp::min(d, remaining_time(deadline, http_policy.request_timeout))
                     }
+                    None => {
+                        // FS-4: no Retry-After header → exponential backoff so
+                        // the server is not hammered. Base 500 ms, doubled per
+                        // retry, capped by the remaining time to the deadline.
+                        let retry_index = retries_used.saturating_sub(1);
+                        let backoff_ms = 500u64.saturating_mul(1u64 << retry_index.min(20));
+                        std::cmp::min(
+                            std::time::Duration::from_millis(backoff_ms),
+                            remaining_time(deadline, http_policy.request_timeout),
+                        )
+                    }
+                };
+                if !delay.is_zero() {
+                    tokio::time::sleep(delay).await;
                 }
                 continue;
             } else {
@@ -445,14 +461,11 @@ pub async fn fetch_all(
     adapter_factory: impl Fn(&SourceSpec) -> Box<dyn SourceAdapter>,
 ) -> Vec<SourceFetchResult> {
     let global_sem = Arc::new(Semaphore::new(client.policy().global_concurrency));
-    let host_sems = Arc::new(tokio::sync::Mutex::new(
-        HashMap::<String, Arc<Semaphore>>::new(),
-    ));
     let robots = Arc::new(RobotsCache::new());
-    let per_host = client.policy().per_host_concurrency;
 
     let mut sorted: Vec<&SourceSpec> = sources.iter().collect();
     sorted.sort_by_key(|s| &s.id);
+    let source_ids: Vec<String> = sorted.iter().map(|s| s.id.clone()).collect();
 
     let mut join_set = tokio::task::JoinSet::new();
     for source in sorted {
@@ -460,29 +473,13 @@ pub async fn fetch_all(
         let source = source.clone();
         let adapter = adapter_factory(&source);
         let global_sem = global_sem.clone();
-        let host_sems = host_sems.clone();
         let robots = robots.clone();
 
         join_set.spawn(async move {
-            // Acquire per-host permit first, then global. Ordering matters:
-            // global-first creates a convoy — a task blocked on a saturated
-            // host holds a global slot it cannot use, starving tasks on other
-            // hosts that could proceed. Per-host-first ensures a task only
-            // holds a global slot when it is ready to fetch.
-            let host = source
-                .entrypoint
-                .as_ref()
-                .and_then(|u| u.host_str())
-                .unwrap_or("")
-                .to_string();
-            let host_sem = {
-                let mut map = host_sems.lock().await;
-                map.entry(host.clone())
-                    .or_insert_with(|| Arc::new(Semaphore::new(per_host)))
-                    .clone()
-            };
-            let _host_permit = host_sem.acquire_owned().await.ok();
-
+            // Global permit held for the entire source fetch. Per-host
+            // limiting is applied per-request inside fetch_one (FS-2),
+            // keyed on the actual request URL so enrichment to other
+            // hosts is not gated by the entrypoint host.
             let _global_permit = global_sem.acquire_owned().await.ok();
 
             fetch_source(&client, &source, adapter.as_ref(), &robots, deadline).await
@@ -495,12 +492,29 @@ pub async fn fetch_all(
             Ok(r) => results.push(r),
             Err(e) => {
                 if e.is_panic() {
-                    // Oracle #8: never propagate panics
+                    // Oracle #8: never propagate panics. The panicked source
+                    // produced no SourceFetchResult; a synthetic entry is
+                    // patched below so it does not vanish from source_health.
                 }
-                // fetch_source handles its own errors and returns a
-                // SourceFetchResult; a panic here is swallowed so one bad
-                // source cannot take down the whole scan.
             }
+        }
+    }
+
+    // FS-3: a panicked source task produces no SourceFetchResult. Patch a
+    // synthetic entry for any source id missing from the results so §32
+    // partial-failure reporting stays complete.
+    for id in &source_ids {
+        if !results.iter().any(|r| &r.health.source == id) {
+            results.push(SourceFetchResult {
+                candidates: vec![],
+                health: SourceHealth {
+                    source: id.clone(),
+                    status: SourceStatus::ParseError,
+                    duration_ms: 0,
+                    requests: 0,
+                    events: 0,
+                },
+            });
         }
     }
 

@@ -48,8 +48,7 @@ impl RobotsRules {
             if pattern.is_empty() {
                 continue;
             }
-            if path.starts_with(pattern) {
-                let len = pattern.len();
+            if let Some(len) = matches_robots_pattern(pattern, path) {
                 match best_match {
                     None => best_match = Some((len, is_allow)),
                     Some((best_len, _)) if len > best_len => best_match = Some((len, is_allow)),
@@ -65,6 +64,76 @@ impl RobotsRules {
             Some((_, is_allow)) => is_allow,
         }
     }
+}
+
+/// RFC 9309 §2.2.2 pattern match. Returns the match length (pattern length) if
+/// `path` matches `pattern`, else `None`. `*` matches any sequence including
+/// `/`; `$` at end of pattern anchors the match to the end of the path.
+/// Patterns without `*` or `$` use plain prefix match (the pre-wildcard
+/// behavior), so existing rules are unaffected.
+fn matches_robots_pattern(pattern: &str, path: &str) -> Option<usize> {
+    // Fast path: no special characters → prefix match (pre-wildcard behavior).
+    if !pattern.contains('*') && !pattern.contains('$') {
+        return if path.starts_with(pattern) {
+            Some(pattern.len())
+        } else {
+            None
+        };
+    }
+
+    let pat: Vec<char> = pattern.chars().collect();
+    let tgt: Vec<char> = path.chars().collect();
+
+    // `$` at end of pattern anchors the match to the end of the path.
+    let (pat, anchored_end): (&[char], bool) = if pat.last() == Some(&'$') {
+        (&pat[..pat.len() - 1], true)
+    } else {
+        (&pat[..], false)
+    };
+
+    if glob_match(pat, &tgt, anchored_end) {
+        Some(pattern.len())
+    } else {
+        None
+    }
+}
+
+/// Two-pointer wildcard matcher (RFC 9309 §2.2.2). `*` matches any sequence
+/// including `/`. When `anchored_end` is true the entire path must be consumed
+/// (the `$` end-anchor); otherwise a prefix match is accepted.
+fn glob_match(pat: &[char], tgt: &[char], anchored_end: bool) -> bool {
+    let mut pi = 0;
+    let mut ti = 0;
+    let mut star_pi: Option<usize> = None;
+    let mut star_ti: usize = 0;
+
+    while ti < tgt.len() && pi < pat.len() {
+        if pat[pi] == '*' {
+            star_pi = Some(pi);
+            star_ti = ti;
+            pi += 1;
+        } else if pat[pi] == tgt[ti] {
+            pi += 1;
+            ti += 1;
+        } else if let Some(sp) = star_pi {
+            pi = sp + 1;
+            star_ti += 1;
+            ti = star_ti;
+        } else {
+            return false;
+        }
+    }
+
+    // Consume trailing `*`s that the loop did not reach.
+    while pi < pat.len() && pat[pi] == '*' {
+        pi += 1;
+    }
+
+    if pi < pat.len() {
+        return false;
+    }
+
+    if anchored_end { ti == tgt.len() } else { true }
 }
 
 /// Hand-rolled RFC 9309 parser. Only reads `User-agent: *` blocks.
@@ -182,5 +251,58 @@ mod robots_tests {
         let rules = parse_robots("");
         let u = Url::parse("https://example.com/anything").unwrap();
         assert!(rules.is_allowed(&u));
+    }
+
+    #[test]
+    fn wildcard_disallow_matches_subpaths() {
+        let txt = "User-agent: *\nDisallow: /private/*\n";
+        let rules = parse_robots(txt);
+        let u1 = Url::parse("https://example.com/private/secret").unwrap();
+        assert!(
+            !rules.is_allowed(&u1),
+            "wildcard * should match any suffix including /"
+        );
+        let u2 = Url::parse("https://example.com/private/").unwrap();
+        assert!(
+            !rules.is_allowed(&u2),
+            "wildcard * matches the empty suffix"
+        );
+        let u3 = Url::parse("https://example.com/private").unwrap();
+        assert!(
+            rules.is_allowed(&u3),
+            "wildcard /private/* must not match bare /private (no trailing slash)"
+        );
+    }
+
+    #[test]
+    fn end_anchor_matches_exact_path_only() {
+        let txt = "User-agent: *\nDisallow: /end$\n";
+        let rules = parse_robots(txt);
+        let u1 = Url::parse("https://example.com/end").unwrap();
+        assert!(
+            !rules.is_allowed(&u1),
+            "$ anchors the match to the end of the path"
+        );
+        let u2 = Url::parse("https://example.com/end/extra").unwrap();
+        assert!(
+            rules.is_allowed(&u2),
+            "$ must not match paths with a suffix beyond the anchor"
+        );
+    }
+
+    #[test]
+    fn longest_match_wins_allow_over_disallow_wildcard() {
+        let txt = "User-agent: *\nDisallow: /private/*\nAllow: /private/public\n";
+        let rules = parse_robots(txt);
+        let u1 = Url::parse("https://example.com/private/public").unwrap();
+        assert!(
+            rules.is_allowed(&u1),
+            "longer Allow (/private/public) must override shorter Disallow wildcard"
+        );
+        let u2 = Url::parse("https://example.com/private/secret").unwrap();
+        assert!(
+            !rules.is_allowed(&u2),
+            "Disallow wildcard still matches non-allow-listed subpaths"
+        );
     }
 }

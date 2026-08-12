@@ -1,7 +1,11 @@
 //! HTTP client (§15, §16). The async fetch path lands in M2; this establishes
 //! the builder, UA, and the `FetchedDocument` constructor adapters depend on.
+use std::collections::HashMap;
+use std::sync::Arc;
+
 use chrono::{DateTime, Utc};
 use radar_core::FetchedDocument;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use url::Url;
 
 use crate::policy::HttpPolicy;
@@ -18,6 +22,10 @@ pub enum FetchBuildError {
 pub struct FetchClient {
     policy: HttpPolicy,
     inner: reqwest::Client,
+    /// Per-host concurrency semaphores (FS-2). Shared across all clones so
+    /// every `fetch_one` call — entrypoint or enrichment — charges the
+    /// correct host, not the source entrypoint host.
+    host_sems: Arc<tokio::sync::Mutex<HashMap<String, Arc<Semaphore>>>>,
 }
 
 impl FetchClient {
@@ -32,7 +40,11 @@ impl FetchClient {
                 " (+https://github.com/Develata/math_talk_radar)"
             ))
             .build()?;
-        Ok(Self { policy, inner })
+        Ok(Self {
+            policy,
+            inner,
+            host_sems: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+        })
     }
 
     pub fn policy(&self) -> HttpPolicy {
@@ -41,6 +53,19 @@ impl FetchClient {
 
     pub fn handle(&self) -> &reqwest::Client {
         &self.inner
+    }
+
+    /// Acquire a per-host concurrency permit for the host of `url` (FS-2).
+    /// The permit is released when the returned guard is dropped.
+    pub(crate) async fn acquire_host_permit(&self, url: &Url) -> Option<OwnedSemaphorePermit> {
+        let host = url.host_str().unwrap_or("").to_string();
+        let sem = {
+            let mut map = self.host_sems.lock().await;
+            map.entry(host)
+                .or_insert_with(|| Arc::new(Semaphore::new(self.policy.per_host_concurrency)))
+                .clone()
+        };
+        sem.acquire_owned().await.ok()
     }
 }
 
