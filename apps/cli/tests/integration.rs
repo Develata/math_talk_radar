@@ -207,3 +207,122 @@ async fn t2_5_invalid_today_exits_3() {
         .failure()
         .code(3);
 }
+
+// CLI-10 regression: --max-events caps OUTPUT only. A scan that seeds both
+// events (no cap) followed by a scan with --max-events 1 must NOT emit
+// EventCancelled for the capped-out event, because it is still alive — just
+// not displayed. The pre-fix wiring ran store_scan AFTER truncation, so scan 2
+// persisted only the 1 kept event and falsely marked the other as cancelled.
+#[tokio::test]
+async fn cli_10_max_events_does_not_emit_spurious_event_cancelled() {
+    let server = MockServer::start().await;
+    mount_rss_feed(&server).await;
+    let config = write_sources_config(&[(true, "ok", &format!("{}/feed.xml", server.uri()))]);
+    let state_dir = tempfile::TempDir::new().expect("state dir");
+    let state_db = state_dir.path().join("state.redb");
+
+    // Scan 1: no cap. Both events are seeded into the state DB.
+    bin()
+        .args([
+            "scan",
+            "--sources",
+            config.path().to_str().unwrap(),
+            "--state",
+            state_db.to_str().unwrap(),
+            "--today",
+            "2026-08-13",
+        ])
+        .assert()
+        .success();
+
+    // Scan 2: cap output to 1 event. The capped-out event is still alive, so
+    // no EventCancelled should appear. Old code emitted one; fix emits none.
+    let second = bin()
+        .args([
+            "scan",
+            "--sources",
+            config.path().to_str().unwrap(),
+            "--state",
+            state_db.to_str().unwrap(),
+            "--max-events",
+            "1",
+            "--today",
+            "2026-08-13",
+        ])
+        .assert()
+        .success();
+    let second_stdout = String::from_utf8_lossy(&second.get_output().stdout);
+    let second_v: serde_json::Value =
+        serde_json::from_str(&second_stdout).expect("scan 2 stdout is JSON");
+    assert_eq!(
+        second_v["events"].as_array().unwrap().len(),
+        1,
+        "--max-events 1 caps the output to one event"
+    );
+    let changes = second_v["changes"].as_array().expect("changes array");
+    let has_cancelled = changes.iter().any(|c| c["kind"] == "event_cancelled");
+    assert!(
+        !has_cancelled,
+        "scan 2 must NOT emit event_cancelled for the capped-out event, but got: {changes:?}"
+    );
+}
+
+// CLI-10 regression (mode filter): a scan that seeds both events (--mode both)
+// followed by --mode recordings (no events match) must NOT emit EventCancelled,
+// because the events are still alive — just outside the query window. The
+// pre-fix wiring ran store_scan AFTER the mode filter, so the empty recordings
+// scan persisted nothing and falsely cancelled both events.
+#[tokio::test]
+async fn cli_10_mode_filter_does_not_emit_spurious_event_cancelled() {
+    let server = MockServer::start().await;
+    mount_rss_feed(&server).await;
+    let config = write_sources_config(&[(true, "ok", &format!("{}/feed.xml", server.uri()))]);
+    let state_dir = tempfile::TempDir::new().expect("state dir");
+    let state_db = state_dir.path().join("state.redb");
+
+    // Scan 1: --mode both. Both events are seeded into the state DB.
+    bin()
+        .args([
+            "scan",
+            "--sources",
+            config.path().to_str().unwrap(),
+            "--state",
+            state_db.to_str().unwrap(),
+            "--mode",
+            "both",
+            "--today",
+            "2026-08-13",
+        ])
+        .assert()
+        .success();
+
+    // Scan 2: --mode recordings. The RSS feed has no recordings, so the output
+    // is empty — but both events are still alive. No EventCancelled.
+    let second = bin()
+        .args([
+            "scan",
+            "--sources",
+            config.path().to_str().unwrap(),
+            "--state",
+            state_db.to_str().unwrap(),
+            "--mode",
+            "recordings",
+            "--today",
+            "2026-08-13",
+        ])
+        .assert()
+        .success();
+    let second_stdout = String::from_utf8_lossy(&second.get_output().stdout);
+    let second_v: serde_json::Value =
+        serde_json::from_str(&second_stdout).expect("scan 2 stdout is JSON");
+    assert!(
+        second_v["events"].as_array().unwrap().is_empty(),
+        "--mode recordings on a feed with no recordings yields empty output"
+    );
+    let changes = second_v["changes"].as_array().expect("changes array");
+    let has_cancelled = changes.iter().any(|c| c["kind"] == "event_cancelled");
+    assert!(
+        !has_cancelled,
+        "scan 2 must NOT emit event_cancelled for events filtered out by mode, but got: {changes:?}"
+    );
+}

@@ -91,25 +91,13 @@ pub async fn run_scan(args: ScanArgs) -> Result<ScanOutput, CliError> {
             .then_with(|| a.id.0.cmp(&b.id.0))
     });
 
-    let today = match args.today.as_deref() {
-        Some(s) => NaiveDate::parse_from_str(s, "%Y-%m-%d").map_err(|e| {
-            CliError::config(format!("invalid --today {s:?}: {e}; expected YYYY-MM-DD"))
-        })?,
-        None => Utc::now().date_naive(),
-    };
-    let core_mode = match args.mode {
-        ScanMode::Upcoming => CoreScanMode::Upcoming,
-        ScanMode::Recordings => CoreScanMode::Recordings,
-        ScanMode::Both => CoreScanMode::Both,
-    };
-    events.retain(|e| matches_mode_and_window(e, core_mode, today, args.before, args.after));
-
-    if let Some(max) = args.max_events {
-        events.truncate(max as usize);
-    }
-
+    // Store the FULL scan result (pre-filter, pre-truncate) so change detection
+    // compares against every live event. Filtering by mode/window or capping
+    // with --max-events affects the OUTPUT only — an event filtered out of a
+    // given query must NOT be recorded as `EventCancelled` in persisted state
+    // (CLI-10: regression from ST-1 wiring that ran store_scan after the cap).
     let now = Utc::now();
-    let (events, changes) = if args.no_state {
+    let (mut events, changes) = if args.no_state {
         (events, Vec::new())
     } else {
         match open_state_repo(args.state.as_deref()) {
@@ -128,6 +116,25 @@ pub async fn run_scan(args: ScanArgs) -> Result<ScanOutput, CliError> {
             }
         }
     };
+
+    // Apply the mode/window filter and --max-events cap to the OUTPUT only.
+    // The persisted state already reflects the full scan above.
+    let today = match args.today.as_deref() {
+        Some(s) => NaiveDate::parse_from_str(s, "%Y-%m-%d").map_err(|e| {
+            CliError::config(format!("invalid --today {s:?}: {e}; expected YYYY-MM-DD"))
+        })?,
+        None => Utc::now().date_naive(),
+    };
+    let core_mode = match args.mode {
+        ScanMode::Upcoming => CoreScanMode::Upcoming,
+        ScanMode::Recordings => CoreScanMode::Recordings,
+        ScanMode::Both => CoreScanMode::Both,
+    };
+    events.retain(|e| matches_mode_and_window(e, core_mode, today, args.before, args.after));
+
+    if let Some(max) = args.max_events {
+        events.truncate(max as usize);
+    }
 
     let source_health = results.into_iter().map(|r| r.health).collect();
 
