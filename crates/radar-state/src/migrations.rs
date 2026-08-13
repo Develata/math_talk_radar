@@ -1,10 +1,14 @@
 //! Schema migrations (§65). Transactional: a failure leaves no half-migrated
 //! state. `first_seen` and media history must not be silently lost. The v1
-//! migration creates all tables and writes the schema-version row.
+//! migration creates all tables and writes the schema-version row. The v2
+//! migration (ST-16) adds the `cancelled_events` tombstone table; existing v1
+//! databases are upgraded in place (additive — no data is rewritten).
 
 use redb::{Database, ReadableTable};
 
-use crate::schema::{EVENTS, SCHEMA_VERSION, SOURCE_HEALTH, STATE_SCHEMA_VERSION};
+use crate::schema::{
+    CANCELLED_EVENTS, EVENTS, SCHEMA_VERSION, SOURCE_HEALTH, STATE_SCHEMA_VERSION,
+};
 
 /// Run migrations against `db` and return the active schema version. All
 /// table creation happens inside a single write transaction so a failure
@@ -30,6 +34,9 @@ pub fn run_migrations(db: &Database) -> Result<u32, MigrateError> {
     };
     let _ = txn.open_table(EVENTS)?;
     let _ = txn.open_table(SOURCE_HEALTH)?;
+    // ST-16: v2 adds the cancelled-events tombstone table. Opening it on a v1
+    // database creates it (no data to migrate); on a v2 database it's a no-op.
+    let _ = txn.open_table(CANCELLED_EVENTS)?;
     txn.commit()?;
     Ok(version)
 }

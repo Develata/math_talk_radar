@@ -286,7 +286,9 @@ impl SourceAdapter for HtmlGenericAdapter {
                 });
 
                 Event {
-                    id: event_id(&stub.title, stub.url.as_str()),
+                    // ADAP-13: hash the title that becomes `event.title`, not
+                    // `stub.title`, so id and displayed title stay consistent.
+                    id: event_id(&title, stub.url.as_str()),
                     title,
                     url: Some(stub.url.clone()),
                     event_type,

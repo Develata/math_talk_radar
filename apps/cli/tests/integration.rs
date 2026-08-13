@@ -208,6 +208,61 @@ async fn t2_5_invalid_today_exits_3() {
         .code(3);
 }
 
+// CLI-20: an invalid --today with an ACTIVE state DB must exit 3 WITHOUT
+// mutating the state DB. The pre-fix wiring validated --today AFTER store_scan,
+// so the invalid scan had already persisted its events before failing.
+// Strategy: fresh DB → invalid scan 2 (exit 3) → valid scan 3. If scan 2
+// persisted, scan 3 sees pre-existing events and emits no EventAdded. If scan 2
+// did NOT persist (the fix), scan 3 is the first write and emits EventAdded.
+#[tokio::test]
+async fn cli_20_invalid_today_does_not_mutate_state() {
+    let server = MockServer::start().await;
+    mount_rss_feed(&server).await;
+    let config = write_sources_config(&[(true, "ok", &format!("{}/feed.xml", server.uri()))]);
+    let state_dir = tempfile::TempDir::new().expect("state dir");
+    let state_db = state_dir.path().join("state.redb");
+
+    // Scan 2: invalid --today on a FRESH state DB. Must exit 3.
+    bin()
+        .args([
+            "scan",
+            "--sources",
+            config.path().to_str().unwrap(),
+            "--state",
+            state_db.to_str().unwrap(),
+            "--today",
+            "not-a-date",
+        ])
+        .assert()
+        .failure()
+        .code(3);
+
+    // Scan 3: valid --today on the same DB. If scan 2 persisted, no
+    // EventAdded. If scan 2 did NOT persist (fix), EventAdded fires.
+    let third = bin()
+        .args([
+            "scan",
+            "--sources",
+            config.path().to_str().unwrap(),
+            "--state",
+            state_db.to_str().unwrap(),
+            "--today",
+            "2026-08-13",
+        ])
+        .assert()
+        .success();
+    let third_stdout = String::from_utf8_lossy(&third.get_output().stdout);
+    let third_v: serde_json::Value =
+        serde_json::from_str(&third_stdout).expect("scan 3 stdout is JSON");
+    let changes = third_v["changes"].as_array().expect("changes array");
+    let has_added = changes.iter().any(|c| c["kind"] == "event_added");
+    assert!(
+        has_added,
+        "CLI-20: scan 3 must emit event_added (scan 2 did not persist); \
+         if absent, scan 2 mutated the DB before failing. changes: {changes:?}"
+    );
+}
+
 // CLI-10 regression: --max-events caps OUTPUT only. A scan that seeds both
 // events (no cap) followed by a scan with --max-events 1 must NOT emit
 // EventCancelled for the capped-out event, because it is still alive — just

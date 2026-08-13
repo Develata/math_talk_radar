@@ -133,6 +133,14 @@ fn glob_match(pat: &[char], tgt: &[char], anchored_end: bool) -> bool {
         return false;
     }
 
+    // FETCH-1: when the pattern ends with `*` (the last char before the
+    // stripped `$` anchor), the `*` can absorb any remaining target chars.
+    // Without this, `*$` patterns (e.g. `Disallow: /foo*$`) incorrectly
+    // reject paths the `*` should match.
+    if !pat.is_empty() && pat[pat.len() - 1] == '*' {
+        return true;
+    }
+
     if anchored_end { ti == tgt.len() } else { true }
 }
 

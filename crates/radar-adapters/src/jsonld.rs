@@ -31,7 +31,7 @@ impl SourceAdapter for JsonLdAdapter {
         let html = crate::helpers::doc_body(&document.body);
         let mut stubs = Vec::new();
         for block in extract_jsonld_blocks(&html) {
-            for ev in find_events(&block).into_iter().flatten() {
+            for (idx, ev) in find_events(&block).into_iter().flatten().enumerate() {
                 let title = ev
                     .get("name")
                     .and_then(|v| v.as_str())
@@ -41,7 +41,18 @@ impl SourceAdapter for JsonLdAdapter {
                     .get("url")
                     .and_then(|v| v.as_str())
                     .and_then(|s| Url::parse(s).ok())
-                    .unwrap_or_else(|| document.url.clone());
+                    .or_else(|| {
+                        ev.get("@id")
+                            .and_then(|v| v.as_str())
+                            .and_then(|s| Url::parse(s).ok())
+                    })
+                    .unwrap_or_else(|| {
+                        // ADAP-12: query param (not fragment) so canonicalize_url
+                        // preserves it, keeping each unnamed event's id distinct.
+                        let mut u = document.url.clone();
+                        u.query_pairs_mut().append_pair("mtr-eid", &idx.to_string());
+                        u
+                    });
                 let date_hint = ev
                     .get("startDate")
                     .and_then(|v| v.as_str())
@@ -65,12 +76,13 @@ impl SourceAdapter for JsonLdAdapter {
 
     fn plan_enrichment(&self, event: &EventStub, _source: &SourceSpec) -> Vec<FetchPlan> {
         // When a JSON-LD Event had no `url`, `discover` synthesized the stub's
-        // url from the listing page (`document.url`), which equals
-        // `event.source.source_url`. Re-fetching that same listing page once
-        // per url-less stub would burn the request budget N times for data
-        // already obtained during discover. Emit no fetch; `enrich` then
-        // builds a minimal event from the stub fields (title, date_hint).
-        if event.url == event.source.source_url {
+        // url from the listing page (`document.url`) with a synthetic
+        // `mtr-eid` query param to keep distinct unnamed events from collapsing
+        // to one `event_id`. Re-fetching that same listing page once per
+        // url-less stub would burn the request budget N times for data already
+        // obtained during discover. Emit no fetch; `enrich` then builds a
+        // minimal event from the stub fields (title, date_hint).
+        if urls_match_ignoring_mtr_eid(&event.url, &event.source.source_url) {
             return Vec::new();
         }
         vec![FetchPlan {
@@ -191,6 +203,27 @@ impl SourceAdapter for JsonLdAdapter {
 
 // --- helpers ----------------------------------------------------------------
 
+/// Compare two URLs ignoring only the synthetic `mtr-eid` query param that
+/// `discover` adds to url-less JSON-LD events (ADAP-12).
+fn urls_match_ignoring_mtr_eid(a: &Url, b: &Url) -> bool {
+    if a == b {
+        return true;
+    }
+    let strip = |u: &Url| -> Url {
+        let mut s = u.clone();
+        let kept: Vec<(String, String)> = s
+            .query_pairs()
+            .filter(|(k, _)| k != "mtr-eid")
+            .map(|(k, v)| (k.into_owned(), v.into_owned()))
+            .collect();
+        s.query_pairs_mut().clear();
+        s.query_pairs_mut()
+            .extend_pairs(kept.iter().map(|(k, v)| (k.as_str(), v.as_str())));
+        s
+    };
+    strip(a) == strip(b)
+}
+
 /// Parse every `<script type="application/ld+json">` block in `html` into a
 /// [`serde_json::Value`]. Malformed blocks are silently skipped (§66: parsers
 /// must not panic on untrusted input).
@@ -245,7 +278,8 @@ fn is_event_type(value: &serde_json::Value) -> bool {
 }
 
 /// Extract person names from a schema.org `performer`-style value: a single
-/// Person object, an array of Person objects, or a bare string.
+/// Person object, an array of Person objects, an array of strings, or a bare
+/// string.
 fn extract_person_names(value: &serde_json::Value) -> Vec<String> {
     match value {
         serde_json::Value::Object(obj) => obj
@@ -253,14 +287,7 @@ fn extract_person_names(value: &serde_json::Value) -> Vec<String> {
             .and_then(|n| n.as_str())
             .map(|s| vec![s.to_string()])
             .unwrap_or_default(),
-        serde_json::Value::Array(arr) => arr
-            .iter()
-            .filter_map(|v| {
-                v.get("name")
-                    .and_then(|n| n.as_str())
-                    .map(|s| s.to_string())
-            })
-            .collect(),
+        serde_json::Value::Array(arr) => arr.iter().flat_map(extract_person_names).collect(),
         serde_json::Value::String(s) => vec![s.clone()],
         _ => Vec::new(),
     }
@@ -383,6 +410,41 @@ mod tests {
     }
 
     #[test]
+    fn discover_unnamed_events_get_distinct_ids() {
+        let html = r#"<script type="application/ld+json">[
+            {"@type":"Event","startDate":"2026-08-01"},
+            {"@type":"Event","startDate":"2026-09-01"}
+        ]</script>"#;
+        let doc = make_doc(html);
+        let spec = make_spec();
+        let stubs = JsonLdAdapter.discover(&doc, &spec).unwrap();
+        assert_eq!(stubs.len(), 2);
+        assert_eq!(stubs[0].title, "Untitled");
+        assert_eq!(stubs[1].title, "Untitled");
+        assert_ne!(
+            stubs[0].url, stubs[1].url,
+            "unnamed events on the same listing page must get distinct synthetic urls"
+        );
+        assert_ne!(
+            event_id(&stubs[0].title, stubs[0].url.as_str()),
+            event_id(&stubs[1].title, stubs[1].url.as_str()),
+            "unnamed events must produce distinct event_ids"
+        );
+    }
+
+    #[test]
+    fn discover_unnamed_event_uses_at_id_when_url_absent() {
+        let html = r#"<script type="application/ld+json">
+            {"@type":"Event","name":"Has @id","@id":"https://example.com/event/x"}
+        </script>"#;
+        let doc = make_doc(html);
+        let spec = make_spec();
+        let stubs = JsonLdAdapter.discover(&doc, &spec).unwrap();
+        assert_eq!(stubs.len(), 1);
+        assert_eq!(stubs[0].url.as_str(), "https://example.com/event/x");
+    }
+
+    #[test]
     fn discover_no_jsonld_returns_empty() {
         let html = "<html><body>no jsonld</body></html>";
         let doc = make_doc(html);
@@ -469,6 +531,27 @@ mod tests {
         assert_eq!(candidate.event.talks[1].speaker.len(), 2);
         assert_eq!(candidate.event.talks[1].speaker[0].canonical_name, "Bob");
         assert_eq!(candidate.event.talks[1].speaker[1].canonical_name, "Cy");
+    }
+
+    #[test]
+    fn enrich_extracts_performer_array_of_strings() {
+        let html = r#"<script type="application/ld+json">
+        {"@type":"Event","name":"Talk B","url":"https://example.com/b",
+         "performer":["Alice","Bob"]}</script>"#;
+        let doc = make_doc(html);
+        let spec = make_spec();
+        let stubs = JsonLdAdapter.discover(&doc, &spec).unwrap();
+        let candidate = JsonLdAdapter
+            .enrich(
+                stubs.into_iter().next().unwrap(),
+                std::slice::from_ref(&doc),
+                &spec,
+            )
+            .unwrap();
+        assert_eq!(candidate.event.talks.len(), 1);
+        assert_eq!(candidate.event.talks[0].speaker.len(), 2);
+        assert_eq!(candidate.event.talks[0].speaker[0].canonical_name, "Alice");
+        assert_eq!(candidate.event.talks[0].speaker[1].canonical_name, "Bob");
     }
 
     #[test]

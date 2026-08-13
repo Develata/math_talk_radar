@@ -1,4 +1,5 @@
 //! Retry decision logic (§15). Pure.
+use chrono::{DateTime, NaiveDateTime, Utc};
 use std::time::Duration;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -48,9 +49,30 @@ pub fn is_transient_network_error(err: &reqwest::Error) -> bool {
     false
 }
 
+/// FETCH-2: Parse a `Retry-After` header value per RFC 7231 §7.1.3.
+/// Accepts either delta-seconds (`u64`) or an HTTP-date in IMF-fixdate
+/// (`Sun, 06 Nov 1994 08:49:37 GMT`). Returns the delay until the indicated
+/// instant, clamped to zero if the date is in the past relative to `now`.
+/// `now` is a parameter (not read from the system clock) so the function stays
+/// pure and unit-testable.
+pub fn parse_retry_after(value: &str, now: DateTime<Utc>) -> Option<Duration> {
+    let trimmed = value.trim();
+    if let Ok(secs) = trimmed.parse::<u64>() {
+        return Some(Duration::from_secs(secs));
+    }
+    let target = NaiveDateTime::parse_from_str(trimmed, "%a, %d %b %Y %H:%M:%S GMT").ok()?;
+    let target_utc = target.and_utc();
+    let secs = target_utc.signed_duration_since(now).num_seconds();
+    if secs <= 0 {
+        return Some(Duration::ZERO);
+    }
+    u64::try_from(secs).ok().map(Duration::from_secs)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{Duration, RetryDecision, retry_for_status};
+    use super::{Duration, RetryDecision, parse_retry_after, retry_for_status};
+    use chrono::{NaiveDateTime, Utc};
 
     #[test]
     fn retries_transient_only() {
@@ -132,5 +154,53 @@ mod tests {
             retry_for_status(200, None),
             RetryDecision::NoRetry
         ));
+    }
+
+    #[test]
+    fn parse_retry_after_delta_seconds() {
+        let now = Utc::now();
+        assert_eq!(
+            parse_retry_after("120", now),
+            Some(Duration::from_secs(120))
+        );
+        assert_eq!(parse_retry_after("0", now), Some(Duration::from_secs(0)));
+        assert_eq!(
+            parse_retry_after("  42  ", now),
+            Some(Duration::from_secs(42))
+        );
+    }
+
+    #[test]
+    fn parse_retry_after_http_date_future() {
+        let now = NaiveDateTime::parse_from_str(
+            "Sun, 06 Nov 1994 08:49:37 GMT",
+            "%a, %d %b %Y %H:%M:%S GMT",
+        )
+        .unwrap()
+        .and_utc();
+        let future = "Sun, 06 Nov 1994 08:51:37 GMT";
+        assert_eq!(
+            parse_retry_after(future, now),
+            Some(Duration::from_secs(120))
+        );
+    }
+
+    #[test]
+    fn parse_retry_after_http_date_past_clamps_to_zero() {
+        let now = NaiveDateTime::parse_from_str(
+            "Sun, 06 Nov 1994 08:49:37 GMT",
+            "%a, %d %b %Y %H:%M:%S GMT",
+        )
+        .unwrap()
+        .and_utc();
+        let past = "Sun, 06 Nov 1994 08:47:37 GMT";
+        assert_eq!(parse_retry_after(past, now), Some(Duration::from_secs(0)));
+    }
+
+    #[test]
+    fn parse_retry_after_invalid_returns_none() {
+        let now = Utc::now();
+        assert_eq!(parse_retry_after("not a date", now), None);
+        assert_eq!(parse_retry_after("", now), None);
     }
 }

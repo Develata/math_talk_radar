@@ -19,6 +19,7 @@ pub(crate) fn cached_selector(selector_str: &'static str) -> Option<&'static Sel
             "a",
             "iframe",
             "video",
+            "audio",
             "meta",
             "h1",
             "title",
@@ -237,6 +238,7 @@ pub fn detect_media(document: &Html, base_url: &Url) -> Vec<MediaResource> {
         for element in document.select(selector) {
             if let Some(src) = element.attr("src")
                 && let Ok(resolved) = base_url.join(src)
+                && classify_video_platform(&resolved).is_some()
             {
                 push_dedup(make_video(&resolved, base_url), &mut results);
             }
@@ -249,6 +251,32 @@ pub fn detect_media(document: &Html, base_url: &Url) -> Vec<MediaResource> {
                 && let Ok(resolved) = base_url.join(src)
             {
                 push_dedup(make_video(&resolved, base_url), &mut results);
+            }
+            for child in element.children().filter_map(scraper::ElementRef::wrap) {
+                if child.value().name() == "source"
+                    && let Some(src) = child.attr("src")
+                    && let Ok(resolved) = base_url.join(src)
+                {
+                    push_dedup(make_video(&resolved, base_url), &mut results);
+                }
+            }
+        }
+    }
+
+    if let Some(selector) = cached_selector("audio") {
+        for element in document.select(selector) {
+            if let Some(src) = element.attr("src")
+                && let Ok(resolved) = base_url.join(src)
+            {
+                push_dedup(make_audio(&resolved, base_url), &mut results);
+            }
+            for child in element.children().filter_map(scraper::ElementRef::wrap) {
+                if child.value().name() == "source"
+                    && let Some(src) = child.attr("src")
+                    && let Ok(resolved) = base_url.join(src)
+                {
+                    push_dedup(make_audio(&resolved, base_url), &mut results);
+                }
             }
         }
     }
@@ -317,6 +345,19 @@ fn make_video(url: &Url, base_url: &Url) -> MediaResource {
         title: None,
         url: url.clone(),
         platform: classify_video_platform(url).map(|s| s.into()),
+        public_access: PublicAccess::Unknown,
+        published_at: None,
+        source: make_source_evidence(base_url),
+    }
+}
+
+fn make_audio(url: &Url, base_url: &Url) -> MediaResource {
+    MediaResource {
+        id: MediaId(deterministic_id(&[url.as_str()])),
+        media_type: MediaType::Audio,
+        title: None,
+        url: url.clone(),
+        platform: None,
         public_access: PublicAccess::Unknown,
         published_at: None,
         source: make_source_evidence(base_url),
@@ -652,12 +693,45 @@ mod tests {
     }
 
     #[test]
-    fn media_iframe_video() {
-        let html = r#"<iframe src="https://example.com/embed"></iframe>"#;
+    fn media_iframe_video_platform() {
+        let html = r#"<iframe src="https://www.youtube.com/embed/abc123"></iframe>"#;
         let media = detect_media(&doc(html), &base());
         assert_eq!(media.len(), 1);
         assert_eq!(media[0].media_type, MediaType::Video);
-        assert!(media[0].platform.is_none());
+        assert_eq!(media[0].platform.as_deref(), Some("youtube"));
+    }
+
+    #[test]
+    fn media_iframe_non_video_ignored() {
+        let html = r#"<iframe src="https://calendar.google.com/embed"></iframe>"#;
+        let media = detect_media(&doc(html), &base());
+        assert!(media.is_empty());
+    }
+
+    #[test]
+    fn media_video_element_source_child() {
+        let html = r#"<video><source src="https://example.com/talk.mp4"></video>"#;
+        let media = detect_media(&doc(html), &base());
+        assert_eq!(media.len(), 1);
+        assert_eq!(media[0].media_type, MediaType::Video);
+        assert_eq!(media[0].url.as_str(), "https://example.com/talk.mp4");
+    }
+
+    #[test]
+    fn media_audio_element() {
+        let html = r#"<audio src="https://example.com/talk.mp3"></audio>"#;
+        let media = detect_media(&doc(html), &base());
+        assert_eq!(media.len(), 1);
+        assert_eq!(media[0].media_type, MediaType::Audio);
+    }
+
+    #[test]
+    fn media_audio_element_source_child() {
+        let html = r#"<audio><source src="https://example.com/talk.opus"></audio>"#;
+        let media = detect_media(&doc(html), &base());
+        assert_eq!(media.len(), 1);
+        assert_eq!(media[0].media_type, MediaType::Audio);
+        assert_eq!(media[0].url.as_str(), "https://example.com/talk.opus");
     }
 
     #[test]

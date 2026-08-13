@@ -117,6 +117,22 @@ pub async fn run_scan(args: ScanArgs) -> Result<ScanOutput, CliError> {
             .then_with(|| a.id.0.cmp(&b.id.0))
     });
 
+    // CLI-20: validate --today and derive core_mode BEFORE store_scan so an
+    // invalid --today fails fast without having already mutated persisted
+    // state. The state write must be the last irreversible side-effect; a
+    // usage/config error before it leaves the DB untouched.
+    let today = match args.today.as_deref() {
+        Some(s) => NaiveDate::parse_from_str(s, "%Y-%m-%d").map_err(|e| {
+            CliError::config(format!("invalid --today {s:?}: {e}; expected YYYY-MM-DD"))
+        })?,
+        None => Utc::now().date_naive(),
+    };
+    let core_mode = match args.mode {
+        ScanMode::Upcoming => CoreScanMode::Upcoming,
+        ScanMode::Recordings => CoreScanMode::Recordings,
+        ScanMode::Both => CoreScanMode::Both,
+    };
+
     // Store the FULL scan result (pre-filter, pre-truncate) so change detection
     // compares against every live event. Filtering by mode/window or capping
     // with --max-events affects the OUTPUT only — an event filtered out of a
@@ -129,11 +145,17 @@ pub async fn run_scan(args: ScanArgs) -> Result<ScanOutput, CliError> {
         match open_state_repo(args.state.as_deref()) {
             Ok(repo) => match repo.store_scan(&events, now) {
                 Ok((stored, changes)) => (stored, changes),
-                Err(e) => {
-                    eprintln!("warning: state store_scan failed: {e}; continuing without state");
-                    (events, Vec::new())
-                }
+                // CLI-21: the DB opened but the write failed — that is a
+                // state-fatal condition (§32 exit 5), not a best-effort
+                // degradation. The user did not ask for --no-state; silently
+                // swallowing a write failure would lose change-detection
+                // signals and corrupt the first_seen timeline.
+                Err(e) => return Err(CliError::state(format!("state store_scan failed: {e}"))),
             },
+            // Could not even open the DB (missing dir, permission denied,
+            // schema mismatch from a future version). Degrade to no-state
+            // with a warning — this is an environment issue, not a write
+            // failure, and the scan output is still useful.
             Err(e) => {
                 eprintln!(
                     "warning: could not open state repository: {e}; continuing without state"
@@ -145,17 +167,6 @@ pub async fn run_scan(args: ScanArgs) -> Result<ScanOutput, CliError> {
 
     // Apply the mode/window filter and --max-events cap to the OUTPUT only.
     // The persisted state already reflects the full scan above.
-    let today = match args.today.as_deref() {
-        Some(s) => NaiveDate::parse_from_str(s, "%Y-%m-%d").map_err(|e| {
-            CliError::config(format!("invalid --today {s:?}: {e}; expected YYYY-MM-DD"))
-        })?,
-        None => Utc::now().date_naive(),
-    };
-    let core_mode = match args.mode {
-        ScanMode::Upcoming => CoreScanMode::Upcoming,
-        ScanMode::Recordings => CoreScanMode::Recordings,
-        ScanMode::Both => CoreScanMode::Both,
-    };
     events.retain(|e| matches_mode_and_window(e, core_mode, today, args.before, args.after));
 
     if let Some(max) = args.max_events {
@@ -214,6 +225,12 @@ fn enrich_event_topics(event: &mut Event, topics: &[NormalizedTopic]) {
     if topics.is_empty() {
         return;
     }
+    // CLI-22: merge registry matches with adapter-set topics instead of
+    // replacing. The old code did `event.topics = matches`, which wiped any
+    // topics an adapter had already populated when the registry found no
+    // matches (or found different topic_ids). Keep adapter topics, then add
+    // registry matches, deduping by topic_id and keeping the higher
+    // confidence hit.
     let mut matches = match_topics_normalized(&event.title, topics);
     if let Some(desc) = event.description.as_ref()
         && !desc.is_empty()
@@ -229,9 +246,18 @@ fn enrich_event_topics(event: &mut Event, topics: &[NormalizedTopic]) {
             }
         }
     }
-    if !matches.is_empty() || !event.topics.is_empty() {
-        event.topics = matches;
+    // Merge: start from adapter topics, then fold in registry matches.
+    let mut merged = std::mem::take(&mut event.topics);
+    for m in matches {
+        if let Some(existing) = merged.iter_mut().find(|e| e.topic_id == m.topic_id) {
+            if m.confidence > existing.confidence {
+                *existing = m;
+            }
+        } else {
+            merged.push(m);
+        }
     }
+    event.topics = merged;
 }
 
 /// CORE-12: enrich the event's people list with scholar tags from the curated

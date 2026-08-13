@@ -233,7 +233,7 @@ pub async fn fetch_one(
             resp.headers()
                 .get(reqwest::header::RETRY_AFTER)
                 .and_then(|v| v.to_str().ok())
-                .and_then(|s| s.parse::<u64>().ok().map(std::time::Duration::from_secs)),
+                .and_then(|s| crate::retry::parse_retry_after(s, Utc::now())),
         );
         if let crate::retry::RetryDecision::Retry { after } = retry {
             if retries_used < http_policy.max_retry {

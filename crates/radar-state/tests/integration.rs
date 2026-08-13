@@ -352,6 +352,122 @@ fn store_scan_cancelled_event_is_pruned_and_not_re_emitted() {
     );
 }
 
+/// ST-16: a cancelled event that reappears in a later scan restores its
+/// original `first_seen_at` from the tombstone instead of being reset to the
+/// reappearance scan time.
+#[test]
+fn store_scan_reappearing_event_restores_first_seen() {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let db_path = dir.path().join("state.redb");
+    let repo = Repository::open(&db_path).expect("open repo");
+
+    let event = base_event("e1", vec![]);
+    let (stored1, _) = repo
+        .store_scan(std::slice::from_ref(&event), t0())
+        .expect("scan 1: seed");
+    let original_first_seen = stored1[0].first_seen_at.expect("first_seen set");
+
+    // scan 2: event disappears → cancelled + tombstone written.
+    let (_, changes2) = repo.store_scan(&[], t1()).expect("scan 2: cancel");
+    assert_eq!(changes2.len(), 1);
+    assert_eq!(changes2[0].kind, ChangeKind::EventCancelled);
+
+    // scan 3: event reappears. first_seen_at must be restored from tombstone.
+    let (stored3, changes3) = repo
+        .store_scan(std::slice::from_ref(&event), t2())
+        .expect("scan 3: reappear");
+    assert_eq!(stored3.len(), 1);
+    assert_eq!(
+        stored3[0].first_seen_at,
+        Some(original_first_seen),
+        "ST-16: reappearing event must restore original first_seen_at, got {:?} expected {:?}",
+        stored3[0].first_seen_at,
+        Some(original_first_seen)
+    );
+    assert_eq!(stored3[0].last_seen_at, Some(t2()));
+    // The event re-enters the active set, so EventAdded is emitted (the
+    // EventCancelled was a one-shot signal; reappearance is a new addition).
+    assert_eq!(changes3.len(), 1);
+    assert_eq!(changes3[0].kind, ChangeKind::EventAdded);
+}
+
+/// ST-16: after reappearing, the tombstone is removed so a subsequent
+/// cancel+reappear cycle works correctly.
+#[test]
+fn store_scan_reappear_then_cancel_then_reappear() {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let db_path = dir.path().join("state.redb");
+    let repo = Repository::open(&db_path).expect("open repo");
+
+    let event = base_event("e1", vec![]);
+
+    // scan 1: seed (first_seen = t0)
+    let (s1, _) = repo
+        .store_scan(std::slice::from_ref(&event), t0())
+        .expect("scan 1");
+    let first_seen_1 = s1[0].first_seen_at.unwrap();
+
+    // scan 2: cancel
+    repo.store_scan(&[], t1()).expect("scan 2: cancel");
+
+    // scan 3: reappear (first_seen restored to t0)
+    let (s3, _) = repo
+        .store_scan(std::slice::from_ref(&event), t2())
+        .expect("scan 3");
+    assert_eq!(s3[0].first_seen_at, Some(first_seen_1));
+
+    // scan 4: cancel again
+    repo.store_scan(&[], t0() + chrono::Duration::hours(72))
+        .expect("scan 4: cancel");
+
+    // scan 5: reappear again — first_seen must STILL be t0, not t2.
+    let (s5, _) = repo
+        .store_scan(
+            std::slice::from_ref(&event),
+            t0() + chrono::Duration::hours(96),
+        )
+        .expect("scan 5");
+    assert_eq!(
+        s5[0].first_seen_at,
+        Some(first_seen_1),
+        "ST-16: first_seen_at must survive multiple cancel/reappear cycles"
+    );
+}
+
+/// ST-16: tombstones older than the retention window are purged. An event that
+/// reappears after the retention window is treated as genuinely new (first_seen
+/// reset to the current scan time).
+#[test]
+fn store_scan_tombstone_expired_after_retention() {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let db_path = dir.path().join("state.redb");
+    let repo = Repository::open(&db_path).expect("open repo");
+
+    let event = base_event("e1", vec![]);
+    let (s1, _) = repo
+        .store_scan(std::slice::from_ref(&event), t0())
+        .expect("scan 1");
+    let original_first_seen = s1[0].first_seen_at.unwrap();
+
+    // scan 2: cancel.
+    repo.store_scan(&[], t1()).expect("scan 2: cancel");
+
+    // scan 3: reappear 100 days later — beyond the 90-day retention window.
+    // The tombstone has been purged, so the event is treated as brand-new.
+    let far_future = t0() + chrono::Duration::days(100);
+    let (s3, changes3) = repo
+        .store_scan(std::slice::from_ref(&event), far_future)
+        .expect("scan 3");
+    assert_eq!(
+        s3[0].first_seen_at,
+        Some(far_future),
+        "ST-16: after retention window, reappearing event is brand-new (first_seen reset)"
+    );
+    assert_eq!(changes3.len(), 1);
+    assert_eq!(changes3[0].kind, ChangeKind::EventAdded);
+    assert_ne!(s3[0].first_seen_at, Some(original_first_seen));
+}
+
 /// store_scan detects EventUpdated on a title change.
 #[test]
 fn store_scan_event_updated() {
