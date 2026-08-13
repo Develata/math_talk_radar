@@ -205,8 +205,17 @@ pub(crate) fn clean_text(text: &str) -> String {
 // ===========================================================================
 
 /// Detect media resources (video, slides, PDFs) embedded in an HTML page.
+/// Within-event duplicates (the same URL surfaced by more than one selector,
+/// e.g. an `<a>` link and an `<iframe>` embedding the same video) are
+/// deduplicated by URL so a single resource is not recorded twice.
 pub fn detect_media(document: &Html, base_url: &Url) -> Vec<MediaResource> {
     let mut results = Vec::new();
+    let mut seen: std::collections::HashSet<Url> = std::collections::HashSet::new();
+    let mut push_dedup = |media: MediaResource, results: &mut Vec<MediaResource>| {
+        if seen.insert(media.url.clone()) {
+            results.push(media);
+        }
+    };
 
     if let Some(selector) = cached_selector("a") {
         for element in document.select(selector) {
@@ -215,7 +224,7 @@ pub fn detect_media(document: &Html, base_url: &Url) -> Vec<MediaResource> {
             {
                 let title_attr = element.attr("title");
                 if let Some(media) = classify_link(&resolved, &element, title_attr, base_url) {
-                    results.push(media);
+                    push_dedup(media, &mut results);
                 }
             }
         }
@@ -226,7 +235,7 @@ pub fn detect_media(document: &Html, base_url: &Url) -> Vec<MediaResource> {
             if let Some(src) = element.attr("src")
                 && let Ok(resolved) = base_url.join(src)
             {
-                results.push(make_video(&resolved, base_url));
+                push_dedup(make_video(&resolved, base_url), &mut results);
             }
         }
     }
@@ -236,7 +245,7 @@ pub fn detect_media(document: &Html, base_url: &Url) -> Vec<MediaResource> {
             if let Some(src) = element.attr("src")
                 && let Ok(resolved) = base_url.join(src)
             {
-                results.push(make_video(&resolved, base_url));
+                push_dedup(make_video(&resolved, base_url), &mut results);
             }
         }
     }

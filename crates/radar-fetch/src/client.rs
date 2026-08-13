@@ -14,6 +14,8 @@ use crate::policy::HttpPolicy;
 pub enum FetchBuildError {
     #[error("HTTP client build failed: {0}")]
     Build(#[from] reqwest::Error),
+    #[error("invalid HTTP policy: {0}")]
+    InvalidPolicy(String),
 }
 
 /// HTTP fetcher bound to an [`HttpPolicy`]. The real client (concurrency,
@@ -30,6 +32,16 @@ pub struct FetchClient {
 
 impl FetchClient {
     pub fn new(policy: HttpPolicy) -> Result<Self, FetchBuildError> {
+        if policy.global_concurrency == 0 {
+            return Err(FetchBuildError::InvalidPolicy(
+                "global_concurrency must be >= 1 (0 would hang the semaphore forever)".into(),
+            ));
+        }
+        if policy.per_host_concurrency == 0 {
+            return Err(FetchBuildError::InvalidPolicy(
+                "per_host_concurrency must be >= 1 (0 would hang the semaphore forever)".into(),
+            ));
+        }
         let inner = reqwest::Client::builder()
             .timeout(policy.request_timeout)
             .connect_timeout(policy.connect_timeout)

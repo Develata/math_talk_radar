@@ -33,9 +33,12 @@ fn remaining_time(deadline: Option<Instant>, default: std::time::Duration) -> st
         .unwrap_or(default)
 }
 
-/// Fetch robots.txt following same-host redirects safely. Per RFC 9309
-/// §2.3.1: 4xx → allow-all, 5xx → disallow-all, cross-host/unsafe-scheme
-/// redirect → disallow-all. Body exceeding `max_response_body` → disallow-all
+/// Fetch robots.txt following redirects safely. Per RFC 9309 §2.3.1:
+/// 4xx → allow-all, 5xx → disallow-all, https→http downgrade or
+/// non-http(s) scheme → disallow-all. Cross-host/port redirects are FOLLOWED
+/// (RFC 9309 §2.3.1.2 SHOULD follow cross-authority redirects), so the common
+/// http→https / bare-domain→www robots.txt canonicalization does not silently
+/// disallow-all. Body exceeding `max_response_body` → disallow-all
 /// (conservative: an oversized policy could hide disallow rules).
 async fn fetch_robots_txt(
     client: &FetchClient,
@@ -62,13 +65,12 @@ async fn fetch_robots_txt(
                 Ok(u) => u,
                 Err(_) => return Ok(RobotsRules::disallow_all()),
             };
+            // Only block on downgrade or unsafe scheme; cross-host/port is
+            // followed per RFC 9309 §2.3.1.2.
             if current.scheme() == "https" && new_url.scheme() == "http" {
                 return Ok(RobotsRules::disallow_all());
             }
             if !matches!(new_url.scheme(), "http" | "https") {
-                return Ok(RobotsRules::disallow_all());
-            }
-            if new_url.host_str() != current.host_str() || new_url.port() != current.port() {
                 return Ok(RobotsRules::disallow_all());
             }
             current = new_url;
@@ -429,6 +431,13 @@ pub async fn fetch_source(
                     continue;
                 }
             }
+        }
+        // ADAP M-2: when plan_enrichment emitted no fetches (e.g. a JSON-LD
+        // Event whose url equals the listing page), hand the already-fetched
+        // entrypoint document to enrich so the adapter can still extract
+        // description/location/performers from it instead of losing them.
+        if docs.is_empty() {
+            docs.push(doc.clone());
         }
         match adapter.enrich(stub, &docs, source) {
             Ok(candidate) => candidates.push(candidate),

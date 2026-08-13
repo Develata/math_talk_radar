@@ -203,6 +203,8 @@ impl Repository {
                 .map(|e| (e.id.0.as_str(), e.first_seen_at))
                 .collect();
             let changes = detect_changes(&prev_events, events, now);
+            let current_ids: std::collections::HashSet<&str> =
+                events.iter().map(|e| e.id.0.as_str()).collect();
             let mut stored = Vec::with_capacity(events.len());
             for event in events {
                 let mut s = event.clone();
@@ -212,6 +214,16 @@ impl Repository {
                 let bytes = serde_json::to_vec(&s)?;
                 table.insert(event.id.0.as_str(), bytes.as_slice())?;
                 stored.push(s);
+            }
+            // ST M-1: prune events that were in the previous scan but are absent
+            // from the current one (the cancelled set). Without this, cancelled
+            // events stay in the table forever and detect_changes re-emits
+            // EventCancelled for them on every subsequent scan. Deleting here
+            // keeps the DB bounded and makes EventCancelled a one-shot signal.
+            for prev in &prev_events {
+                if !current_ids.contains(prev.id.0.as_str()) {
+                    table.remove(prev.id.0.as_str())?;
+                }
             }
             (stored, changes)
         };

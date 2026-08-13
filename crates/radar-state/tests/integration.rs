@@ -26,6 +26,10 @@ fn t1() -> DateTime<Utc> {
     t0() + chrono::Duration::hours(24)
 }
 
+fn t2() -> DateTime<Utc> {
+    t0() + chrono::Duration::hours(48)
+}
+
 fn src() -> SourceEvidence {
     SourceEvidence {
         source_id: "s1".into(),
@@ -316,6 +320,36 @@ fn store_scan_event_cancelled() {
     assert!(stored.is_empty());
     assert_eq!(changes.len(), 1);
     assert_eq!(changes[0].kind, ChangeKind::EventCancelled);
+}
+
+/// ST M-1: a cancelled event is pruned from the DB so a subsequent scan does
+/// NOT re-emit EventCancelled. Without pruning, detect_changes would see the
+/// stale event in prev on every scan and re-emit EventCancelled forever, and
+/// the DB would grow unboundedly.
+#[test]
+fn store_scan_cancelled_event_is_pruned_and_not_re_emitted() {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let db_path = dir.path().join("state.redb");
+    let repo = Repository::open(&db_path).expect("open repo");
+
+    let event = base_event("e1", vec![]);
+    repo.store_scan(std::slice::from_ref(&event), t0())
+        .expect("scan 1: seed");
+
+    let (_, changes2) = repo.store_scan(&[], t1()).expect("scan 2: cancel");
+    assert_eq!(changes2.len(), 1);
+    assert_eq!(changes2[0].kind, ChangeKind::EventCancelled);
+
+    assert!(
+        repo.get_event(&event.id).expect("get").is_none(),
+        "ST M-1: cancelled event must be deleted from the DB"
+    );
+
+    let (_, changes3) = repo.store_scan(&[], t2()).expect("scan 3: still empty");
+    assert!(
+        changes3.is_empty(),
+        "ST M-1: EventCancelled must be a one-shot signal, not re-emitted: {changes3:?}"
+    );
 }
 
 /// store_scan detects EventUpdated on a title change.
