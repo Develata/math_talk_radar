@@ -63,8 +63,15 @@ recording is a key ranking signal.
 ## ID contract (§24)
 
 IDs are deterministic: `BLAKE3(normalized canonical identity fields)`. Event:
-`normalized_title + canonical organizer/domain + start_date`. Never random UUID,
+`normalized_title + canonical_url` (v0.1; see ADR-0008). Never random UUID,
 timestamp, vector index, or output order. Required for change detection.
+
+> **v0.1 derivation (ADR-0008):** the plan originally specified
+> `normalized_title + canonical organizer/domain + start_date`, but no v0.1
+> adapter parses a structured `organizer` field and `start_date` is frequently
+> absent at discover time, so the v0.1 code hashes `normalized_title +
+> canonical_url` instead. A future schema bump may incorporate `organizer`
+> and `start_date` once those fields are reliably parsed across adapters.
 
 ## Acceptance cases
 
