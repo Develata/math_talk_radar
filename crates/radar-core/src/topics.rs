@@ -127,6 +127,28 @@ pub fn match_topics(text: &str, topics: &[TopicRecord]) -> Vec<TopicMatch> {
     match_topics_normalized(text, &normalized)
 }
 
+/// Wrapper for the `topics.toml` document shape: a top-level `[[topics]]` array.
+/// Loaded by the CLI at startup from the embedded default (§33, CFG-001).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TopicsConfig {
+    #[serde(default)]
+    pub topics: Vec<TopicRecord>,
+}
+
+impl TopicsConfig {
+    /// Parse a `topics.toml` document. Returns a config with an empty topic
+    /// list for empty input.
+    pub fn parse(toml_str: &str) -> Result<Self, toml::de::Error> {
+        toml::from_str(toml_str)
+    }
+
+    /// The embedded default topic registry shipped with the binary (CFG-001).
+    pub fn embedded() -> Self {
+        Self::parse(include_str!("../../../config/topics.toml"))
+            .expect("embedded topics.toml must parse at compile time")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

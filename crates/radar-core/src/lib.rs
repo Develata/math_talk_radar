@@ -35,9 +35,12 @@ pub use model::{
     TalkId, deterministic_id, event_id,
 };
 pub use normalize::{contains_phrase, normalize_text};
-pub use people::{PersonHit, PersonRole, ScholarRecord};
+pub use people::{MatchContext, PersonHit, PersonRole, ScholarRecord, ScholarsConfig};
 pub use ranking::{
     MAX_ACCESS, MAX_COMPLETENESS, MAX_MEDIA, MAX_PEOPLE, MAX_SOURCE_TIER, MAX_TOPIC,
     ScoreComponents,
 };
-pub use topics::{TopicMatch, TopicRecord};
+pub use topics::{
+    NormalizedTopic, TopicMatch, TopicRecord, TopicsConfig, match_topics_normalized,
+    normalize_topics,
+};

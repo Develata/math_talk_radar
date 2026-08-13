@@ -44,6 +44,30 @@ pub struct ScholarRecord {
     pub tags: Vec<String>,
 }
 
+/// Wrapper for the `scholars.toml` document shape: a top-level
+/// `[[scholars]]` array. Loaded by the CLI at startup from the embedded
+/// default (§33, CFG-001).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScholarsConfig {
+    #[serde(default)]
+    pub scholars: Vec<ScholarRecord>,
+}
+
+impl ScholarsConfig {
+    /// Parse a `scholars.toml` document. Returns a config with an empty
+    /// scholar list for empty input.
+    pub fn parse(toml_str: &str) -> Result<Self, toml::de::Error> {
+        toml::from_str(toml_str)
+    }
+
+    /// The embedded default scholar registry shipped with the binary
+    /// (CFG-001).
+    pub fn embedded() -> Self {
+        Self::parse(include_str!("../../../config/scholars.toml"))
+            .expect("embedded scholars.toml must parse at compile time")
+    }
+}
+
 /// Controls role assignment per §6.2: a name in a structured person field can
 /// yield a Speaker/Organizer/etc. role; a name in body text or a title yields at
 /// most TitleMention.

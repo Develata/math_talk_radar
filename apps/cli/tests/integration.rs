@@ -326,3 +326,194 @@ async fn cli_10_mode_filter_does_not_emit_spurious_event_cancelled() {
         "scan 2 must NOT emit event_cancelled for events filtered out by mode, but got: {changes:?}"
     );
 }
+
+// Feed with titles that match the curated topic registry (config/topics.toml)
+// and the curated scholar registry (config/scholars.toml). Used by CORE-11/12
+// regression tests to verify the matchers run end-to-end in the scan pipeline.
+const TOPIC_SCHOLAR_FEED_TEMPLATE: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+<channel>
+<title>Math Conferences</title>
+<link>{base}</link>
+<description>Math events</description>
+<item><title>Workshop on Arithmetic Geometry and Shimura Varieties</title><link>{base}/detail/ag</link><pubDate>Mon, 01 Sep 2026 00:00:00 +0000</pubDate></item>
+<item><title>Lecture by Pierre Deligne on Number Theory</title><link>{base}/detail/deligne</link><pubDate>Tue, 02 Sep 2026 00:00:00 +0000</pubDate></item>
+<item><title>Generic talk with no topic or scholar</title><link>{base}/detail/generic</link><pubDate>Wed, 03 Sep 2026 00:00:00 +0000</pubDate></item>
+</channel>
+</rss>
+"#;
+
+async fn mount_topic_scholar_feed(server: &MockServer) {
+    let base = server.uri();
+    let body = TOPIC_SCHOLAR_FEED_TEMPLATE.replace("{base}", &base);
+    Mock::given(method("GET"))
+        .and(path("/robots.txt"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(""))
+        .mount(server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/feed.xml"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(body))
+        .mount(server)
+        .await;
+    for slug in ["ag", "deligne", "generic"] {
+        Mock::given(method("GET"))
+            .and(path(format!("/detail/{slug}")))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(server)
+            .await;
+    }
+}
+
+// CORE-11: topic matcher must run in the scan pipeline and populate
+// event.topics. Before the fix, all adapters set topics: Vec::new() and the
+// 30-point topic component was always zero. After the fix, the event titled
+// "Workshop on Arithmetic Geometry and Shimura Varieties" must have at least
+// the arithmetic_geometry topic in its topics array and a non-zero topic score
+// component.
+#[tokio::test]
+async fn core_11_topic_matching_fires_in_scan() {
+    let server = MockServer::start().await;
+    mount_topic_scholar_feed(&server).await;
+    let config = write_sources_config(&[(true, "ok", &format!("{}/feed.xml", server.uri()))]);
+
+    let output = bin()
+        .args([
+            "scan",
+            "--no-state",
+            "--sources",
+            config.path().to_str().unwrap(),
+            "--today",
+            "2026-08-13",
+        ])
+        .assert()
+        .success();
+    let stdout = String::from_utf8_lossy(&output.get_output().stdout);
+    let v: serde_json::Value = serde_json::from_str(&stdout).expect("stdout is JSON");
+    let events = v["events"].as_array().expect("events array");
+
+    // Find the arithmetic geometry workshop by title.
+    let ag_event = events
+        .iter()
+        .find(|e| {
+            e["title"]
+                .as_str()
+                .unwrap_or("")
+                .contains("Arithmetic Geometry")
+        })
+        .expect("arithmetic geometry event present");
+    let topics = ag_event["topics"].as_array().expect("topics array");
+    assert!(
+        !topics.is_empty(),
+        "CORE-11: event.topics must be populated by the topic matcher, got empty array"
+    );
+    assert!(
+        topics
+            .iter()
+            .any(|t| t["topic_id"] == "arithmetic_geometry"),
+        "CORE-11: topics must contain arithmetic_geometry, got: {topics:?}"
+    );
+    // The topic score component must be non-zero (each matched topic ≥ 8).
+    let topic_score = ag_event["score_components"]["topic"].as_u64().unwrap_or(0);
+    assert!(
+        topic_score > 0,
+        "CORE-11: score_components.topic must be > 0, got {topic_score}"
+    );
+}
+
+// CORE-12: scholar matcher must run in the scan pipeline. The event titled
+// "Lecture by Pierre Deligne on Number Theory" must produce a PersonHit with
+// the "fields"/"wolf"/"abel"/"crafoord" scholar tags, so the people component
+// can recognize the laureate. Before the fix, scholar_tags was always empty
+// and the people component never exceeded the 3-point baseline.
+#[tokio::test]
+async fn core_12_scholar_matching_fires_in_scan() {
+    let server = MockServer::start().await;
+    mount_topic_scholar_feed(&server).await;
+    let config = write_sources_config(&[(true, "ok", &format!("{}/feed.xml", server.uri()))]);
+
+    let output = bin()
+        .args([
+            "scan",
+            "--no-state",
+            "--sources",
+            config.path().to_str().unwrap(),
+            "--today",
+            "2026-08-13",
+        ])
+        .assert()
+        .success();
+    let stdout = String::from_utf8_lossy(&output.get_output().stdout);
+    let v: serde_json::Value = serde_json::from_str(&stdout).expect("stdout is JSON");
+    let events = v["events"].as_array().expect("events array");
+
+    let deligne_event = events
+        .iter()
+        .find(|e| e["title"].as_str().unwrap_or("").contains("Deligne"))
+        .expect("Deligne event present");
+    let people = deligne_event["people"].as_array().expect("people array");
+    assert!(
+        !people.is_empty(),
+        "CORE-12: event.people must be populated by the scholar matcher, got empty array"
+    );
+    let deligne_hit = people
+        .iter()
+        .find(|p| {
+            p["canonical_name"]
+                .as_str()
+                .unwrap_or("")
+                .contains("Deligne")
+        })
+        .expect("Deligne PersonHit present");
+    let tags = deligne_hit["scholar_tags"]
+        .as_array()
+        .expect("scholar_tags array");
+    assert!(
+        !tags.is_empty(),
+        "CORE-12: scholar_tags must be populated from the registry, got empty array"
+    );
+    assert!(
+        tags.iter().any(|t| t.as_str() == Some("fields")),
+        "CORE-12: scholar_tags must contain 'fields', got: {tags:?}"
+    );
+}
+
+// CORE-11/12 regression guard: the generic event with no topic or scholar in
+// its title must have empty topics and empty people, proving the matchers do
+// not produce false positives.
+#[tokio::test]
+async fn core_11_12_no_false_positives_on_generic_title() {
+    let server = MockServer::start().await;
+    mount_topic_scholar_feed(&server).await;
+    let config = write_sources_config(&[(true, "ok", &format!("{}/feed.xml", server.uri()))]);
+
+    let output = bin()
+        .args([
+            "scan",
+            "--no-state",
+            "--sources",
+            config.path().to_str().unwrap(),
+            "--today",
+            "2026-08-13",
+        ])
+        .assert()
+        .success();
+    let stdout = String::from_utf8_lossy(&output.get_output().stdout);
+    let v: serde_json::Value = serde_json::from_str(&stdout).expect("stdout is JSON");
+    let events = v["events"].as_array().expect("events array");
+
+    let generic = events
+        .iter()
+        .find(|e| e["title"].as_str().unwrap_or("").contains("Generic"))
+        .expect("generic event present");
+    let topics = generic["topics"].as_array().expect("topics array");
+    let people = generic["people"].as_array().expect("people array");
+    assert!(
+        topics.is_empty(),
+        "CORE-11 guard: generic title must produce no topic matches, got: {topics:?}"
+    );
+    assert!(
+        people.is_empty(),
+        "CORE-12 guard: generic title must produce no scholar matches, got: {people:?}"
+    );
+}

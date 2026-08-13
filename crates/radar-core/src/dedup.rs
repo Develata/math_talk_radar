@@ -15,6 +15,7 @@ use url::Url;
 use crate::model::{Event, Location, MediaResource, SourceEvidence, Talk};
 use crate::normalize::{canonicalize_url, normalize_name};
 use crate::people::{PersonHit, PersonRole};
+use crate::topics::TopicMatch;
 
 /// Identity signal used to decide whether two events are the same (§25).
 /// Listed weakest-to-strongest by the algorithm's preference; the actual
@@ -284,6 +285,7 @@ pub fn merge_events(primary: Event, secondary: Event) -> Event {
     keep.media = union_media(keep.media, other.media);
     keep.talks = union_talks(keep.talks, other.talks);
     keep.people = union_people(keep.people, other.people);
+    keep.topics = union_topics(keep.topics, other.topics);
 
     keep.first_seen_at = earliest(keep.first_seen_at, other.first_seen_at);
     keep.last_seen_at = latest(keep.last_seen_at, other.last_seen_at);
@@ -334,6 +336,17 @@ fn union_people(a: Vec<PersonHit>, b: Vec<PersonHit>) -> Vec<PersonHit> {
             .any(|existing| existing.canonical_name == p.canonical_name && existing.role == p.role);
         if !dup {
             out.push(p);
+        }
+    }
+    out
+}
+
+fn union_topics(a: Vec<TopicMatch>, b: Vec<TopicMatch>) -> Vec<TopicMatch> {
+    let mut out = a;
+    for t in b {
+        let dup = out.iter().any(|existing| existing.topic_id == t.topic_id);
+        if !dup {
+            out.push(t);
         }
     }
     out
