@@ -137,21 +137,32 @@ async fn download_to_file_with_hash(url: &str, dest: &Path) -> Result<String, Cl
     }
     let mut file = std::fs::File::create(dest)
         .map_err(|e| CliError::update(format!("create temp file failed: {e}")))?;
-    let mut hasher = Sha256::new();
-    let mut stream = resp.bytes_stream();
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|e| CliError::update(format!("download stream error: {e}")))?;
-        hasher.update(&chunk);
-        std::io::Write::write_all(&mut file, &chunk)
-            .map_err(|e| CliError::update(format!("write temp file failed: {e}")))?;
+    // CLI-11: a mid-stream download or write error previously leaked the temp
+    // file (only the checksum/self-test/rename paths cleaned up). Centralize
+    // cleanup here so every error path inside the streaming loop removes it.
+    let stream_result: Result<String, CliError> = async {
+        let mut hasher = Sha256::new();
+        let mut stream = resp.bytes_stream();
+        while let Some(chunk) = stream.next().await {
+            let chunk =
+                chunk.map_err(|e| CliError::update(format!("download stream error: {e}")))?;
+            hasher.update(&chunk);
+            std::io::Write::write_all(&mut file, &chunk)
+                .map_err(|e| CliError::update(format!("write temp file failed: {e}")))?;
+        }
+        let digest = hasher.finalize();
+        let mut hex = String::with_capacity(64);
+        for byte in digest {
+            use std::fmt::Write;
+            let _ = write!(hex, "{byte:02x}");
+        }
+        Ok(hex)
     }
-    let digest = hasher.finalize();
-    let mut hex = String::with_capacity(64);
-    for byte in digest {
-        use std::fmt::Write;
-        let _ = write!(hex, "{byte:02x}");
+    .await;
+    if stream_result.is_err() {
+        let _ = std::fs::remove_file(dest);
     }
-    Ok(hex)
+    stream_result
 }
 
 /// Parse a `.sha256` file: first hex token is the digest, rest is filename.
