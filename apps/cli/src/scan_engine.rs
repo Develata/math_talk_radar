@@ -22,6 +22,11 @@ use crate::output::{OUTPUT_SCHEMA_VERSION, QuerySpec, ScanOutput};
 use crate::runtime::CliError;
 
 pub async fn run_scan(args: ScanArgs) -> Result<ScanOutput, CliError> {
+    // CLI-15: validate --jobs before any I/O (config load, registry parse) so a
+    // bad value fails fast instead of after disk reads.
+    if args.jobs == 0 {
+        return Err(CliError::usage("--jobs must be >= 1"));
+    }
     let config = load_sources(args.sources.as_deref())?;
     let enabled: Vec<SourceSpec> = config
         .sources
@@ -55,13 +60,10 @@ pub async fn run_scan(args: ScanArgs) -> Result<ScanOutput, CliError> {
     let scholars_config = radar_core::ScholarsConfig::embedded();
     let scholars: &[ScholarRecord] = &scholars_config.scholars;
 
-    let mut http_policy = radar_fetch::policy::HttpPolicy::default();
-    if args.jobs == 0 {
-        return Err(CliError::usage("--jobs must be >= 1"));
-    }
-    if args.jobs > 0 {
-        http_policy.global_concurrency = args.jobs as usize;
-    }
+    let http_policy = radar_fetch::policy::HttpPolicy {
+        global_concurrency: args.jobs as usize,
+        ..radar_fetch::policy::HttpPolicy::default()
+    };
     let client = radar_fetch::client::FetchClient::new(http_policy)
         .map_err(|e| CliError::config(format!("http client build failed: {e}")))?;
 
@@ -178,19 +180,14 @@ pub async fn run_scan(args: ScanArgs) -> Result<ScanOutput, CliError> {
 }
 
 fn default_state_db_path() -> Option<PathBuf> {
-    let dir = if let Some(xdg) = std::env::var_os("XDG_DATA_HOME") {
-        let mut p = PathBuf::from(xdg);
-        p.push("math_talk_radar");
-        p
-    } else {
-        let home = std::env::var_os("HOME")?;
-        let mut p = PathBuf::from(home);
-        p.push(".local");
-        p.push("share");
-        p.push("math_talk_radar");
-        p
-    };
-    Some(dir.join("state.redb"))
+    // CLI-13: delegate to the shared XDG resolver instead of duplicating the
+    // XDG_DATA_HOME / HOME fallback here. data_dir() never returns None (it
+    // falls back to a relative path), so gate on the env vars to preserve the
+    // Option contract: the caller reports a clear error when both are unset.
+    if std::env::var_os("XDG_DATA_HOME").is_none() && std::env::var_os("HOME").is_none() {
+        return None;
+    }
+    Some(crate::lifecycle::paths::data_dir().join("state.redb"))
 }
 
 fn open_state_repo(override_path: Option<&Path>) -> Result<radar_state::Repository, String> {

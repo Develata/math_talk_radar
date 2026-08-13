@@ -152,6 +152,13 @@ pub fn contains_phrase(text: &str, phrase: &str) -> bool {
     if phrase.contains(char::is_whitespace) {
         return text.contains(phrase);
     }
+    // CJK and other scripts that do not separate words with whitespace cannot
+    // be bounded by the alphanumeric check below (ideographs are themselves
+    // alphanumeric), so a CJK alias embedded in a larger string would be missed.
+    // Fall back to plain substring match for phrases containing non-ASCII chars.
+    if !phrase.is_ascii() {
+        return text.contains(phrase);
+    }
     let mut search_from = 0;
     while let Some(rel) = text[search_from..].find(phrase) {
         let start = search_from + rel;

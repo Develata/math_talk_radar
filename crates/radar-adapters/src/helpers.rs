@@ -20,6 +20,9 @@ pub(crate) fn cached_selector(selector_str: &'static str) -> Option<&'static Sel
             "iframe",
             "video",
             "meta",
+            "h1",
+            "title",
+            r#"script[type="application/ld+json"]"#,
         ];
         for &s in candidates {
             if let Ok(sel) = Selector::parse(s) {
@@ -170,9 +173,9 @@ fn extract_location_text(document: &Html) -> Option<String> {
     None
 }
 
-fn select_first_text(document: &Html, selector_str: &str) -> Option<String> {
-    let selector = Selector::parse(selector_str).ok()?;
-    let element = document.select(&selector).next()?;
+fn select_first_text(document: &Html, selector_str: &'static str) -> Option<String> {
+    let selector = cached_selector(selector_str)?;
+    let element = document.select(selector).next()?;
     let text = clean_text(&element.text().collect::<String>());
     if text.is_empty() { None } else { Some(text) }
 }

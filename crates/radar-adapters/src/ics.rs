@@ -111,10 +111,10 @@ impl SourceAdapter for IcsAdapter {
         let mut description = None;
         let mut location = None;
         if let Some(doc) = documents.first()
-            && let Ok(body) = std::str::from_utf8(&doc.body)
-            && body.contains('<')
+            && doc.body.contains(&b'<')
         {
-            let document = scraper::Html::parse_document(body);
+            let body = helpers::doc_body(&doc.body);
+            let document = scraper::Html::parse_document(&body);
             let fields = helpers::extract_html_fields(&document);
             description = fields.description;
             if let Some(loc_text) = fields.location_text {

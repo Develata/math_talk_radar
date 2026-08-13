@@ -8,6 +8,8 @@
 //!
 //! Determinism: identical inputs produce identical merge decisions. No clocks,
 //! no randomness, no order-dependent ties (we sort before merging).
+use std::collections::HashSet;
+
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use url::Url;
@@ -295,11 +297,13 @@ pub fn merge_events(primary: Event, secondary: Event) -> Event {
 
 fn union_sources(a: Vec<SourceEvidence>, b: Vec<SourceEvidence>) -> Vec<SourceEvidence> {
     let mut out = a;
+    let mut seen: HashSet<(String, String)> = out
+        .iter()
+        .map(|s| (s.source_id.clone(), s.source_url.to_string()))
+        .collect();
     for s in b {
-        let dup = out.iter().any(|existing| {
-            existing.source_id == s.source_id && existing.source_url == s.source_url
-        });
-        if !dup {
+        let key = (s.source_id.clone(), s.source_url.to_string());
+        if seen.insert(key) {
             out.push(s);
         }
     }
@@ -308,9 +312,9 @@ fn union_sources(a: Vec<SourceEvidence>, b: Vec<SourceEvidence>) -> Vec<SourceEv
 
 fn union_media(a: Vec<MediaResource>, b: Vec<MediaResource>) -> Vec<MediaResource> {
     let mut out = a;
+    let mut seen: HashSet<Url> = out.iter().map(|m| m.url.clone()).collect();
     for m in b {
-        let dup = out.iter().any(|existing| existing.url == m.url);
-        if !dup {
+        if seen.insert(m.url.clone()) {
             out.push(m);
         }
     }
@@ -319,9 +323,9 @@ fn union_media(a: Vec<MediaResource>, b: Vec<MediaResource>) -> Vec<MediaResourc
 
 fn union_talks(a: Vec<Talk>, b: Vec<Talk>) -> Vec<Talk> {
     let mut out = a;
+    let mut seen: HashSet<String> = out.iter().map(|t| t.id.0.clone()).collect();
     for t in b {
-        let dup = out.iter().any(|existing| existing.id == t.id);
-        if !dup {
+        if seen.insert(t.id.0.clone()) {
             out.push(t);
         }
     }
@@ -330,11 +334,12 @@ fn union_talks(a: Vec<Talk>, b: Vec<Talk>) -> Vec<Talk> {
 
 fn union_people(a: Vec<PersonHit>, b: Vec<PersonHit>) -> Vec<PersonHit> {
     let mut out = a;
+    let mut seen: HashSet<(String, PersonRole)> = out
+        .iter()
+        .map(|p| (p.canonical_name.clone(), p.role))
+        .collect();
     for p in b {
-        let dup = out
-            .iter()
-            .any(|existing| existing.canonical_name == p.canonical_name && existing.role == p.role);
-        if !dup {
+        if seen.insert((p.canonical_name.clone(), p.role)) {
             out.push(p);
         }
     }
@@ -343,9 +348,9 @@ fn union_people(a: Vec<PersonHit>, b: Vec<PersonHit>) -> Vec<PersonHit> {
 
 fn union_topics(a: Vec<TopicMatch>, b: Vec<TopicMatch>) -> Vec<TopicMatch> {
     let mut out = a;
+    let mut seen: HashSet<String> = out.iter().map(|t| t.topic_id.clone()).collect();
     for t in b {
-        let dup = out.iter().any(|existing| existing.topic_id == t.topic_id);
-        if !dup {
+        if seen.insert(t.topic_id.clone()) {
             out.push(t);
         }
     }

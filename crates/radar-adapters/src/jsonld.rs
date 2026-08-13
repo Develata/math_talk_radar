@@ -14,7 +14,7 @@ use radar_core::{
     ScoreComponents, SourceAdapter, SourceEvidence, SourceSpec, Talk, TalkId, deterministic_id,
     event_id,
 };
-use scraper::{Html, Selector};
+use scraper::Html;
 use url::Url;
 
 use crate::helpers;
@@ -199,11 +199,11 @@ fn extract_jsonld_blocks(html: &str) -> Vec<serde_json::Value> {
         return Vec::new();
     }
     let fragment = Html::parse_fragment(html);
-    let Ok(selector) = Selector::parse(r#"script[type="application/ld+json"]"#) else {
+    let Some(selector) = helpers::cached_selector(r#"script[type="application/ld+json"]"#) else {
         return Vec::new();
     };
     fragment
-        .select(&selector)
+        .select(selector)
         .filter_map(|el| {
             let text = el.text().collect::<String>();
             serde_json::from_str::<serde_json::Value>(&text).ok()

@@ -284,6 +284,10 @@ fn first_date(document: &Html, selector: &Selector) -> Option<EventDate> {
 
 fn first_text_in(scope: &ElementRef, selector: &Selector) -> Option<String> {
     let element = scope.select(selector).next()?;
+    let direct = crate::helpers::clean_text(&direct_text(&element));
+    if !direct.is_empty() {
+        return Some(direct);
+    }
     let text = crate::helpers::clean_text(&element.text().collect::<String>());
     if text.is_empty() { None } else { Some(text) }
 }
