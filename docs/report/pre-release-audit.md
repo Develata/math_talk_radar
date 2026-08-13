@@ -142,3 +142,58 @@ batches across 9 atomic commits (`d5bdb2b`..`00f1d45`).
 
 Both audit rounds (26 + 40 = 66 findings total) are resolved. The codebase
 is ready for `v0.1.0` tag pending Deve's explicit authorization (AGENTS.md §12).
+
+## Third-round audit (2026-08-14)
+
+A third review by 5 oracle agents (one per crate) produced 3 HIGH, 6 MEDIUM,
+8 LOW findings. Deve authorized fixing all before `v0.1.0`. Fixes committed
+across 4 atomic commits (`d7702c5`..`1b4ea0c`).
+
+### HIGH (3 findings, all fixed)
+
+| ID | Crate | Fix | Commit |
+|---|---|---|---|
+| CLI-10 | cli | store_scan runs BEFORE filter+truncate (ST-1 regression: false EventCancelled on every narrowed scan) | `d7702c5` |
+| CORE-11/12 | core+cli | wire match_topics into scan_engine via enrich_event_topics + TopicsConfig (40% of ranking was dead code) | `3f7ddd2` |
+| CORE-13 | core+cli | wire match_scholars via enrich_event_scholars + ScholarsConfig + union_topics in merge_events | `3f7ddd2` |
+
+### MEDIUM (6 findings, all fixed)
+
+| ID | Crate | Fix | Commit |
+|---|---|---|---|
+| CLI-11 | cli | temp file leak on mid-download error in download_to_file_with_hash | `b73f042` |
+| ADAP M-1 | adapters | detect_media within-event dedup by URL (HashSet guard) | `0d6baa3` |
+| ADAP M-2 | adapters | JsonLdAdapter url-less enrichment: pass entrypoint doc to enrich when plan_enrichment empty (ADAP-4 regression) | `0d6baa3` |
+| FETCH M-1 | fetch | follow cross-host robots.txt redirects per RFC 9309 §2.3.1.2 (was disallow_all) | `0d6baa3` |
+| FETCH M-3 | fetch | concurrency=0 guard in FetchClient::new (was Semaphore::new(0) hang) | `0d6baa3` |
+| ST M-1 | state | prune cancelled events in store_scan (was unbounded growth + repeated EventCancelled) | `0d6baa3` |
+
+### LOW (8 findings, all fixed)
+
+| ID | Crate | Fix | Commit |
+|---|---|---|---|
+| L-5 | core | union_sources/media/talks/people/topics O(n²)→O(n+m) via HashSet | `1b4ea0c` |
+| L-1 | adapters | select_first_text + extract_jsonld_blocks routed through cached_selector (added h1/title/jsonld to cache) | `1b4ea0c` |
+| L-2 | adapters | first_text_in direct_text preference (ADAP-3 incomplete) | `1b4ea0c` |
+| L-3 | adapters | ics::enrich from_utf8→doc_body (BOM + lossy fallback) | `1b4ea0c` |
+| LOW-1 | core | contains_phrase CJK substring fallback (ideographs are alphanumeric, break the boundary check) | `1b4ea0c` |
+| CLI-13 | cli | default_state_db_path delegates to paths::data_dir (XDG dedup) | `1b4ea0c` |
+| CLI-15 | cli | --jobs==0 moved before config load (fail-fast) + redundant guard removed | `1b4ea0c` |
+
+### Deferred (accepted at v0.1 scale)
+
+| ID | Crate | Reason |
+|---|---|---|
+| FETCH M-2 | fetch | per-host semaphore map growth — bounded by source registry size (~13 hosts); eviction machinery risks bugs for no current benefit |
+
+### Post-third-round gate (2026-08-14)
+
+| Check | Result |
+|---|---|
+| `cargo fmt --check` | clean |
+| `cargo clippy --workspace --all-targets --all-features -- -D warnings` | clean |
+| `cargo test --workspace` | 315 passed, 0 failed |
+
+All three audit rounds (26 + 40 + 17 = 83 findings total) are resolved. The
+codebase is ready for `v0.1.0` tag pending Deve's explicit authorization
+(AGENTS.md §12).

@@ -1,19 +1,19 @@
 # Baseline — Latest
 
 > Evidence only — non-authoritative. Populated by `cargo xtask baseline` (§57).
-> Most recent run: 2026-08-13, after the second-round audit (40 fixes across 9 commits).
+> Most recent run: 2026-08-14, after the third-round audit (17 fixes across 4 commits).
 
 ## B1 Functional
 
-| Suite | Result (2026-08-13) |
+| Suite | Result (2026-08-14) |
 |---|---|
-| `cargo test -p radar-core` | 98 passed |
+| `cargo test -p radar-core` | 105 passed |
 | `cargo test -p radar-fetch` | 25 passed |
 | `cargo test -p radar-adapters` | 131 passed |
-| `cargo test -p radar-state` | 31 passed |
-| `cargo test -p math_talk_radar` (integration) | 8 passed |
+| `cargo test -p radar-state` | 32 passed |
+| `cargo test -p math_talk_radar` (integration) | 13 passed |
 | `cargo test -p math_talk_radar` (lifecycle_sandbox) | 9 passed |
-| `cargo test --workspace` | 309 passed, 0 failed |
+| `cargo test --workspace` | 315 passed, 0 failed |
 | Date parser accuracy (§47) | 1.000 (57/57) |
 | Scholar precision (§47) | 1.000 |
 | Scholar recall (§47) | 1.000 |
@@ -21,11 +21,11 @@
 
 ## B2 Quality
 
-| Check | Result (2026-08-13) |
+| Check | Result (2026-08-14) |
 |---|---|
 | `cargo fmt --check` | clean |
 | `cargo clippy --workspace --all-targets --all-features -- -D warnings` | clean |
-| `cargo test --workspace` | 309 passed |
+| `cargo test --workspace` | 315 passed |
 | `cargo xtask check` | ok |
 | `cargo xtask check-matrix` | ok |
 | `forbid(unsafe_code)` | enforced in every crate |
