@@ -160,6 +160,20 @@ fn re_us_full_date_range() -> &'static Regex {
     })
 }
 
+/// CORE-14: DMY full date range with explicit years on both endpoints:
+/// "31 December 2026 - 2 January 2027". The existing `re_cross_month_range`
+/// captures only one trailing year and applies it to both endpoints, so
+/// cross-year-boundary DMY ranges with explicit years were rejected.
+fn re_dmy_full_date_range() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(
+            r"^(\d{1,2})(?:st|nd|rd|th)?\s+([A-Za-z]+)\s+(\d{4})\s*(?:[–-]|to)\s*(\d{1,2})(?:st|nd|rd|th)?\s+([A-Za-z]+)\s+(\d{4})$",
+        )
+        .expect("statically verified regex literal")
+    })
+}
+
 fn re_iso_date_range() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
@@ -289,6 +303,7 @@ fn parse_date_inner(text: &str, year_hint: Option<i32>) -> Result<EventDate, Dat
     // 3-8. Range / US / DMY patterns, tried in order; first match wins.
     //      Invalid dates (e.g. Feb 30) fall through to Unknown via `?`.
     if let Some(ed) = try_us_full_date_range(trimmed, text)
+        .or_else(|| try_dmy_full_date_range(trimmed, text))
         .or_else(|| try_same_month_range(trimmed, text))
         .or_else(|| try_cross_month_range(trimmed, text))
         .or_else(|| try_us_range(trimmed, text))
@@ -352,6 +367,29 @@ fn try_us_full_date_range(trimmed: &str, original: &str) -> Option<EventDate> {
     let y1: i32 = caps[3].parse().ok()?;
     let m2 = month_from_name(&caps[4])?;
     let d2: u32 = caps[5].parse().ok()?;
+    let y2: i32 = caps[6].parse().ok()?;
+    let start = NaiveDate::from_ymd_opt(y1, m1, d1)?;
+    let end = NaiveDate::from_ymd_opt(y2, m2, d2)?;
+    if start > end {
+        return None;
+    }
+    Some(EventDate {
+        start: Some(DateTimeOrDate::Date(start)),
+        end: Some(DateTimeOrDate::Date(end)),
+        timezone: None,
+        original_text: original.to_string(),
+        precision: DatePrecision::Range,
+    })
+}
+
+/// CORE-14: DMY full date range: "31 December 2026 - 2 January 2027".
+fn try_dmy_full_date_range(trimmed: &str, original: &str) -> Option<EventDate> {
+    let caps = re_dmy_full_date_range().captures(trimmed)?;
+    let d1: u32 = caps[1].parse().ok()?;
+    let m1 = month_from_name(&caps[2])?;
+    let y1: i32 = caps[3].parse().ok()?;
+    let d2: u32 = caps[4].parse().ok()?;
+    let m2 = month_from_name(&caps[5])?;
     let y2: i32 = caps[6].parse().ok()?;
     let start = NaiveDate::from_ymd_opt(y1, m1, d1)?;
     let end = NaiveDate::from_ymd_opt(y2, m2, d2)?;
