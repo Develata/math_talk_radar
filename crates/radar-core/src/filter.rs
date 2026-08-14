@@ -8,6 +8,7 @@ use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 
 use crate::Event;
+use crate::date::interval_overlap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -25,24 +26,20 @@ impl ScanMode {
             ScanMode::Both => "both",
         }
     }
-
-    fn wants_recordings(self) -> bool {
-        matches!(self, ScanMode::Recordings | ScanMode::Both)
-    }
-
-    fn wants_upcoming(self) -> bool {
-        matches!(self, ScanMode::Upcoming | ScanMode::Both)
-    }
 }
 
-/// §27.2 window + mode filter. An event passes when:
-/// - mode is `recordings` or `both` AND the event has ≥1 media, OR
-/// - mode is `upcoming` or `both` AND the event's start date falls within
-///   `[today - before_days, today + after_days]`.
+/// §27.2 window + mode filter. Uses `interval_overlap` (§8) so multi-day events
+/// that span into the window are correctly included — a conference starting
+/// before the window but ending inside it is still relevant.
 ///
-/// Events with no parseable start date are kept only in `recordings` mode
-/// (if they have media) or `both` mode; in `upcoming` mode they are dropped
-/// because we cannot confirm they are upcoming.
+/// Mode semantics:
+/// - `upcoming`: event must have a parseable date overlapping the window.
+///   Media is irrelevant; undated events are dropped (can't confirm upcoming).
+/// - `recordings`: event must have ≥1 media. If it also has a date, the date
+///   must overlap the window. Undated media events are kept (can't window-filter
+///   what we can't date).
+/// - `both`: the union of the two branches — a dated event in the window passes
+///   regardless of media; an undated event passes only if it has media.
 pub fn matches_mode_and_window(
     event: &Event,
     mode: ScanMode,
@@ -51,23 +48,21 @@ pub fn matches_mode_and_window(
     after_days: u32,
 ) -> bool {
     let has_media = !event.media.is_empty();
+    let has_start = event.date.start.is_some();
 
-    if mode.wants_recordings() && has_media {
-        return true;
+    let window_start = today
+        .checked_sub_signed(chrono::Duration::days(before_days as i64))
+        .unwrap_or(NaiveDate::MIN);
+    let window_end = today
+        .checked_add_signed(chrono::Duration::days(after_days as i64))
+        .unwrap_or(NaiveDate::MAX);
+    let in_window = interval_overlap(&event.date, window_start, window_end);
+
+    match mode {
+        ScanMode::Recordings => has_media && (!has_start || in_window),
+        ScanMode::Upcoming => has_start && in_window,
+        ScanMode::Both => (has_start && in_window) || (has_media && !has_start),
     }
-
-    if !mode.wants_upcoming() {
-        return false;
-    }
-
-    let Some(start) = event.date.start_date() else {
-        return mode == ScanMode::Both;
-    };
-    let window_start = today.checked_sub_signed(chrono::Duration::days(before_days as i64));
-    let window_end = today.checked_add_signed(chrono::Duration::days(after_days as i64));
-    let after_start = window_start.is_none_or(|ws| start >= ws);
-    let before_end = window_end.is_none_or(|we| start <= we);
-    after_start && before_end
 }
 
 #[cfg(test)]
@@ -81,6 +76,14 @@ mod tests {
     use url::Url;
 
     fn event_with(start: Option<chrono::NaiveDate>, media: Vec<MediaResource>) -> Event {
+        event_with_range(start, None, media)
+    }
+
+    fn event_with_range(
+        start: Option<chrono::NaiveDate>,
+        end: Option<chrono::NaiveDate>,
+        media: Vec<MediaResource>,
+    ) -> Event {
         Event {
             id: EventId("e".to_string()),
             title: "T".to_string(),
@@ -89,10 +92,16 @@ mod tests {
             status: EventStatus::Unknown,
             date: EventDate {
                 start: start.map(crate::date::DateTimeOrDate::Date),
-                end: None,
+                end: end.map(crate::date::DateTimeOrDate::Date),
                 timezone: None,
                 original_text: String::new(),
-                precision: start.map_or(DatePrecision::Unknown, |_| DatePrecision::Day),
+                precision: start.map_or(DatePrecision::Unknown, |_| {
+                    if end.is_some() {
+                        DatePrecision::Range
+                    } else {
+                        DatePrecision::Day
+                    }
+                }),
             },
             location: None,
             description: None,
@@ -179,11 +188,100 @@ mod tests {
     }
 
     #[test]
-    fn both_mode_no_date_no_media_kept_by_explicit_check() {
+    fn both_mode_no_date_no_media_dropped() {
+        // HIGH-1 regression: undated, no-media events must NOT pass the both
+        // filter. The previous implementation returned `mode == ScanMode::Both`
+        // for missing start dates, which kept historical noise in the output.
         let ev = event_with(None, Vec::new());
-        assert!(matches_mode_and_window(
+        assert!(!matches_mode_and_window(
             &ev,
             ScanMode::Both,
+            date(2026, 1, 1),
+            30,
+            30
+        ));
+    }
+
+    #[test]
+    fn both_mode_dated_media_outside_window_dropped() {
+        // HIGH-1 regression: a dated event with media that is OUTSIDE the
+        // window must be dropped in both mode. The previous implementation
+        // short-circuited on `has_media` before checking the window.
+        let ev = event_with(Some(date(2025, 1, 1)), vec![media()]);
+        assert!(!matches_mode_and_window(
+            &ev,
+            ScanMode::Both,
+            date(2026, 1, 1),
+            30,
+            30
+        ));
+    }
+
+    #[test]
+    fn both_mode_dated_no_media_outside_window_dropped() {
+        let ev = event_with(Some(date(2025, 1, 1)), Vec::new());
+        assert!(!matches_mode_and_window(
+            &ev,
+            ScanMode::Both,
+            date(2026, 1, 1),
+            30,
+            30
+        ));
+    }
+
+    #[test]
+    fn h1_multiday_event_spanning_into_window_passes() {
+        // H1 regression: a conference starting before the window but ending
+        // inside it overlaps the window. The previous start-date-only check
+        // dropped it because start < window_start.
+        let ev = event_with_range(Some(date(2025, 12, 20)), Some(date(2026, 1, 5)), Vec::new());
+        assert!(matches_mode_and_window(
+            &ev,
+            ScanMode::Upcoming,
+            date(2026, 1, 1),
+            30,
+            30
+        ));
+    }
+
+    #[test]
+    fn h1_multiday_event_ending_before_window_dropped() {
+        let ev = event_with_range(Some(date(2025, 11, 1)), Some(date(2025, 11, 5)), Vec::new());
+        assert!(!matches_mode_and_window(
+            &ev,
+            ScanMode::Upcoming,
+            date(2026, 1, 1),
+            30,
+            30
+        ));
+    }
+
+    #[test]
+    fn h1_recordings_mode_multiday_in_window_passes() {
+        let ev = event_with_range(
+            Some(date(2025, 12, 20)),
+            Some(date(2026, 1, 5)),
+            vec![media()],
+        );
+        assert!(matches_mode_and_window(
+            &ev,
+            ScanMode::Recordings,
+            date(2026, 1, 1),
+            30,
+            30
+        ));
+    }
+
+    #[test]
+    fn h1_recordings_mode_multiday_outside_window_dropped() {
+        let ev = event_with_range(
+            Some(date(2025, 11, 1)),
+            Some(date(2025, 11, 5)),
+            vec![media()],
+        );
+        assert!(!matches_mode_and_window(
+            &ev,
+            ScanMode::Recordings,
             date(2026, 1, 1),
             30,
             30

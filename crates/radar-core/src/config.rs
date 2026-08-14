@@ -135,9 +135,13 @@ impl SourcesConfig {
 
     /// The embedded default source registry shipped with the binary (CFG-001).
     /// M0 ships an empty list; M6 promotes audited sources here.
-    pub fn embedded() -> Self {
+    ///
+    /// B5: returns `Result` instead of panicking. The embedded TOML is part of
+    /// the source tree and verified by `cfg_001_embedded_default_config_parses`
+    /// in CI, but a malformed file would have panicked at runtime with a
+    /// misleading "compile time" message. Callers now handle the error.
+    pub fn embedded() -> Result<Self, toml::de::Error> {
         Self::parse(include_str!("../../../config/sources.toml"))
-            .expect("embedded sources.toml must parse at compile time")
     }
 
     /// Only sources with `enabled = true`.
@@ -239,7 +243,7 @@ detail_date = "time"
     // CFG-001: embedded default config exists and parses.
     #[test]
     fn cfg_001_embedded_default_config_parses() {
-        let config = super::SourcesConfig::embedded();
+        let config = super::SourcesConfig::embedded().expect("embedded sources.toml parses");
         // M0 ships an empty list; M6 promotes audited sources. The contract
         // is that the embedded file parses without error, not that it has
         // a minimum source count.

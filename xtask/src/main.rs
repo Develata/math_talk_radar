@@ -234,6 +234,7 @@ fn run_check(root: &Path) -> Result<(), Vec<String>> {
     let mut errors = Vec::new();
     errors.extend(validate_source_registry(root));
     errors.extend(validate_matrix(root));
+    errors.extend(validate_schema_drift(root));
     if errors.is_empty() {
         Ok(())
     } else {
@@ -248,6 +249,47 @@ fn run_check_matrix(root: &Path) -> Result<(), Vec<String>> {
     } else {
         Err(errors)
     }
+}
+
+// ---------------------------------------------------------------------------
+// schema drift validation (§09:38, H4)
+// ---------------------------------------------------------------------------
+
+/// H4: verify the golden JSON Schema file exists. The actual drift check
+/// (regenerate schema from Rust model, compare to golden) runs as a Rust
+/// integration test in `apps/cli/tests/schema_drift.rs` so it can call
+/// `schemars::schema_for!` in-process. This xtask gate only verifies the
+/// golden file is present and non-empty — catching accidental deletion
+/// without duplicating the build logic here.
+fn validate_schema_drift(root: &Path) -> Vec<String> {
+    let golden = root.join("docs/reference/output-schema.json");
+    let mut errors = Vec::new();
+    match std::fs::read_to_string(&golden) {
+        Ok(content) => {
+            if content.trim().is_empty() {
+                errors.push(format!(
+                    "schema drift: {} is empty (regenerate with `cargo run -- schema > {}`)",
+                    golden.display(),
+                    golden.display()
+                ));
+            }
+            if !content.contains("\"ScanOutput\"") {
+                errors.push(format!(
+                    "schema drift: {} does not contain the ScanOutput root schema (regenerate with `cargo run -- schema > {}`)",
+                    golden.display(),
+                    golden.display()
+                ));
+            }
+        }
+        Err(e) => {
+            errors.push(format!(
+                "schema drift: cannot read {}: {e} (regenerate with `cargo run -- schema > {}`)",
+                golden.display(),
+                golden.display()
+            ));
+        }
+    }
+    errors
 }
 
 // ---------------------------------------------------------------------------
@@ -342,11 +384,13 @@ fn validate_source_registry(root: &Path) -> Vec<String> {
     let i_status = idx("status");
 
     let i_fixture = idx("fixture");
+    let i_media = idx("media_strategy");
 
     let mut seen = HashSet::new();
     let mut audited_count: usize = 0;
     let mut enabled_fixture_count: usize = 0;
     let mut pending_audit_count: usize = 0;
+    let mut media_source_count: usize = 0;
     let mut enabled_adapter_kinds: HashSet<&str> = HashSet::new();
     for (i, line) in lines.iter().enumerate().skip(1) {
         let row: Vec<&str> = line.split('\t').collect();
@@ -429,6 +473,34 @@ fn validate_source_registry(root: &Path) -> Vec<String> {
                 }
             }
             enabled_adapter_kinds.insert(cell(i_adapter));
+
+            // §45: every enabled source needs ≥1 golden expectation in
+            // site_audits.rs (function `site_{id_with_underscores}_*`).
+            let test_fn_prefix = format!("fn site_{}", id.replace('-', "_"));
+            let audits_path = root.join("crates/radar-adapters/tests/site_audits.rs");
+            if let Ok(audits) = std::fs::read_to_string(&audits_path)
+                && !audits.contains(&test_fn_prefix)
+            {
+                errors.push(format!(
+                    "source-registry row {i} ({id}): no golden test in site_audits.rs (expected function starting with '{test_fn_prefix}')"
+                ));
+            }
+        }
+
+        // §18: count media/recording sources for the coverage baseline.
+        // A source counts if its `kind` is a recording type or its
+        // `media_strategy` is non-empty.
+        if cell(i_en) == "true" {
+            let kind = cell(i_kind);
+            let media_strategy = cell(i_media);
+            if !media_strategy.is_empty()
+                || kind.contains("recording")
+                || kind.contains("media")
+                || kind.contains("video")
+                || kind.contains("archive")
+            {
+                media_source_count += 1;
+            }
         }
     }
 
@@ -456,6 +528,11 @@ fn validate_source_registry(root: &Path) -> Vec<String> {
                     .collect::<Vec<_>>()
                     .join(", ")
             ));
+        }
+        if media_source_count < 3 {
+            eprintln!(
+                "warning: §18 coverage: need >=3 media/recording sources, got {media_source_count}"
+            );
         }
     }
 

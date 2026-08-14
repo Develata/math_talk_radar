@@ -5,24 +5,56 @@ use std::path::{Path, PathBuf};
 
 pub const APP_SLUG: &str = "math_talk_radar";
 
-/// Environment override for the release API base (tests point this at a
-/// wiremock server). Default: GitHub releases API for `Develata/math_talk_radar`.
+/// B3: the release API origin is a fixed constant per §34.3 ("HTTPS only; fixed
+/// release repo"). The previous `MATH_TALK_RADAR_RELEASE_API` env var was
+/// respected in production builds, allowing an attacker who could plant an env
+/// var to redirect self-update to a malicious server. The override is now gated
+/// on `debug_assertions` so only debug/test builds (which integration tests use
+/// to point at a wiremock server) honor it; release binaries always use the
+/// fixed GitHub origin.
 pub const RELEASE_API_ENV: &str = "MATH_TALK_RADAR_RELEASE_API";
 pub const DEFAULT_RELEASE_API: &str = "https://api.github.com/repos/Develata/math_talk_radar";
 
 pub fn release_api() -> String {
-    std::env::var(RELEASE_API_ENV).unwrap_or_else(|_| DEFAULT_RELEASE_API.to_string())
+    if cfg!(debug_assertions)
+        && let Ok(api) = std::env::var(RELEASE_API_ENV)
+    {
+        return api;
+    }
+    DEFAULT_RELEASE_API.to_string()
 }
 
 /// The binary path to manage. Prefers the install manifest when present;
 /// falls back to `current_exe`.
+///
+/// B2: the manifest's `binary_path` is only trusted if it looks like a real
+/// app binary — the file name must contain `APP_SLUG`. A tampered manifest
+/// could otherwise point at an arbitrary file (e.g. `~/.ssh/id_rsa`,
+/// `/etc/passwd`) and `uninstall` would delete it. `safe_canonicalize` at
+/// delete time blocks `/`, `$HOME`, and empty, but that is not enough: any
+/// other path would pass. This filename check is defense-in-depth; it makes
+/// the attack require not just write access to the manifest but also a target
+/// filename containing `math_talk_radar`, which dramatically narrows the
+/// blast radius.
 pub fn binary_path(data_dir: &Path) -> Option<PathBuf> {
     if let Some(m) = crate::lifecycle::manifest::load(data_dir)
         && m.binary_path.exists()
+        && is_plausible_app_binary(&m.binary_path)
     {
         return Some(m.binary_path);
     }
     std::env::current_exe().ok()
+}
+
+/// True if `path` looks like a `math_talk_radar` binary: the file name must
+/// contain the app slug. This is a sanity check, not a security boundary —
+/// `safe_canonicalize` at delete time provides the hard block on `/`, `$HOME`,
+/// and empty.
+fn is_plausible_app_binary(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .map(|name| name.contains(APP_SLUG))
+        .unwrap_or(false)
 }
 
 /// `$XDG_CONFIG_HOME/math_talk_radar` or `~/.config/math_talk_radar`.

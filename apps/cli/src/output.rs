@@ -2,13 +2,14 @@
 use chrono::{DateTime, Utc};
 use radar_core::{Event, SourceHealth};
 use radar_state::ChangeRecord;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Public output schema version (§64). v0.x may add optional fields; renaming
 /// or removing a field requires bumping this.
 pub const OUTPUT_SCHEMA_VERSION: &str = "1.0";
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ScanOutput {
     pub schema_version: String,
     pub generated_at: DateTime<Utc>,
@@ -21,7 +22,7 @@ pub struct ScanOutput {
     pub source_health: Vec<SourceHealth>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct QuerySpec {
     pub mode: String,
     pub before_days: u32,
@@ -94,4 +95,46 @@ fn truncate_if_longer(s: &str, limit: usize) -> Option<String> {
     s.char_indices()
         .nth(limit)
         .map(|(idx, _)| s[..idx].to_string())
+}
+
+/// Write `content` + a trailing newline to stdout, treating `BrokenPipe` as
+/// success (the downstream consumer closed the pipe, e.g. `| head`). Any other
+/// I/O error surfaces as §32 exit 6. Management commands must route stdout
+/// through this helper — a bare `println!` panics on a closed pipe and exits
+/// 101, which is not in the §32 enum.
+pub fn write_stdout(content: &str) -> Result<(), crate::runtime::CliError> {
+    use std::io::Write;
+    let stdout = std::io::stdout();
+    let mut handle = stdout.lock();
+    let result = handle
+        .write_all(content.as_bytes())
+        .and_then(|()| handle.write_all(b"\n"))
+        .and_then(|()| handle.flush());
+    if let Err(e) = result
+        && e.kind() != std::io::ErrorKind::BrokenPipe
+    {
+        return Err(crate::runtime::CliError::serialization(format!(
+            "write stdout: {e}"
+        )));
+    }
+    Ok(())
+}
+
+/// Like [`write_stdout`] but without a trailing newline — for callers that
+/// composed exact bytes (e.g. pretty JSON into `| jq`).
+pub fn write_stdout_raw(content: &str) -> Result<(), crate::runtime::CliError> {
+    use std::io::Write;
+    let stdout = std::io::stdout();
+    let mut handle = stdout.lock();
+    let result = handle
+        .write_all(content.as_bytes())
+        .and_then(|()| handle.flush());
+    if let Err(e) = result
+        && e.kind() != std::io::ErrorKind::BrokenPipe
+    {
+        return Err(crate::runtime::CliError::serialization(format!(
+            "write stdout: {e}"
+        )));
+    }
+    Ok(())
 }

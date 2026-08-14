@@ -84,12 +84,24 @@ pub struct ScanArgs {
     /// Cap on emitted events.
     #[arg(long)]
     pub max_events: Option<u32>,
+    /// Cap on emitted talks across all events (§27.2).
+    #[arg(long)]
+    pub max_talks: Option<u32>,
+    /// IANA timezone for date interpretation (e.g. America/New_York).
+    #[arg(long, value_name = "IANA")]
+    pub timezone: Option<String>,
     /// Inject `today` for deterministic runs (YYYY-MM-DD).
     #[arg(long, value_name = "YYYY-MM-DD")]
     pub today: Option<String>,
+    /// Path to a general config file overriding embedded defaults.
+    #[arg(long, value_name = "PATH")]
+    pub config: Option<PathBuf>,
     /// Path to the source registry TOML.
     #[arg(long, value_name = "PATH")]
     pub sources: Option<PathBuf>,
+    /// Path to the scholar registry TOML overriding the embedded default.
+    #[arg(long, value_name = "PATH")]
+    pub scholars: Option<PathBuf>,
     /// Path to the user interests TOML.
     #[arg(long, value_name = "PATH")]
     pub interests: Option<PathBuf>,

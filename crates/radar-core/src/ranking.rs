@@ -6,13 +6,14 @@
 //! and per-signal caps.
 use std::collections::HashMap;
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::config::SourceTier;
 use crate::model::{Event, MediaType, OnlineAvailability, PublicAccess};
 use crate::people::PersonRole;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
 pub struct ScoreComponents {
     pub topic: u8,
     pub media: u8,

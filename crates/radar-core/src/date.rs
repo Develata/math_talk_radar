@@ -5,10 +5,11 @@
 //! canonical [`EventDate`] shape and the clock-injection surface used by tests.
 use chrono::{DateTime, NaiveDate, Utc};
 use regex::Regex;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct EventDate {
     pub start: Option<DateTimeOrDate>,
     pub end: Option<DateTimeOrDate>,
@@ -41,14 +42,14 @@ impl EventDate {
 
 /// A date that may be a calendar date or an exact instant. Serialized
 /// untagged so consumers can branch on shape.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
 pub enum DateTimeOrDate {
     DateTime(DateTime<Utc>),
     Date(NaiveDate),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum DatePrecision {
     /// Reserved for future use (month-precision dates like "August 2026").
@@ -64,7 +65,7 @@ pub enum DatePrecision {
 }
 
 /// A wall-clock range for an individual talk (§5.3 `date_time`).
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct DateTimeRange {
     pub start: DateTime<Utc>,
     pub end: Option<DateTime<Utc>>,

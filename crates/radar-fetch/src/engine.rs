@@ -40,10 +40,17 @@ fn remaining_time(deadline: Option<Instant>, default: std::time::Duration) -> st
 /// http→https / bare-domain→www robots.txt canonicalization does not silently
 /// disallow-all. Body exceeding `max_response_body` → disallow-all
 /// (conservative: an oversized policy could hide disallow rules).
+///
+/// B6: a robots.txt redirect to a host NOT in `allowed_hosts` is treated as
+/// disallow-all. Without this, a malicious server could redirect robots.txt to
+/// an attacker-controlled host returning an allow-all policy, bypassing the
+/// real robots rules. When `allowed_hosts` is empty (no restriction), all
+/// cross-host redirects are followed per the RFC.
 async fn fetch_robots_txt(
     client: &FetchClient,
     start_url: Url,
     http_policy: &HttpPolicy,
+    allowed_hosts: &[String],
     deadline: Option<Instant>,
 ) -> Result<RobotsRules, FetchError> {
     if past_deadline(deadline) {
@@ -79,6 +86,14 @@ async fn fetch_robots_txt(
                 return Ok(RobotsRules::disallow_all());
             }
             if !matches!(new_url.scheme(), "http" | "https") {
+                return Ok(RobotsRules::disallow_all());
+            }
+            // B6: a robots.txt redirect to a host outside `allowed_hosts` is
+            // suspicious — disallow-all rather than following it.
+            if !allowed_hosts.is_empty()
+                && let Some(new_host) = new_url.host_str()
+                && !allowed_hosts.iter().any(|a| a == new_host)
+            {
                 return Ok(RobotsRules::disallow_all());
             }
             current = new_url;
@@ -118,16 +133,18 @@ async fn check_robots(
     client: &FetchClient,
     url: &Url,
     http_policy: &HttpPolicy,
+    allowed_hosts: &[String],
     robots: &RobotsCache,
     deadline: Option<Instant>,
 ) -> Result<(), FetchError> {
     let owned_url = url.clone();
     let client_clone = client.clone();
     let hp = *http_policy;
+    let ah = allowed_hosts.to_vec();
     let rules = robots
         .get_or_init(url, move || async move {
             match robots_url_for(&owned_url) {
-                Some(ru) => fetch_robots_txt(&client_clone, ru, &hp, deadline).await,
+                Some(ru) => fetch_robots_txt(&client_clone, ru, &hp, &ah, deadline).await,
                 None => Ok(RobotsRules::default()),
             }
         })
@@ -162,7 +179,15 @@ pub async fn fetch_one(
 
     // Robots check (initial URL). check_robots caches rules per host; the
     // redirect loop below re-checks when a hop lands on a new host.
-    check_robots(client, url, http_policy, robots, deadline).await?;
+    check_robots(
+        client,
+        url,
+        http_policy,
+        &policy.allowed_hosts,
+        robots,
+        deadline,
+    )
+    .await?;
 
     // Manual redirect loop (Oracle #7). Network errors (B1, §15: connection
     // reset, transient) and status retries (§15: 408, 429, 5xx) share a single
@@ -231,7 +256,15 @@ pub async fn fetch_one(
             // cached rules.
             let new_host = new_url.host_str().map(|h| h.to_string());
             if new_host != last_host || new_url.port() != last_port {
-                check_robots(client, &new_url, http_policy, robots, deadline).await?;
+                check_robots(
+                    client,
+                    &new_url,
+                    http_policy,
+                    &policy.allowed_hosts,
+                    robots,
+                    deadline,
+                )
+                .await?;
                 last_host = new_host;
                 last_port = new_url.port();
             }
@@ -443,11 +476,16 @@ pub async fn fetch_source(
                 }
             }
         }
-        // ADAP M-2: when plan_enrichment emitted no fetches (e.g. a JSON-LD
-        // Event whose url equals the listing page), hand the already-fetched
-        // entrypoint document to enrich so the adapter can still extract
-        // description/location/performers from it instead of losing them.
-        if docs.is_empty() {
+        // ADAP M-2 / H6: the entrypoint-document fallback must fire ONLY when
+        // plan_enrichment emitted zero fetches (e.g. a JSON-LD Event whose url
+        // equals the listing page). The previous `if docs.is_empty()` conflated
+        // that case with "plans existed but every detail fetch failed" — in
+        // the latter, substituting the list page as a detail document fed the
+        // adapter stale/wrong data and silently masked a total enrichment
+        // failure. When plans were emitted but all failed, pass `docs` as-is
+        // (empty) and let `enrich` decide: it can still extract from the stub
+        // alone or return Err, which the loop counts as a failure.
+        if plans.is_empty() {
             docs.push(doc.clone());
         }
         match adapter.enrich(stub, &docs, source) {

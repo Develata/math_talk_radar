@@ -1,5 +1,5 @@
 use crate::cli::DoctorArgs;
-use crate::output::OUTPUT_SCHEMA_VERSION;
+use crate::output::{OUTPUT_SCHEMA_VERSION, write_stdout, write_stdout_raw};
 use crate::runtime::CliError;
 
 pub async fn run(args: DoctorArgs) -> Result<(), CliError> {
@@ -17,17 +17,15 @@ pub async fn run(args: DoctorArgs) -> Result<(), CliError> {
             "state_dir": state_dir,
             "schema_version": schema_version,
         });
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&json)
-                .map_err(|e| CliError::serialization(format!("encode doctor json: {e}")))?
-        );
+        let body = serde_json::to_string_pretty(&json)
+            .map_err(|e| CliError::serialization(format!("encode doctor json: {e}")))?;
+        write_stdout_raw(&body)?;
     } else {
-        println!("math_talk_radar doctor");
-        println!("  binary:         {binary}");
-        println!("  config_dir:     {config_dir}");
-        println!("  state_dir:      {state_dir}");
-        println!("  schema_version: {schema_version}");
+        write_stdout("math_talk_radar doctor")?;
+        write_stdout(&format!("  binary:         {binary}"))?;
+        write_stdout(&format!("  config_dir:     {config_dir}"))?;
+        write_stdout(&format!("  state_dir:      {state_dir}"))?;
+        write_stdout(&format!("  schema_version: {schema_version}"))?;
     }
     Ok(())
 }

@@ -4,9 +4,10 @@
 //! `TitleMention` / `Unknown`. Structured person fields or strong
 //! name-in-context evidence are required for `Speaker` / `Organizer` / etc.
 use crate::normalize::{contains_phrase, normalize_name, word_boundaries};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum PersonRole {
     Speaker,
@@ -20,7 +21,7 @@ pub enum PersonRole {
     Unknown,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct PersonHit {
     pub canonical_name: String,
     pub matched_text: String,
@@ -61,10 +62,9 @@ impl ScholarsConfig {
     }
 
     /// The embedded default scholar registry shipped with the binary
-    /// (CFG-001).
-    pub fn embedded() -> Self {
+    /// (CFG-001). B5: returns `Result` instead of panicking at runtime.
+    pub fn embedded() -> Result<Self, toml::de::Error> {
         Self::parse(include_str!("../../../config/scholars.toml"))
-            .expect("embedded scholars.toml must parse at compile time")
     }
 }
 

@@ -117,7 +117,7 @@ fn site_stanford_jsonld_discovers_events() {
 //     landing pages without event lists; selector tuning needs a re-captured
 //     fixture from the correct event-list URL.
 fn source_from_embedded(id: &str) -> SourceSpec {
-    let config = radar_core::SourcesConfig::embedded();
+    let config = radar_core::SourcesConfig::embedded().expect("embedded sources.toml parses");
     let s = config
         .sources
         .iter()

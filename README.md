@@ -30,7 +30,7 @@ math_talk_radar sources list
 math_talk_radar doctor
 math_talk_radar schema
 math_talk_radar update --check
-math_talk_radar uninstall --dry-run
+math_talk_radar uninstall --keep-data --dry-run
 ```
 
 `stdout` is structured JSON (schema `"1.0"`); `stderr` carries logs.
@@ -41,7 +41,7 @@ User config lives under `$XDG_CONFIG_HOME/math_talk_radar/` (default
 `~/.config/math_talk_radar/`). See `config/` for examples:
 
 - `sources.toml` — source definitions (13 audited sources enabled: 2 RSS,
-  10 HTML-config).
+  11 HTML-config).
 - `scholars.toml` — scholar aliases (decoupled from any parser).
 - `topics.toml` — canonical topics + aliases.
 - `interests.example.toml` — interest weights that adjust ranking only.
@@ -53,7 +53,7 @@ See `docs/reference/config-schema.md`.
 ```bash
 math_talk_radar update --check
 math_talk_radar update
-math_talk_radar uninstall --dry-run
+math_talk_radar uninstall --keep-data --dry-run
 math_talk_radar uninstall --keep-data --yes
 ```
 

@@ -20,6 +20,7 @@ pub fn load_sources(path: Option<&Path>) -> Result<SourcesConfig, crate::runtime
                 crate::runtime::CliError::config(format!("sources {}: {e}", p.display()))
             })
         }
-        None => Ok(SourcesConfig::embedded()),
+        None => SourcesConfig::embedded()
+            .map_err(|e| crate::runtime::CliError::config(format!("embedded sources.toml: {e}"))),
     }
 }

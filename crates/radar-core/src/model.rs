@@ -4,6 +4,7 @@
 //! `#[serde(rename_all = "snake_case")]` via per-enum attributes so the wire
 //! shape matches the engineering contract exactly.
 use chrono::{DateTime, Utc};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
@@ -17,13 +18,13 @@ use crate::topics::TopicMatch;
 
 /// Stable event identity. Constructed via [`deterministic_id`] over normalized
 /// `title + organizer/domain + start_date`. Never random, never time-based.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct EventId(pub String);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct TalkId(pub String);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct MediaId(pub String);
 
 /// Deterministic identity hash (§24): BLAKE3 over joined, normalized fields.
@@ -57,7 +58,7 @@ pub fn event_id(title: &str, url: &str) -> EventId {
 
 // ---- Event (§5.1) --------------------------------------------------------
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Event {
     pub id: EventId,
     pub title: String,
@@ -96,7 +97,7 @@ pub struct Event {
     pub last_seen_at: Option<DateTime<Utc>>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum EventType {
     Conference,
@@ -115,7 +116,7 @@ pub enum EventType {
     Unknown,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum EventStatus {
     Announced,
@@ -132,7 +133,7 @@ pub enum EventStatus {
 
 // ---- Talk (§5.3) ---------------------------------------------------------
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Talk {
     pub id: TalkId,
     pub title: String,
@@ -146,7 +147,7 @@ pub struct Talk {
 
 // ---- Media (§5.4, §20) ---------------------------------------------------
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum MediaType {
     Video,
@@ -161,7 +162,7 @@ pub enum MediaType {
     Other,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct MediaResource {
     pub id: MediaId,
     pub media_type: MediaType,
@@ -175,7 +176,7 @@ pub struct MediaResource {
 
 // ---- Access (§21) --------------------------------------------------------
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum PublicAccess {
     Open,
@@ -186,7 +187,7 @@ pub enum PublicAccess {
     Unknown,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum OnlineAvailability {
     Livestream,
@@ -197,7 +198,7 @@ pub enum OnlineAvailability {
     Unknown,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct AccessInfo {
     pub access: PublicAccess,
     pub online: OnlineAvailability,
@@ -205,7 +206,7 @@ pub struct AccessInfo {
 
 // ---- Location ------------------------------------------------------------
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct Location {
     pub name: String,
     #[serde(default)]
@@ -218,7 +219,7 @@ pub struct Location {
 
 // ---- Evidence (§P-4) -----------------------------------------------------
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct SourceEvidence {
     pub source_id: String,
     pub source_url: Url,
@@ -236,7 +237,7 @@ pub struct SourceEvidence {
 
 // ---- Source health (§43) -------------------------------------------------
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SourceStatus {
     Ok,
@@ -250,7 +251,7 @@ pub enum SourceStatus {
     Disabled,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct SourceHealth {
     pub source: String,
     pub status: SourceStatus,

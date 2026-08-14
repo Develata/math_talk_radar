@@ -1,5 +1,6 @@
 use crate::cli::UpdateArgs;
 use crate::lifecycle;
+use crate::output::write_stdout;
 use crate::runtime::CliError;
 
 pub async fn run(args: UpdateArgs) -> Result<(), CliError> {
@@ -8,6 +9,6 @@ pub async fn run(args: UpdateArgs) -> Result<(), CliError> {
     } else {
         lifecycle::update::run(args.force_unmanaged).await?
     };
-    println!("{message}");
+    write_stdout(&message)?;
     Ok(())
 }

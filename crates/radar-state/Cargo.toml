@@ -13,6 +13,7 @@ unsafe_code = "forbid"
 [dependencies]
 radar-core.workspace = true
 serde.workspace = true
+schemars.workspace = true
 thiserror.workspace = true
 chrono.workspace = true
 redb.workspace = true

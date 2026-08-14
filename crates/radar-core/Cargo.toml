@@ -13,6 +13,7 @@ unsafe_code = "forbid"
 [dependencies]
 thiserror.workspace = true
 serde.workspace = true
+schemars.workspace = true
 chrono.workspace = true
 chrono-tz.workspace = true
 url.workspace = true

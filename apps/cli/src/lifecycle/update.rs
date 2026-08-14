@@ -17,6 +17,98 @@ const RELEASE_USER_AGENT: &str = concat!(
     " (+https://github.com/Develata/math_talk_radar)"
 );
 
+/// H7: independent update lock (§34.3). Without this, two concurrent
+/// `math_talk_radar update` invocations would race on the same binary:
+/// both download, both verify, both try atomic-replace — one wins, the
+/// other's rollback/temp files are left orphaned, and the self-test of the
+/// loser runs against a binary the winner already replaced. The lock is a
+/// lockfile at `data_dir/update.lock` created with `O_CREAT|O_EXCL` (via
+/// `OpenOptions::create_new`), which is atomic across processes. A crash
+/// during update leaves a stale lockfile; the next `update` detects it by
+/// checking whether the recorded PID is still alive, and steals the lock if
+/// not. `#![forbid(unsafe_code)]` rules out `flock(2)`, so this userspace
+/// approach is used instead.
+struct UpdateGuard {
+    path: PathBuf,
+}
+
+impl Drop for UpdateGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+fn acquire_update_lock() -> Result<UpdateGuard, CliError> {
+    let lock_path = paths::data_dir().join("update.lock");
+    if let Some(parent) = lock_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| CliError::update(format!("create data dir for lock: {e}")))?;
+    }
+    match std::fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&lock_path)
+    {
+        Ok(mut f) => {
+            use std::io::Write;
+            let _ = writeln!(f, "{}", std::process::id());
+            Ok(UpdateGuard { path: lock_path })
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            // Stale-lock recovery: read the PID, check if it's still alive.
+            // If the PID is gone (or unreadable), steal the lock.
+            let steal = std::fs::read_to_string(&lock_path)
+                .ok()
+                .and_then(|c| c.trim().parse::<u32>().ok())
+                .map(|pid| !is_process_alive(pid))
+                .unwrap_or(true);
+            if !steal {
+                return Err(CliError::update(
+                    "another update is in progress (update.lock is held)",
+                ));
+            }
+            let _ = std::fs::remove_file(&lock_path);
+            match std::fs::OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .open(&lock_path)
+            {
+                Ok(mut f) => {
+                    use std::io::Write;
+                    let _ = writeln!(f, "{}", std::process::id());
+                    Ok(UpdateGuard { path: lock_path })
+                }
+                Err(e2) => Err(CliError::update(format!(
+                    "acquire update lock after steal: {e2}"
+                ))),
+            }
+        }
+        Err(e) => Err(CliError::update(format!("create update lock: {e}"))),
+    }
+}
+
+#[cfg(unix)]
+fn is_process_alive(pid: u32) -> bool {
+    // kill(pid, 0) returns 0 if the process exists, ESRCH if not. No signal
+    // is sent. This uses `std::process::Command` to invoke `/bin/kill` rather
+    // than the libc `kill` syscall to stay within `#![forbid(unsafe_code)]`.
+    std::process::Command::new("kill")
+        .arg("-0")
+        .arg(pid.to_string())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+#[cfg(not(unix))]
+fn is_process_alive(pid: u32) -> bool {
+    // Best-effort on non-Unix: assume alive so we don't steal a live lock.
+    let _ = pid;
+    true
+}
+
 #[derive(Debug, Deserialize)]
 struct ReleaseAsset {
     name: String,
@@ -199,6 +291,10 @@ fn self_test(binary: &Path) -> Result<(), CliError> {
 /// rollback copy -> atomic replace -> self-test -> cleanup. Any failure leaves
 /// the current binary usable.
 pub async fn run(force_unmanaged: bool) -> Result<String, CliError> {
+    // H7: acquire the update lock before any I/O. Two concurrent `update`
+    // invocations would race on download/replace/rollback; the lock serializes
+    // them. `--check` does not need the lock (read-only).
+    let _lock = acquire_update_lock()?;
     let data_dir = paths::data_dir();
     let current_binary = paths::binary_path(&data_dir)
         .ok_or_else(|| CliError::update("cannot resolve current binary path"))?;

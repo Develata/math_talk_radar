@@ -418,11 +418,7 @@ fn classify_raw_media(url: &Url) -> Option<MediaType> {
 /// surfaced as a watch link and an embed iframe dedupes to one resource.
 /// Returns the original URL unchanged for non-YouTube URLs.
 fn canonical_media_url(url: &Url) -> Url {
-    let host = url.host_str().unwrap_or("");
-    if !host.ends_with("youtube.com")
-        && !host.ends_with("youtube-nocookie.com")
-        && host != "youtu.be"
-    {
+    if !is_youtube_host(url.host_str().unwrap_or("")) {
         return url.clone();
     }
     let video_id = extract_youtube_id(url);
@@ -435,25 +431,53 @@ fn canonical_media_url(url: &Url) -> Url {
     }
 }
 
+/// H2: exact-host YouTube detection. `host.ends_with("youtube.com")` would
+/// also match attacker-controlled siblings like `notyoutube.com`. Match the
+/// precise set of YouTube hosts instead.
+fn is_youtube_host(host: &str) -> bool {
+    host == "youtube.com"
+        || host == "www.youtube.com"
+        || host == "m.youtube.com"
+        || host == "youtube-nocookie.com"
+        || host == "www.youtube-nocookie.com"
+        || host == "youtu.be"
+}
+
 /// Extract the 11-character video id from any YouTube URL form
-/// (watch?v=, youtu.be/, /embed/, /shorts/). Returns None for malformed URLs.
+/// (watch?v=, youtu.be/, /embed/, /shorts/). Returns None for malformed URLs
+/// or ids that are not exactly 11 characters (YouTube's canonical id length).
 fn extract_youtube_id(url: &Url) -> Option<String> {
     let host = url.host_str()?;
+    if !is_youtube_host(host) {
+        return None;
+    }
     if host == "youtu.be" {
-        return url
-            .path()
-            .trim_start_matches('/')
-            .get(0..11)
-            .map(|s| s.to_string());
+        let segment = url.path().trim_start_matches('/');
+        return valid_youtube_id(segment).map(|s| s.to_string());
     }
     let path = url.path();
     if path.contains("/embed/") || path.contains("/shorts/") {
         let segment = path.rsplit('/').next()?;
-        return segment.get(0..11).map(|s| s.to_string());
+        return valid_youtube_id(segment).map(|s| s.to_string());
     }
     url.query_pairs()
         .find(|(k, _)| k == "v")
-        .map(|(_, v)| v.into_owned())
+        .and_then(|(_, v)| valid_youtube_id(&v).map(|s| s.to_string()))
+}
+
+/// H2: YouTube video ids are exactly 11 characters from `[A-Za-z0-9_-]`. The
+/// previous `.get(0..11)` silently truncated longer ids (which can appear in
+/// malformed URLs) and accepted shorter ones, producing wrong canonical URLs
+/// that would never dedupe correctly.
+fn valid_youtube_id(s: &str) -> Option<&str> {
+    if s.len() == 11
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
+        Some(s)
+    } else {
+        None
+    }
 }
 
 fn make_source_evidence(base_url: &Url) -> SourceEvidence {

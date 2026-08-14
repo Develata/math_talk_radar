@@ -1,10 +1,11 @@
 //! Topic model (§7). MVP uses canonical topic + aliases + phrases, no semantic
 //! model. User interest weights alter ranking only; they never delete events.
 use crate::normalize::{contains_phrase, normalize_name};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct TopicMatch {
     pub topic_id: String,
     pub canonical_name: String,
@@ -143,9 +144,9 @@ impl TopicsConfig {
     }
 
     /// The embedded default topic registry shipped with the binary (CFG-001).
-    pub fn embedded() -> Self {
+    /// B5: returns `Result` instead of panicking at runtime.
+    pub fn embedded() -> Result<Self, toml::de::Error> {
         Self::parse(include_str!("../../../config/topics.toml"))
-            .expect("embedded topics.toml must parse at compile time")
     }
 }
 
