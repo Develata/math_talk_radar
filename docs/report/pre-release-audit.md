@@ -248,3 +248,58 @@ across 3 atomic commits (`588bb17`..`528444b`).
 All four audit rounds (26 + 40 + 17 + 21 = 104 findings total) are resolved.
 The codebase is ready for `v0.1.0` tag pending Deve's explicit authorization
 (AGENTS.md §12).
+
+## Fifth-round audit (2026-08-14)
+
+A fifth review by 5 oracle agents (one per crate) produced 1 HIGH, 9 MEDIUM,
+11 LOW findings. Deve authorized fixing all 21 before `v0.1.0`. Fixes committed
+across 5 atomic commits (`e9fced1`..`153ada9`) + 2 style/clippy follow-ups.
+
+### HIGH (1 finding, fixed)
+
+| ID | Crate | Fix | Commit |
+|---|---|---|---|
+| ST-16 | state | v1→v2 forward migration path: split `Some(v) if v != current` into forward-migrate (bump version, tables created by `open_table`) vs reject (newer schema). Old code was dead — neither arm ran for v1→v2. | `e9fced1` |
+
+### MEDIUM (9 findings, all fixed)
+
+| ID | Crate | Fix | Commit |
+|---|---|---|---|
+| CORE-16 | core | filter.rs date arithmetic uses `checked_sub_signed`/`checked_add_signed` (no overflow on i64 day math) | `09398fa` |
+| CORE-17 | core | ranking.rs clamps interest weights to [0,1] (NaN/negative/inf → neutral 1.0) | `09398fa` |
+| CORE-18 | core | dedup merge_events fills scalar gaps (description/location/url/status) from the lower-scored event | `09398fa` |
+| CORE-19 | core | date.rs datetime range → Unknown precision (was silently dropping the range) | `09398fa` |
+| CORE-20 | core | DatePrecision::Year/Month documented as reserved (parser never emits them; consumers must not assume Day) | `09398fa` |
+| CORE-21 | core | normalize.rs re-encodes query via `form_urlencoded::Serializer` (was hand-rolling `?k=v&k=v`) | `09398fa` |
+| FETCH-6 | fetch | robots.txt fetch + check_robots accept `Option<Instant>` deadline — robots requests capped by `remaining_time` | `cb282a6` |
+| FETCH-7 | fetch | per-host loop checks `past_deadline` before `acquire_host_permit`, recomputes `remaining_time` after — closes permit-then-deadline race | `cb282a6` |
+| ADAP-16 | adapters | jsonld discover uses a global counter across all JSON-LD blocks for `mtr-eid` (was per-block enumerate → unnamed events in separate blocks collided) | `7a5ef41` |
+| ADAP-17 | adapters | classify_video_platform recognizes `youtube-nocookie.com/embed` and `youtube.com/shorts/` | `7a5ef41` |
+| ADAP-18 | adapters | classify_link classifies direct links to raw media files (`.mp4`/`.webm`/`.mp3`/etc.) — was only `<video>`/`<audio>` elements | `7a5ef41` |
+| ADAP-19 | adapters | detect_media canonicalizes YouTube URLs to watch form before dedup — watch link + embed iframe of same video collapse to one resource | `7a5ef41` |
+
+### LOW (11 findings, all fixed)
+
+| ID | Crate | Fix | Commit |
+|---|---|---|---|
+| FETCH-8 | fetch | robots is_allowed percent-decodes `url.path()` before matching (RFC 9309 §2.2.1) — inline `percent_decode_path` helper, no new dependency | `cb282a6` |
+| FETCH-9 | fetch | parse_retry_after validates weekday abbreviation matches the parsed date's actual weekday (chrono `%a` accepts any weekday name without cross-check) | `cb282a6` |
+| ADAP-20 | adapters | rss enrich dead code removed — `parse_date("").unwrap_or_else(|_| ...)` where `parse_date("")` never errors → `EventDate::unknown(String::new())` | `7a5ef41` |
+| ADAP-21 | adapters | jsonld enrich matches by url or @id, not just name — a detail page with a slightly different title no longer loses performer/description enrichment | `7a5ef41` |
+| CLI-23 | cli | scan handles BrokenPipe gracefully (write_all + explicit kind check) — `| head` no longer panics with exit 101 (not in §32 contract) | `153ada9` |
+| CLI-24 | cli | `--today` validated before `fetch_all` — invalid value fails fast (exit 3) without burning the request budget (subsumes CLI-20) | `153ada9` |
+| CLI-25 | cli | removed dead `--network` flag from `doctor` — was declared and echoed but never performed any network check | `153ada9` |
+| CLI-26 | cli | update dev-binary gate aligned with uninstall — checks `managed_by_manifest` so a target/ binary managed by a prior `--force-unmanaged` update is not refused | `153ada9` |
+
+### Post-fifth-round gate (2026-08-14)
+
+| Check | Result |
+|---|---|
+| `cargo fmt --check` | clean |
+| `cargo clippy --workspace --all-targets --all-features -- -D warnings` | clean |
+| `cargo test --workspace` | 352 passed, 0 failed |
+| `cargo xtask check` | ok |
+
+All five audit rounds (26 + 40 + 17 + 21 + 21 = 125 findings total) are
+resolved. The codebase is ready for `v0.1.0` tag pending Deve's explicit
+authorization (AGENTS.md §12).
