@@ -16,7 +16,6 @@ pub async fn run(args: DoctorArgs) -> Result<(), CliError> {
             "config_dir": config_dir,
             "state_dir": state_dir,
             "schema_version": schema_version,
-            "network_check": args.network,
         });
         println!(
             "{}",
@@ -29,7 +28,6 @@ pub async fn run(args: DoctorArgs) -> Result<(), CliError> {
         println!("  config_dir:     {config_dir}");
         println!("  state_dir:      {state_dir}");
         println!("  schema_version: {schema_version}");
-        println!("  network_check:  {}", args.network);
     }
     Ok(())
 }

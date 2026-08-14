@@ -199,9 +199,21 @@ fn self_test(binary: &Path) -> Result<(), CliError> {
 /// rollback copy -> atomic replace -> self-test -> cleanup. Any failure leaves
 /// the current binary usable.
 pub async fn run(force_unmanaged: bool) -> Result<String, CliError> {
-    let current_binary = paths::binary_path(&paths::data_dir())
+    let data_dir = paths::data_dir();
+    let current_binary = paths::binary_path(&data_dir)
         .ok_or_else(|| CliError::update("cannot resolve current binary path"))?;
-    if !force_unmanaged && paths::is_unmanaged_binary(&current_binary) {
+    // CLI-26: align with uninstall's manifest-aware dev-binary guard. A
+    // manifest that manages a target/ path (e.g. from a prior --force-unmanaged
+    // update) should be trusted, not refused — matching uninstall's behavior.
+    let manifest = crate::lifecycle::manifest::load(&data_dir);
+    let managed_by_manifest = manifest
+        .as_ref()
+        .map(|m| m.binary_path == current_binary)
+        .unwrap_or(false);
+    if !managed_by_manifest
+        && !force_unmanaged
+        && paths::is_unmanaged_binary(&current_binary)
+    {
         return Err(CliError::update(format!(
             "refusing to update unmanaged binary: {} (use --force-unmanaged to override)",
             current_binary.display()
@@ -280,7 +292,6 @@ pub async fn run(force_unmanaged: bool) -> Result<String, CliError> {
     // Update manifest. The binary is already replaced and self-tested, so a
     // manifest write failure is NOT fatal — surface it as a warning in the
     // success message rather than turning a successful update into an error.
-    let data_dir = paths::data_dir();
     let manifest = crate::lifecycle::manifest::InstallManifest::new(
         current_binary,
         "self-update",

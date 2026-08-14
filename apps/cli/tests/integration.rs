@@ -572,3 +572,79 @@ async fn core_11_12_no_false_positives_on_generic_title() {
         "CORE-12 guard: generic title must produce no scholar matches, got: {people:?}"
     );
 }
+
+// CLI-23: scan piped to a closed stdout must exit 0, not panic exit 101. The
+// pre-fix println! panicked with "failed printing to stdout: Broken pipe" and
+// exited 101 (not in the §32 contract). The fix uses write_all and treats
+// BrokenPipe as a clean exit — the downstream consumer is done, so we stop.
+#[tokio::test]
+async fn cli_23_broken_pipe_exits_zero() {
+    let server = MockServer::start().await;
+    mount_rss_feed(&server).await;
+    let config = write_sources_config(&[(true, "ok", &format!("{}/feed.xml", server.uri()))]);
+
+    let bin_path = assert_cmd::cargo::cargo_bin("math_talk_radar");
+    let mut cmd = std::process::Command::new(bin_path);
+    cmd.args(["scan", "--no-state", "--sources"])
+        .arg(config.path())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let mut child = cmd.spawn().expect("spawn");
+    // Drop the stdout reading end immediately → the pipe closes → the next
+    // write gets EPIPE. The scan takes time (mock fetch), so by the time it
+    // tries to write JSON the pipe is long closed.
+    drop(child.stdout.take());
+    let output = child.wait_with_output().expect("wait");
+    assert!(
+        output.status.success(),
+        "CLI-23: scan with closed stdout must exit 0, got code {:?}",
+        output.status.code()
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("panicked"),
+        "CLI-23: stderr must not contain a panic message, got: {stderr}"
+    );
+}
+
+// CLI-24: invalid --today must fail (exit 3) before any network fetch. The
+// pre-fix wiring validated --today after fetch_all, wasting the request budget
+// on a scan whose output would be discarded. The fix parses --today before
+// fetch_all, so the mock server's endpoints are never hit.
+#[tokio::test]
+async fn cli_24_invalid_today_skips_network_fetch() {
+    let server = MockServer::start().await;
+    // Mount both endpoints with expect(0) — if --today is validated before
+    // fetch (the fix), neither is called and server.verify() passes. If
+    // --today is validated after fetch (the bug), both are called and
+    // server.verify() fails.
+    Mock::given(method("GET"))
+        .and(path("/robots.txt"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(""))
+        .expect(0)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/feed.xml"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+    let config = write_sources_config(&[(true, "ok", &format!("{}/feed.xml", server.uri()))]);
+
+    bin()
+        .args([
+            "scan",
+            "--no-state",
+            "--sources",
+            config.path().to_str().unwrap(),
+            "--today",
+            "not-a-date",
+        ])
+        .assert()
+        .failure()
+        .code(3);
+
+    // Assert neither endpoint was hit.
+    server.verify().await;
+}

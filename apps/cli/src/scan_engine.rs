@@ -27,6 +27,20 @@ pub async fn run_scan(args: ScanArgs) -> Result<ScanOutput, CliError> {
     if args.jobs == 0 {
         return Err(CliError::usage("--jobs must be >= 1"));
     }
+    // CLI-24: validate --today before any network I/O. An invalid value
+    // should fail fast (exit 3) without having already burned the request
+    // budget on a scan whose output would be discarded.
+    let today = match args.today.as_deref() {
+        Some(s) => NaiveDate::parse_from_str(s, "%Y-%m-%d").map_err(|e| {
+            CliError::config(format!("invalid --today {s:?}: {e}; expected YYYY-MM-DD"))
+        })?,
+        None => Utc::now().date_naive(),
+    };
+    let core_mode = match args.mode {
+        ScanMode::Upcoming => CoreScanMode::Upcoming,
+        ScanMode::Recordings => CoreScanMode::Recordings,
+        ScanMode::Both => CoreScanMode::Both,
+    };
     let config = load_sources(args.sources.as_deref())?;
     let enabled: Vec<SourceSpec> = config
         .sources
@@ -116,22 +130,6 @@ pub async fn run_scan(args: ScanArgs) -> Result<ScanOutput, CliError> {
             .total_cmp(&a.score)
             .then_with(|| a.id.0.cmp(&b.id.0))
     });
-
-    // CLI-20: validate --today and derive core_mode BEFORE store_scan so an
-    // invalid --today fails fast without having already mutated persisted
-    // state. The state write must be the last irreversible side-effect; a
-    // usage/config error before it leaves the DB untouched.
-    let today = match args.today.as_deref() {
-        Some(s) => NaiveDate::parse_from_str(s, "%Y-%m-%d").map_err(|e| {
-            CliError::config(format!("invalid --today {s:?}: {e}; expected YYYY-MM-DD"))
-        })?,
-        None => Utc::now().date_naive(),
-    };
-    let core_mode = match args.mode {
-        ScanMode::Upcoming => CoreScanMode::Upcoming,
-        ScanMode::Recordings => CoreScanMode::Recordings,
-        ScanMode::Both => CoreScanMode::Both,
-    };
 
     // Store the FULL scan result (pre-filter, pre-truncate) so change detection
     // compares against every live event. Filtering by mode/window or capping

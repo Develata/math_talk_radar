@@ -126,9 +126,6 @@ pub enum SourcesAction {
 
 #[derive(Debug, Args)]
 pub struct DoctorArgs {
-    /// Include network connectivity checks.
-    #[arg(long)]
-    pub network: bool,
     /// Emit machine-readable JSON.
     #[arg(long)]
     pub json: bool,
