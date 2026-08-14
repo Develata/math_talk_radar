@@ -605,3 +605,72 @@ fn store_scan_matches_manual_pattern() {
 
     assert_eq!(manual_changes, scan_changes);
 }
+
+/// ST-16 regression: a v1 database (version=1, no `cancelled_events` table)
+/// is migrated in place to v2 by `Repository::open`. The tombstone table is
+/// created and the version row is bumped — existing events are preserved.
+#[test]
+fn migrates_v1_to_v2_in_place() {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let db_path = dir.path().join("state.redb");
+
+    // Simulate a v1 database: version=1, EVENTS + SOURCE_HEALTH tables, but
+    // NO CANCELLED_EVENTS table (the v2 addition).
+    {
+        use radar_state::schema::{EVENTS, SCHEMA_VERSION, SOURCE_HEALTH};
+        let db = redb::Database::create(&db_path).expect("create v1 db");
+        let txn = db.begin_write().expect("v1 txn");
+        {
+            let mut vtable = txn.open_table(SCHEMA_VERSION).expect("v1 schema table");
+            vtable.insert("version", 1u32).expect("write v1 version");
+        }
+        let _ = txn.open_table(EVENTS).expect("v1 events table");
+        let _ = txn.open_table(SOURCE_HEALTH).expect("v1 health table");
+        txn.commit().expect("v1 commit");
+    }
+
+    // Open with current binary — should forward-migrate v1→v2.
+    let repo = Repository::open(&db_path).expect("migrate v1 to v2");
+    assert_eq!(repo.schema_version().expect("version"), 2);
+
+    // The tombstone table must exist: exercise it by storing, cancelling, and
+    // reappearing an event. If the table were missing, the cancel step would
+    // fail and first_seen_at would not be restored on reappearance.
+    let event = base_event("e1", vec![]);
+    repo.store_scan(std::slice::from_ref(&event), t0())
+        .expect("seed");
+    repo.store_scan(&[], t1()).expect("cancel");
+    let (stored, _) = repo
+        .store_scan(std::slice::from_ref(&event), t2())
+        .expect("reappear");
+    assert_eq!(
+        stored[0].first_seen_at,
+        Some(t0()),
+        "first_seen_at restored from tombstone after v1 to v2 migration"
+    );
+}
+
+/// A database with a schema version newer than the binary is refused
+/// (backward-incompatible downgrade protection).
+#[test]
+fn refuses_to_open_newer_schema_version() {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let db_path = dir.path().join("state.redb");
+
+    {
+        use radar_state::schema::SCHEMA_VERSION;
+        let db = redb::Database::create(&db_path).expect("create future db");
+        let txn = db.begin_write().expect("txn");
+        {
+            let mut vtable = txn.open_table(SCHEMA_VERSION).expect("schema table");
+            vtable.insert("version", 999u32).expect("write future version");
+        }
+        txn.commit().expect("commit");
+    }
+
+    let err = Repository::open(&db_path).unwrap_err();
+    assert!(
+        matches!(err, StateError::Schema { expected: 2, found: 999 }),
+        "got {err:?}"
+    );
+}
