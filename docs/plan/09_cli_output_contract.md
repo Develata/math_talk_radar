@@ -12,9 +12,14 @@
 
 `--mode upcoming|recordings|both`, `--before <d>`, `--after <d>`, `--jobs <n>`,
 `--max-events`, `--max-talks`, `--timezone <IANA>`, `--today <YYYY-MM-DD>`,
-`--config/--sources/--scholars/--interests/--state <path>`, `--no-state`,
+`--sources/--scholars/--interests/--state <path>`, `--no-state`,
 `--format json|jsonl`, `--detail compact|full`, `--verbose`, `--log-format
 text|json`.
+
+> Note: `--config` was listed in earlier drafts but is not implemented in v0.1.
+> v0.1 uses specific override flags (`--sources`, `--scholars`, `--interests`,
+> `--state`) rather than a general config file. A general `--config` may be
+> added in a future version if a unified config format is defined.
 
 ## stdout / stderr (§28)
 

@@ -5,40 +5,61 @@ use std::path::{Path, PathBuf};
 
 pub const APP_SLUG: &str = "math_talk_radar";
 
-/// B3: the release API origin is a fixed constant per §34.3 ("HTTPS only; fixed
-/// release repo"). The previous `MATH_TALK_RADAR_RELEASE_API` env var was
-/// respected in production builds, allowing an attacker who could plant an env
-/// var to redirect self-update to a malicious server. The override is now gated
-/// on `debug_assertions` so only debug/test builds (which integration tests use
-/// to point at a wiremock server) honor it; release binaries always use the
-/// fixed GitHub origin.
-pub const RELEASE_API_ENV: &str = "MATH_TALK_RADAR_RELEASE_API";
 pub const DEFAULT_RELEASE_API: &str = "https://api.github.com/repos/Develata/math_talk_radar";
 
+/// B3-1: the release API origin. Production always uses `DEFAULT_RELEASE_API`.
+/// The `MATH_TALK_RADAR_RELEASE_API` env var is honored only when
+/// `cfg!(debug_assertions)` is true (standard Rust compile-time gate for
+/// debug/test builds). A distributor who sets `CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS=true`
+/// could technically leak this into a release build — but if they control the
+/// build profile, they can modify source code directly, so this is a supply-chain
+/// trust boundary, not a runtime attack surface. Defense-in-depth: the env var
+/// URL is validated to be HTTPS or localhost, and `validate_download_url()`
+/// independently locks download URLs to github.com regardless of where the API
+/// metadata came from.
 pub fn release_api() -> String {
     if cfg!(debug_assertions)
-        && let Ok(api) = std::env::var(RELEASE_API_ENV)
+        && let Ok(api) = std::env::var("MATH_TALK_RADAR_RELEASE_API")
+        && validate_api_origin(&api).is_ok()
     {
         return api;
     }
     DEFAULT_RELEASE_API.to_string()
 }
 
+/// Defense-in-depth: validate that an override API URL is HTTPS or points to
+/// localhost (for wiremock tests). Prevents an env-var-based redirect to an
+/// arbitrary HTTP server even if `debug_assertions` leaks.
+fn validate_api_origin(url: &str) -> Result<(), String> {
+    let parsed = url::Url::parse(url).map_err(|e| format!("invalid API URL: {e}"))?;
+    if parsed.scheme() == "https" {
+        return Ok(());
+    }
+    if parsed.scheme() == "http"
+        && matches!(parsed.host_str(), Some("127.0.0.1") | Some("localhost"))
+    {
+        return Ok(());
+    }
+    Err(format!(
+        "API override must be HTTPS or localhost, got: {url}"
+    ))
+}
+
 /// The binary path to manage. Prefers the install manifest when present;
 /// falls back to `current_exe`.
 ///
-/// B2: the manifest's `binary_path` is only trusted if it looks like a real
-/// app binary — the file name must contain `APP_SLUG`. A tampered manifest
-/// could otherwise point at an arbitrary file (e.g. `~/.ssh/id_rsa`,
-/// `/etc/passwd`) and `uninstall` would delete it. `safe_canonicalize` at
-/// delete time blocks `/`, `$HOME`, and empty, but that is not enough: any
-/// other path would pass. This filename check is defense-in-depth; it makes
-/// the attack require not just write access to the manifest but also a target
-/// filename containing `math_talk_radar`, which dramatically narrows the
-/// blast radius.
+/// B2-1: the manifest's `binary_path` is only trusted if it is a **regular
+/// file** (not a directory, not a symlink) whose filename contains
+/// `APP_SLUG`. `Path::exists()` follows symlinks and accepts directories,
+/// so `symlink_metadata` is used to verify `is_file()` without following.
+/// A tampered manifest pointing at a directory like
+/// `~/math_talk_radar_backup` would otherwise cause `remove_dir_all` to
+/// recursively delete it. Combined with `safe_canonicalize` at delete time
+/// (which blocks protected system/user dirs), this makes the attack require
+/// a regular file with `math_talk_radar` in its name outside protected
+/// paths — a dramatically narrowed blast radius.
 pub fn binary_path(data_dir: &Path) -> Option<PathBuf> {
     if let Some(m) = crate::lifecycle::manifest::load(data_dir)
-        && m.binary_path.exists()
         && is_plausible_app_binary(&m.binary_path)
     {
         return Some(m.binary_path);
@@ -46,11 +67,17 @@ pub fn binary_path(data_dir: &Path) -> Option<PathBuf> {
     std::env::current_exe().ok()
 }
 
-/// True if `path` looks like a `math_talk_radar` binary: the file name must
-/// contain the app slug. This is a sanity check, not a security boundary —
-/// `safe_canonicalize` at delete time provides the hard block on `/`, `$HOME`,
-/// and empty.
+/// True if `path` looks like a `math_talk_radar` binary: must be a regular
+/// file (not a directory, not a symlink) whose name contains `APP_SLUG`.
+/// Uses `symlink_metadata` to avoid following symlinks (§35 "never follows
+/// symlinks").
 fn is_plausible_app_binary(path: &Path) -> bool {
+    let Ok(meta) = std::fs::symlink_metadata(path) else {
+        return false;
+    };
+    if !meta.is_file() {
+        return false;
+    }
     path.file_name()
         .and_then(|n| n.to_str())
         .map(|name| name.contains(APP_SLUG))

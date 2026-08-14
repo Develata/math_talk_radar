@@ -478,23 +478,35 @@ fn validate_source_registry(root: &Path) -> Vec<String> {
             // site_audits.rs (function `site_{id_with_underscores}_*`).
             let test_fn_prefix = format!("fn site_{}", id.replace('-', "_"));
             let audits_path = root.join("crates/radar-adapters/tests/site_audits.rs");
-            if let Ok(audits) = std::fs::read_to_string(&audits_path)
-                && !audits.contains(&test_fn_prefix)
-            {
-                errors.push(format!(
-                    "source-registry row {i} ({id}): no golden test in site_audits.rs (expected function starting with '{test_fn_prefix}')"
-                ));
+            match std::fs::read_to_string(&audits_path) {
+                Ok(audits) if !audits.contains(&test_fn_prefix) => {
+                    errors.push(format!(
+                        "source-registry row {i} ({id}): no golden test in site_audits.rs (expected function starting with '{test_fn_prefix}')"
+                    ));
+                }
+                Err(e) => {
+                    errors.push(format!("source-registry: cannot read site_audits.rs: {e}"));
+                }
+                _ => {}
             }
         }
 
         // §18: count media/recording sources for the coverage baseline.
-        // A source counts if its `kind` is a recording type or its
-        // `media_strategy` is non-empty.
+        // H8-1: media_strategy validated against a closed enum to catch
+        // typos that would silently break the media-source baseline.
         if cell(i_en) == "true" {
             let kind = cell(i_kind);
             let media_strategy = cell(i_media);
-            if !media_strategy.is_empty()
-                || kind.contains("recording")
+            let valid_strategies = ["youtube_channel", "rss_media", "ics_media", "scrape_media"];
+            if !media_strategy.is_empty() {
+                if !valid_strategies.contains(&media_strategy) {
+                    errors.push(format!(
+                        "source-registry row {i} ({id}): unknown media_strategy '{media_strategy}', expected one of: {}",
+                        valid_strategies.join(", ")
+                    ));
+                }
+                media_source_count += 1;
+            } else if kind.contains("recording")
                 || kind.contains("media")
                 || kind.contains("video")
                 || kind.contains("archive")

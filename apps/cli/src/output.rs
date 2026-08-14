@@ -11,6 +11,9 @@ pub const OUTPUT_SCHEMA_VERSION: &str = "1.0";
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ScanOutput {
+    /// Always "1.0" in v0.x (§64). Constrained in the JSON schema via
+    /// `#[schemars(schema_with = ...)]` so consumers can validate compatibility.
+    #[schemars(schema_with = "const_schema_1_0")]
     pub schema_version: String,
     pub generated_at: DateTime<Utc>,
     pub query: QuerySpec,
@@ -22,11 +25,36 @@ pub struct ScanOutput {
     pub source_health: Vec<SourceHealth>,
 }
 
+/// H4-1: JSON schema fragment constraining `schema_version` to exactly "1.0".
+fn const_schema_1_0(_gen: &mut schemars::r#gen::SchemaGenerator) -> schemars::schema::Schema {
+    serde_json::from_value(serde_json::json!({
+        "type": "string",
+        "const": "1.0"
+    }))
+    .unwrap_or(schemars::schema::Schema::Bool(true))
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct QuerySpec {
+    /// H4-1: constrained to "upcoming", "recordings", or "both".
+    #[schemars(schema_with = "mode_enum_schema")]
     pub mode: String,
     pub before_days: u32,
     pub after_days: u32,
+    /// H5-2: the IANA timezone used for date interpretation (§27.2). Empty
+    /// string means UTC was used. Adding an optional field is schema-compatible
+    /// in v0.x (§64).
+    #[serde(default)]
+    pub timezone: String,
+}
+
+/// H4-1: JSON schema fragment constraining `mode` to the three valid scan modes.
+fn mode_enum_schema(_gen: &mut schemars::r#gen::SchemaGenerator) -> schemars::schema::Schema {
+    serde_json::from_value(serde_json::json!({
+        "type": "string",
+        "enum": ["upcoming", "recordings", "both"]
+    }))
+    .unwrap_or(schemars::schema::Schema::Bool(true))
 }
 
 /// Render a `ScanOutput` to the requested format and detail level (§31).

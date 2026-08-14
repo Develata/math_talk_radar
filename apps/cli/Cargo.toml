@@ -33,6 +33,7 @@ serde.workspace = true
 serde_json.workspace = true
 schemars.workspace = true
 chrono.workspace = true
+chrono-tz.workspace = true
 url.workspace = true
 toml.workspace = true
 reqwest.workspace = true

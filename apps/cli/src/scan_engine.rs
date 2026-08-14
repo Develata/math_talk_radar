@@ -27,6 +27,21 @@ pub async fn run_scan(args: ScanArgs) -> Result<ScanOutput, CliError> {
     if args.jobs == 0 {
         return Err(CliError::usage("--jobs must be >= 1"));
     }
+    // H5-2: parse --timezone before deriving `today` so the "current date"
+    // used for the window reflects the user's local calendar, not UTC. Around
+    // UTC midnight, `America/New_York` and `Asia/Tokyo` can differ by a full
+    // calendar day. Falls back to UTC when `--timezone` is absent.
+    let tz = match args.timezone.as_deref() {
+        Some(tz) => {
+            let parsed = radar_core::date::parse_timezone(tz).ok_or_else(|| {
+                CliError::config(format!(
+                    "invalid --timezone {tz:?}: unknown IANA timezone name"
+                ))
+            })?;
+            (parsed, tz.to_string())
+        }
+        None => (chrono_tz::Tz::UTC, "UTC".to_string()),
+    };
     // CLI-24: validate --today before any network I/O. An invalid value
     // should fail fast (exit 3) without having already burned the request
     // budget on a scan whose output would be discarded.
@@ -34,7 +49,7 @@ pub async fn run_scan(args: ScanArgs) -> Result<ScanOutput, CliError> {
         Some(s) => NaiveDate::parse_from_str(s, "%Y-%m-%d").map_err(|e| {
             CliError::config(format!("invalid --today {s:?}: {e}; expected YYYY-MM-DD"))
         })?,
-        None => Utc::now().date_naive(),
+        None => Utc::now().with_timezone(&tz.0).date_naive(),
     };
     let core_mode = match args.mode {
         ScanMode::Upcoming => CoreScanMode::Upcoming,
@@ -87,18 +102,6 @@ pub async fn run_scan(args: ScanArgs) -> Result<ScanOutput, CliError> {
     };
     let scholars: &[ScholarRecord] = &scholars_config.scholars;
 
-    // H5: validate --timezone if provided. The timezone is accepted but the
-    // actual date interpretation still uses the event's own timezone field;
-    // this validates the IANA name early so a bad value fails before I/O
-    // (matching the --today fast-fail pattern from CLI-24).
-    if let Some(tz) = args.timezone.as_deref()
-        && radar_core::date::parse_timezone(tz).is_none()
-    {
-        return Err(CliError::config(format!(
-            "invalid --timezone {tz:?}: unknown IANA timezone name"
-        )));
-    }
-
     let http_policy = radar_fetch::policy::HttpPolicy {
         global_concurrency: args.jobs as usize,
         ..radar_fetch::policy::HttpPolicy::default()
@@ -113,13 +116,21 @@ pub async fn run_scan(args: ScanArgs) -> Result<ScanOutput, CliError> {
         })
         .await;
 
-    // B8: HTTP-005 says "zero usable sources → exit 4". The previous check
+    // B8-1: HTTP-005 says "zero usable sources → exit 4". The previous check
     // only fired when `enabled.is_empty()` (no sources configured at all).
     // When sources ARE configured but every one of them fails (network down,
     // all-404, all-parse-error), the scan returned exit 0 with an empty event
     // list — silently hiding a total outage. A source is "usable" if it
-    // produced at least one candidate; if none did, exit 4.
-    let any_usable = results.iter().any(|r| !r.candidates.is_empty());
+    // reached at least `SourceStatus::Ok` or `SourceStatus::Partial` — i.e.
+    // it successfully fetched and parsed, even if it produced zero candidates
+    // (a legitimately empty calendar). Only when ALL sources have a terminal
+    // failure status (HttpError, ParseError, RobotsDenied, etc.) do we exit 4.
+    let any_usable = results.iter().any(|r| {
+        matches!(
+            r.health.status,
+            radar_core::SourceStatus::Ok | radar_core::SourceStatus::Partial
+        )
+    });
     if !any_usable {
         return Err(CliError::zero_sources());
     }
@@ -207,19 +218,26 @@ pub async fn run_scan(args: ScanArgs) -> Result<ScanOutput, CliError> {
         events.truncate(max as usize);
     }
 
-    // H5: --max-talks caps the total number of talks across all emitted
-    // events (§27.2). Applied after --max-events so the cap is over the
-    // surviving event set, matching the plan's "max_talks=300" budget.
-    if let Some(max_talks) = args.max_talks {
-        let mut emitted = 0u32;
-        events.retain(|e| {
-            if emitted >= max_talks {
-                return false;
-            }
-            emitted = emitted.saturating_add(e.talks.len() as u32);
-            true
-        });
+    // H5-3: --max-talks caps the total number of talks across all emitted
+    // events (§27.2, default 300). Unlike --max-events, this preserves event
+    // envelopes but truncates their talks to fit the remaining budget. An
+    // event whose talks are all consumed by the cap still appears with an
+    // empty talks list; subsequent events are dropped entirely once the
+    // budget is exhausted.
+    let max_talks = args.max_talks.unwrap_or(300) as usize;
+    let mut remaining = max_talks;
+    let mut kept = Vec::new();
+    for mut e in events {
+        if remaining == 0 && max_talks > 0 {
+            break;
+        }
+        if e.talks.len() > remaining {
+            e.talks.truncate(remaining);
+        }
+        remaining = remaining.saturating_sub(e.talks.len());
+        kept.push(e);
     }
+    events = kept;
 
     let source_health = results.into_iter().map(|r| r.health).collect();
 
@@ -230,6 +248,7 @@ pub async fn run_scan(args: ScanArgs) -> Result<ScanOutput, CliError> {
             mode: core_mode.as_str().to_string(),
             before_days: args.before,
             after_days: args.after,
+            timezone: tz.1,
         },
         events,
         changes,

@@ -28,14 +28,47 @@ const RELEASE_USER_AGENT: &str = concat!(
 /// checking whether the recorded PID is still alive, and steals the lock if
 /// not. `#![forbid(unsafe_code)]` rules out `flock(2)`, so this userspace
 /// approach is used instead.
+///
+/// H7-1/H7-3: The lock file stores `PID:STARTTIME:TOKEN` where STARTTIME is
+/// the process start time from `/proc/<pid>/stat` (protects against PID
+/// reuse) and TOKEN is a per-session random value (prevents a later guard's
+/// Drop from removing a different process's lock). Stale recovery uses
+/// atomic `rename` to a tombstone — only one contender wins, eliminating the
+/// TOCTOU race where two processes both `remove_file` + `create_new`.
 struct UpdateGuard {
     path: PathBuf,
+    token: u64,
 }
 
 impl Drop for UpdateGuard {
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.path);
+        // H7-1: only remove if our token still matches — another process may
+        // have stolen the lock after we crashed.
+        if let Ok(content) = std::fs::read_to_string(&self.path)
+            && content.trim().ends_with(&self.token.to_string())
+        {
+            let _ = std::fs::remove_file(&self.path);
+        }
     }
+}
+
+/// H7-2/H7-3: write PID, process start time, and a random ownership token.
+/// Returns the token so the guard can verify ownership on cleanup.
+fn write_lock_content(file: &mut std::fs::File) -> Result<u64, CliError> {
+    use std::io::Write;
+    let pid = std::process::id();
+    if pid == 0 {
+        return Err(CliError::update("PID 0 is not a valid updater identity"));
+    }
+    let starttime = process_starttime(pid).unwrap_or(0);
+    // Simple entropy: nanosecond timestamp. Not cryptographically random, but
+    // sufficient to distinguish two concurrent update invocations.
+    let token = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(1);
+    let _ = writeln!(file, "{pid}:{starttime}:{token}");
+    Ok(token)
 }
 
 fn acquire_update_lock() -> Result<UpdateGuard, CliError> {
@@ -50,33 +83,50 @@ fn acquire_update_lock() -> Result<UpdateGuard, CliError> {
         .open(&lock_path)
     {
         Ok(mut f) => {
-            use std::io::Write;
-            let _ = writeln!(f, "{}", std::process::id());
-            Ok(UpdateGuard { path: lock_path })
+            let token = write_lock_content(&mut f)?;
+            Ok(UpdateGuard {
+                path: lock_path,
+                token,
+            })
         }
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-            // Stale-lock recovery: read the PID, check if it's still alive.
-            // If the PID is gone (or unreadable), steal the lock.
+            // H7-1: Stale-lock recovery via atomic rename. Two processes may
+            // both inspect the stale lock, but only one can successfully
+            // rename it — the loser's rename fails and it retries the
+            // create_new path instead of clobbering the winner's lock.
             let steal = std::fs::read_to_string(&lock_path)
                 .ok()
-                .and_then(|c| c.trim().parse::<u32>().ok())
-                .map(|pid| !is_process_alive(pid))
+                .and_then(|c| parse_lock_pid(&c))
+                .map(|(pid, starttime)| {
+                    if pid == 0 {
+                        return true;
+                    }
+                    !is_process_alive_with_starttime(pid, starttime)
+                })
                 .unwrap_or(true);
             if !steal {
                 return Err(CliError::update(
                     "another update is in progress (update.lock is held)",
                 ));
             }
-            let _ = std::fs::remove_file(&lock_path);
+            // Atomic rename to tombstone — only one contender wins.
+            let tombstone = lock_path.with_extension("lock.stale");
+            if std::fs::rename(&lock_path, &tombstone).is_err() {
+                // Someone else already stole it; retry create_new.
+                return acquire_update_lock();
+            }
+            let _ = std::fs::remove_file(&tombstone);
             match std::fs::OpenOptions::new()
                 .create_new(true)
                 .write(true)
                 .open(&lock_path)
             {
                 Ok(mut f) => {
-                    use std::io::Write;
-                    let _ = writeln!(f, "{}", std::process::id());
-                    Ok(UpdateGuard { path: lock_path })
+                    let token = write_lock_content(&mut f)?;
+                    Ok(UpdateGuard {
+                        path: lock_path,
+                        token,
+                    })
                 }
                 Err(e2) => Err(CliError::update(format!(
                     "acquire update lock after steal: {e2}"
@@ -87,12 +137,64 @@ fn acquire_update_lock() -> Result<UpdateGuard, CliError> {
     }
 }
 
-#[cfg(unix)]
-fn is_process_alive(pid: u32) -> bool {
-    // kill(pid, 0) returns 0 if the process exists, ESRCH if not. No signal
-    // is sent. This uses `std::process::Command` to invoke `/bin/kill` rather
-    // than the libc `kill` syscall to stay within `#![forbid(unsafe_code)]`.
-    std::process::Command::new("kill")
+/// Parse `PID:STARTTIME:TOKEN` from a lock file, returning (PID, STARTTIME).
+fn parse_lock_pid(content: &str) -> Option<(u32, u64)> {
+    let parts: Vec<&str> = content.trim().split(':').collect();
+    if parts.len() != 3 {
+        return None;
+    }
+    let pid = parts[0].parse::<u32>().ok()?;
+    let starttime = parts[1].parse::<u64>().ok()?;
+    Some((pid, starttime))
+}
+
+/// H7-2: Read process start time from `/proc/<pid>/stat` (field 22). Pure
+/// filesystem read — no PATH search, no external command. Returns 0 if
+/// `/proc` is unavailable (non-Linux).
+#[cfg(target_os = "linux")]
+fn process_starttime(pid: u32) -> Option<u64> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    // Field 22 is the process start time in clock ticks. Fields are
+    // space-separated, but the comm field (field 2) may contain spaces
+    // enclosed in parentheses. Find the last ')' and parse after it.
+    let after_comm = stat.rsplit_once(')')?.1;
+    let fields: Vec<&str> = after_comm.split_whitespace().collect();
+    // After ')', field 3 starts at index 0. Field 22 (starttime) is at
+    // index 19 (22 - 3 = 19).
+    fields.get(19).and_then(|s| s.parse::<u64>().ok())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn process_starttime(_pid: u32) -> Option<u64> {
+    None
+}
+
+/// H7-2/H7-3: Check liveness using `/proc/<pid>` on Linux (no PATH search,
+/// no external command). If `starttime` is nonzero, also verify the current
+/// process start time matches — this detects PID reuse by a different
+/// process after the original updater crashed.
+#[cfg(target_os = "linux")]
+fn is_process_alive_with_starttime(pid: u32, starttime: u64) -> bool {
+    if !std::path::Path::new(&format!("/proc/{pid}")).exists() {
+        return false;
+    }
+    if starttime == 0 {
+        return true;
+    }
+    match process_starttime(pid) {
+        Some(current_starttime) => current_starttime == starttime,
+        None => true, // Can't verify; assume alive to avoid stealing a live lock.
+    }
+}
+
+/// H7-2: Non-Linux Unix fallback. Use absolute `/bin/kill -0` — no PATH
+/// search. PID reuse detection is unavailable without `/proc`.
+#[cfg(all(unix, not(target_os = "linux")))]
+fn is_process_alive_with_starttime(pid: u32, _starttime: u64) -> bool {
+    if pid == 0 {
+        return false;
+    }
+    std::process::Command::new("/bin/kill")
         .arg("-0")
         .arg(pid.to_string())
         .stdout(std::process::Stdio::null())
@@ -102,10 +204,10 @@ fn is_process_alive(pid: u32) -> bool {
         .unwrap_or(false)
 }
 
+/// H7-3: Non-Unix platforms cannot verify liveness. Fail safe: assume alive
+/// so we don't steal a lock held by a process we can't see.
 #[cfg(not(unix))]
-fn is_process_alive(pid: u32) -> bool {
-    // Best-effort on non-Unix: assume alive so we don't steal a live lock.
-    let _ = pid;
+fn is_process_alive_with_starttime(_pid: u32, _starttime: u64) -> bool {
     true
 }
 

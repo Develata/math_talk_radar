@@ -93,9 +93,6 @@ pub struct ScanArgs {
     /// Inject `today` for deterministic runs (YYYY-MM-DD).
     #[arg(long, value_name = "YYYY-MM-DD")]
     pub today: Option<String>,
-    /// Path to a general config file overriding embedded defaults.
-    #[arg(long, value_name = "PATH")]
-    pub config: Option<PathBuf>,
     /// Path to the source registry TOML.
     #[arg(long, value_name = "PATH")]
     pub sources: Option<PathBuf>,

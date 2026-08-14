@@ -44,18 +44,20 @@ pub async fn run(args: UninstallArgs) -> Result<String, CliError> {
     }
 
     let preserve_data = args.keep_data;
-    let mut to_delete: Vec<PathBuf> = vec![binary.clone(), config_dir.clone(), cache_dir.clone()];
+    let mut to_delete: Vec<(PathBuf, bool)> = vec![
+        (binary.clone(), true),
+        (config_dir.clone(), false),
+        (cache_dir.clone(), false),
+    ];
     if !preserve_data {
-        to_delete.push(data_dir.clone());
+        to_delete.push((data_dir.clone(), false));
     } else {
-        // keep-data still removes the install manifest (§35.3 "install/update metadata")
         let manifest_path = manifest::InstallManifest::manifest_path(&data_dir);
         if manifest_path.exists() {
-            to_delete.push(manifest_path);
+            to_delete.push((manifest_path, false));
         }
     }
 
-    // Clean up stale temp files near the binary (§34.3)
     if let Some(parent) = binary.parent()
         && let Ok(entries) = std::fs::read_dir(parent)
     {
@@ -65,16 +67,17 @@ pub async fn run(args: UninstallArgs) -> Result<String, CliError> {
             if name.starts_with(".math_talk_radar.update.")
                 || name.starts_with(".math_talk_radar.rollback")
             {
-                to_delete.push(entry.path());
+                to_delete.push((entry.path(), false));
             }
         }
     }
 
     if args.dry_run {
         let mut plan = String::from("uninstall plan (dry-run, nothing will be deleted):\n");
-        for p in &to_delete {
+        for (p, is_binary) in &to_delete {
             let status = if p.exists() { "exists" } else { "missing" };
-            plan.push_str(&format!("  delete [{status}]: {}\n", p.display()));
+            let kind = if *is_binary { "binary" } else { "path" };
+            plan.push_str(&format!("  delete [{status}] {kind}: {}\n", p.display()));
         }
         if preserve_data {
             plan.push_str(&format!("  preserve: {}\n", data_dir.display()));
@@ -83,11 +86,11 @@ pub async fn run(args: UninstallArgs) -> Result<String, CliError> {
     }
 
     let mut deleted = Vec::new();
-    for p in &to_delete {
+    for (p, is_binary) in &to_delete {
         if !p.exists() {
             continue;
         }
-        delete_path(p)?;
+        delete_path(p, *is_binary)?;
         deleted.push(p.clone());
     }
 
@@ -98,14 +101,23 @@ pub async fn run(args: UninstallArgs) -> Result<String, CliError> {
     Ok(result)
 }
 
-fn delete_path(path: &Path) -> Result<(), CliError> {
-    // Canonicalize validates safety (rejects /, $HOME, empty) but we delete the
-    // original path: symlink_metadata does not follow symlinks, so a symlink is
-    // unlinked rather than its target (§35.5).
+/// B2-1: `is_binary=true` forces `remove_file` — a binary path must NEVER be
+/// recursively deleted even if it somehow points at a directory. Only the
+/// app's own config/cache/data dirs use `remove_dir_all`.
+fn delete_path(path: &Path, is_binary: bool) -> Result<(), CliError> {
     paths::safe_canonicalize(path).map_err(CliError::uninstall)?;
     let meta = std::fs::symlink_metadata(path)
         .map_err(|e| CliError::uninstall(format!("stat {}: {e}", path.display())))?;
-    if meta.is_dir() {
+    if is_binary {
+        if meta.is_dir() {
+            return Err(CliError::uninstall(format!(
+                "refusing to delete binary path that is a directory: {}",
+                path.display()
+            )));
+        }
+        std::fs::remove_file(path)
+            .map_err(|e| CliError::uninstall(format!("delete {}: {e}", path.display())))?;
+    } else if meta.is_dir() {
         std::fs::remove_dir_all(path)
             .map_err(|e| CliError::uninstall(format!("delete {}: {e}", path.display())))?;
     } else {

@@ -141,8 +141,14 @@ async fn check_robots(
     let client_clone = client.clone();
     let hp = *http_policy;
     let ah = allowed_hosts.to_vec();
+    // B6-1: include a sorted allowlist hash in the cache key so sources
+    // with different host policies get separate robots cache entries.
+    let mut sorted_hosts = allowed_hosts.to_vec();
+    sorted_hosts.sort();
+    sorted_hosts.dedup();
+    let allowlist_key = sorted_hosts.join(",");
     let rules = robots
-        .get_or_init(url, move || async move {
+        .get_or_init(url, &allowlist_key, move || async move {
             match robots_url_for(&owned_url) {
                 Some(ru) => fetch_robots_txt(&client_clone, ru, &hp, &ah, deadline).await,
                 None => Ok(RobotsRules::default()),

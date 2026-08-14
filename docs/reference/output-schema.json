@@ -30,7 +30,9 @@
       "$ref": "#/definitions/QuerySpec"
     },
     "schema_version": {
-      "type": "string"
+      "description": "Always \"1.0\" in v0.x (§64). Constrained in the JSON schema via `#[schemars(schema_with = ...)]` so consumers can validate compatibility.",
+      "type": "string",
+      "const": "1.0"
     },
     "source_health": {
       "default": [],
@@ -567,6 +569,17 @@
           "minimum": 0.0
         },
         "mode": {
+          "description": "H4-1: constrained to \"upcoming\", \"recordings\", or \"both\".",
+          "type": "string",
+          "enum": [
+            "upcoming",
+            "recordings",
+            "both"
+          ]
+        },
+        "timezone": {
+          "description": "H5-2: the IANA timezone used for date interpretation (§27.2). Empty string means UTC was used. Adding an optional field is schema-compatible in v0.x (§64).",
+          "default": "",
           "type": "string"
         }
       }

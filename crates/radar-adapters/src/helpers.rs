@@ -437,8 +437,10 @@ fn is_youtube_host(host: &str) -> bool {
     host == "youtube.com"
         || host == "www.youtube.com"
         || host == "m.youtube.com"
+        || host == "music.youtube.com"
         || host == "youtube-nocookie.com"
-        || host == "www.youtube-nocookie.com"
+        || host.ends_with(".youtube-nocookie.com")
+        || host.ends_with(".youtube.com")
         || host == "youtu.be"
 }
 
@@ -456,7 +458,8 @@ fn extract_youtube_id(url: &Url) -> Option<String> {
     }
     let path = url.path();
     if path.contains("/embed/") || path.contains("/shorts/") {
-        let segment = path.rsplit('/').next()?;
+        // H2-1: skip empty trailing segment so /embed/ABC/ still resolves.
+        let segment = path.rsplit('/').find(|s| !s.is_empty())?;
         return valid_youtube_id(segment).map(|s| s.to_string());
     }
     url.query_pairs()

@@ -203,16 +203,24 @@ impl RobotsCache {
         }
     }
 
+    /// Get cached rules for `url`'s origin + `allowlist_key`, or initialize
+    /// by calling `fetch`. The cache key includes the allowlist so that
+    /// sources with different host policies get separate cache entries
+    /// (B6-1: a broad-allowlist source's cached robots rules must not be
+    /// reused by a narrow-allowlist source for the same origin — the narrow
+    /// source's `fetch_robots_txt` would have rejected cross-host redirects
+    /// that the broad source accepted).
     pub async fn get_or_init<F, Fut>(
         &self,
         url: &Url,
+        allowlist_key: &str,
         fetch: F,
     ) -> Result<RobotsRules, crate::error::FetchError>
     where
         F: FnOnce() -> Fut,
         Fut: std::future::Future<Output = Result<RobotsRules, crate::error::FetchError>>,
     {
-        let key = host_key(url);
+        let key = format!("{}|{allowlist_key}", host_key(url));
         let cell = {
             let mut map = self.map.lock().await;
             map.entry(key)
