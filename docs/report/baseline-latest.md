@@ -52,6 +52,6 @@
 | Metric | Result (2026-08-13) |
 |---|---|
 | Sources audited | 24 |
-| Sources enabled + fixture-backed | 15 (2 RSS, 1 JSON-LD, 12 HTML-config) |
+| Sources enabled + fixture-backed | 13 (2 RSS, 11 HTML-config) |
 | `pending_audit` rows | 0 |
-| Adapter kinds among enabled | 3 (rss, json_ld, html_config) |
+| Adapter kinds among enabled | 2 (rss, html_config) |

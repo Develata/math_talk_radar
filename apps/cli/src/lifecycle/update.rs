@@ -122,6 +122,41 @@ struct Release {
     assets: Vec<ReleaseAsset>,
 }
 
+/// B3-residual: validate that a download URL from the GitHub release API
+/// points to the expected origin. In release builds: HTTPS only, host must
+/// be `github.com` or `objects.githubusercontent.com` (GitHub's release
+/// asset CDN). In debug builds: allow `http://` + `127.0.0.1`/`localhost`
+/// so integration tests can point at a local wiremock server.
+fn validate_download_url(url: &str) -> Result<(), CliError> {
+    let parsed = url::Url::parse(url)
+        .map_err(|e| CliError::update(format!("invalid download URL '{url}': {e}")))?;
+    if cfg!(debug_assertions) {
+        if let Some(host) = parsed.host_str() {
+            if (parsed.scheme() == "http" || parsed.scheme() == "https")
+                && (host == "127.0.0.1" || host == "localhost")
+            {
+                return Ok(());
+            }
+        }
+    }
+    if parsed.scheme() != "https" {
+        return Err(CliError::update(format!(
+            "download URL must be HTTPS, got '{}': {url}",
+            parsed.scheme()
+        )));
+    }
+    let host = parsed.host_str().unwrap_or("");
+    if host != "github.com"
+        && host != "objects.githubusercontent.com"
+        && host != "codeload.github.com"
+    {
+        return Err(CliError::update(format!(
+            "download URL host must be github.com or objects.githubusercontent.com, got '{host}'"
+        )));
+    }
+    Ok(())
+}
+
 fn http_client() -> Result<reqwest::Client, CliError> {
     reqwest::Client::builder()
         .user_agent(RELEASE_USER_AGENT)
@@ -324,6 +359,8 @@ pub async fn run(force_unmanaged: bool) -> Result<String, CliError> {
     }
 
     let (binary_asset, checksum_asset) = find_assets(&release)?;
+    validate_download_url(&checksum_asset.browser_download_url)?;
+    validate_download_url(&binary_asset.browser_download_url)?;
     let checksum_bytes = download_bytes(&checksum_asset.browser_download_url).await?;
     let expected_hash = parse_checksum_file(&String::from_utf8_lossy(&checksum_bytes))?;
 

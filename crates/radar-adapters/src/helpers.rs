@@ -421,13 +421,12 @@ fn canonical_media_url(url: &Url) -> Url {
     if !is_youtube_host(url.host_str().unwrap_or("")) {
         return url.clone();
     }
-    let video_id = extract_youtube_id(url);
-    if let Some(id) = video_id {
-        let mut canonical = Url::parse("https://www.youtube.com/watch").unwrap();
-        canonical.query_pairs_mut().append_pair("v", &id);
-        canonical
-    } else {
-        url.clone()
+    let Some(id) = extract_youtube_id(url) else {
+        return url.clone();
+    };
+    match Url::parse(&format!("https://www.youtube.com/watch?v={id}")) {
+        Ok(u) => u,
+        Err(_) => url.clone(),
     }
 }
 

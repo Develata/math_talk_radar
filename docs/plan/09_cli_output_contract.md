@@ -5,8 +5,8 @@
 
 ## Commands (§27)
 
-`scan`, `sources` (`list` | `check [id]`), `doctor`, `update`, `uninstall`,
-`schema`.
+`scan`, `sources` (`list` | `check [id]` — deferred, see ADR-0009), `doctor`,
+`update`, `uninstall`, `schema`.
 
 ## scan options (§27.2)
 

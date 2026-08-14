@@ -88,7 +88,11 @@ pub fn temp_dir_for_binary(binary: &Path) -> PathBuf {
 }
 
 /// Canonicalize and validate a path is safe to delete. Rejects empty, `/`,
-/// and the user's home directory. Returns the canonical path on success.
+/// the user's home directory, and paths inside protected system/user
+/// directories (§35 "deletes only known app-owned paths"). The protected
+/// list covers credentials, system config, and kernel virtual filesystems
+/// that should never be touched by an uninstaller regardless of manifest
+/// content.
 pub fn safe_canonicalize(path: &Path) -> Result<PathBuf, String> {
     let canonical = path
         .canonicalize()
@@ -103,6 +107,30 @@ pub fn safe_canonicalize(path: &Path) -> Result<PathBuf, String> {
         let home = PathBuf::from(home);
         if canonical == home {
             return Err("refusing to delete $HOME".into());
+        }
+    }
+    let path_str = canonical.to_string_lossy();
+    const PROTECTED: &[&str] = &[
+        "/etc", "/proc", "/sys", "/dev", "/boot", "/bin", "/sbin", "/lib", "/lib64", "/usr",
+        "/var/log",
+    ];
+    for p in PROTECTED {
+        if path_str.starts_with(p) {
+            return Err(format!(
+                "refusing to delete protected system path under {p}"
+            ));
+        }
+    }
+    if let Some(home) = std::env::var_os("HOME") {
+        let home = PathBuf::from(home);
+        let home_protected = [".ssh", ".gnupg", ".config/systemd", ".local/share/systemd"];
+        for sub in home_protected {
+            let protected = home.join(sub);
+            if path_str.starts_with(protected.to_string_lossy().as_ref()) {
+                return Err(format!(
+                    "refusing to delete protected user path under {sub}"
+                ));
+            }
         }
     }
     Ok(canonical)
