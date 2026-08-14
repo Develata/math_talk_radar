@@ -40,11 +40,12 @@ pub fn deterministic_id(parts: &[&str]) -> String {
 /// via different adapter kinds produces the same id (§24 cross-adapter
 /// identity consistency).
 ///
-/// The URL is canonicalized before hashing: fragment is stripped and a
-/// trailing slash on the path is removed, so `…/e/1`, `…/e/1/`, and
-/// `…/e/1#top` produce the same id. Query parameters are preserved (they may
-/// be semantically meaningful for identity). Malformed URLs fall back to the
-/// raw string to preserve backward compatibility.
+/// The URL is canonicalized before hashing: fragment is stripped, the trailing
+/// slash on the path is removed, and known tracking parameters are dropped, so
+/// `…/e/1`, `…/e/1/`, and `…/e/1#top?utm_source=nl` produce the same id.
+/// Meaningful query parameters are preserved (they may be semantically
+/// meaningful for identity). Malformed URLs fall back to the raw string to
+/// preserve backward compatibility.
 pub fn event_id(title: &str, url: &str) -> EventId {
     let normalized = normalize_name(title);
     let canon_url = match Url::parse(url) {

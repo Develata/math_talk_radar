@@ -271,8 +271,10 @@ pub fn duplicate_signal(a: &Event, b: &Event) -> Option<DedupSignal> {
 }
 
 /// Merge two duplicate events into one, preferring the higher-scored event as
-/// the primary carrier of scalar fields. Data is unioned, never lost:
-/// sources, media, talks, and people are unioned (deduplicated by id/url).
+/// the primary carrier of scalar fields. Collection fields (sources, media,
+/// talks, people, topics) are unioned with dedup. Scalar fields (url, location,
+/// description, date) that are absent on the primary are filled from the
+/// secondary so genuine data from the lower-scored duplicate is not lost.
 ///
 /// The returned event keeps the earliest `first_seen_at` and the latest
 /// `last_seen_at`.
@@ -288,6 +290,19 @@ pub fn merge_events(primary: Event, secondary: Event) -> Event {
     keep.talks = union_talks(keep.talks, other.talks);
     keep.people = union_people(keep.people, other.people);
     keep.topics = union_topics(keep.topics, other.topics);
+
+    if keep.url.is_none() {
+        keep.url = other.url;
+    }
+    if keep.location.is_none() {
+        keep.location = other.location;
+    }
+    if keep.description.is_none() {
+        keep.description = other.description;
+    }
+    if keep.date.start.is_none() && other.date.start.is_some() {
+        keep.date = other.date;
+    }
 
     keep.first_seen_at = earliest(keep.first_seen_at, other.first_seen_at);
     keep.last_seen_at = latest(keep.last_seen_at, other.last_seen_at);
@@ -761,5 +776,81 @@ mod tests {
         );
         let out = dedup_events(vec![a, b]);
         assert_eq!(out.len(), 2);
+    }
+
+    // CORE-18: merge_events fills scalar gaps from the lower-scored event.
+    #[test]
+    fn merge_events_fills_scalar_gaps() {
+        let mut a = event(
+            "a",
+            "Talk",
+            Some("https://x.com/e1"),
+            Some(date(2026, 8, 9)),
+            vec![src("s1", "https://x.com/feed", None)],
+        );
+        a.score = 10.0;
+        a.description = Some("Description from A".into());
+        a.location = Some(Location {
+            name: "MIT".into(),
+            city: Some("Cambridge".into()),
+            country: None,
+            venue: None,
+        });
+
+        let mut b = event(
+            "b",
+            "Talk",
+            Some("https://x.com/e1#sec"),
+            Some(date(2026, 8, 9)),
+            vec![src("s2", "https://y.com/feed", None)],
+        );
+        b.score = 5.0;
+        b.description = None;
+        b.location = None;
+
+        let merged = merge_events(a, b);
+        assert_eq!(merged.description.as_deref(), Some("Description from A"));
+        assert!(merged.location.is_some(), "location preserved from higher-scored");
+    }
+
+    #[test]
+    fn merge_events_fills_from_secondary_when_primary_lacks() {
+        let mut a = event(
+            "a",
+            "Talk",
+            Some("https://x.com/e1"),
+            Some(date(2026, 8, 9)),
+            vec![src("s1", "https://x.com/feed", None)],
+        );
+        a.score = 10.0;
+        a.description = None;
+        a.location = None;
+
+        let mut b = event(
+            "b",
+            "Talk",
+            Some("https://x.com/e1#sec"),
+            Some(date(2026, 8, 9)),
+            vec![src("s2", "https://y.com/feed", None)],
+        );
+        b.score = 5.0;
+        b.description = Some("Description from B".into());
+        b.location = Some(Location {
+            name: "MIT".into(),
+            city: None,
+            country: None,
+            venue: None,
+        });
+
+        let merged = merge_events(a, b);
+        assert_eq!(
+            merged.description.as_deref(),
+            Some("Description from B"),
+            "description filled from secondary when primary lacks it"
+        );
+        assert!(
+            merged.location.is_some(),
+            "location filled from secondary when primary lacks it"
+        );
     }
 }

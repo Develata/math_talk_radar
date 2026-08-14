@@ -82,16 +82,11 @@ pub fn canonicalize_url(url: &Url) -> String {
     if !pairs.is_empty() {
         pairs.sort();
         s.push('?');
-        let mut first = true;
+        let mut qs = url::form_urlencoded::Serializer::new(String::new());
         for (k, v) in &pairs {
-            if !first {
-                s.push('&');
-            }
-            first = false;
-            s.push_str(k);
-            s.push('=');
-            s.push_str(v);
+            qs.append_pair(k, v);
         }
+        s.push_str(&qs.finish());
     }
     s
 }

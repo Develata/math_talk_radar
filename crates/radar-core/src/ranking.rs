@@ -42,7 +42,12 @@ impl InterestWeights {
     /// Returns the weight for `topic_id`, or 1.0 if absent (neutral — no boost,
     /// no penalty).
     pub fn weight(&self, topic_id: &str) -> f64 {
-        self.0.get(topic_id).copied().unwrap_or(1.0)
+        let raw = self.0.get(topic_id).copied().unwrap_or(1.0);
+        if raw.is_finite() {
+            raw.clamp(0.0, 1.0)
+        } else {
+            1.0
+        }
     }
 
     /// Parse interest weights from a TOML string in the format:
@@ -461,5 +466,50 @@ mod tests {
         assert!(total.abs() < f32::EPSILON);
         assert_eq!(components, ScoreComponents::default());
         assert!(reasons.is_empty());
+    }
+
+    // CORE-17: NaN and negative interest weights are clamped to [0, 1] (NaN →
+    // 1.0 neutral) so a matched topic is never silently zeroed.
+    #[test]
+    fn rank_nan_weight_treated_as_neutral() {
+        let mut event = empty_event();
+        event.topics = vec![topic_match("arithmetic_geometry")];
+        let mut weights = HashMap::new();
+        weights.insert("arithmetic_geometry".to_string(), f64::NAN);
+        let iw = InterestWeights(weights);
+        let tiers: HashMap<String, SourceTier> = HashMap::new();
+        let (_, components, reasons) = score_event(&event, &tiers, Some(&iw));
+        assert_eq!(components.topic, 15, "NaN weight → neutral 1.0 → contribution 15");
+        assert!(reasons.contains(&"matched_topic: arithmetic_geometry".to_string()));
+    }
+
+    #[test]
+    fn rank_negative_weight_clamped_to_zero() {
+        let mut event = empty_event();
+        event.topics = vec![topic_match("arithmetic_geometry")];
+        let mut weights = HashMap::new();
+        weights.insert("arithmetic_geometry".to_string(), -5.0);
+        let iw = InterestWeights(weights);
+        let tiers: HashMap<String, SourceTier> = HashMap::new();
+        let (_, components, _) = score_event(&event, &tiers, Some(&iw));
+        assert_eq!(
+            components.topic, 8,
+            "negative weight clamped to 0 → 15 * 0.5 = 7.5 → 8"
+        );
+    }
+
+    #[test]
+    fn rank_inf_weight_clamped_to_one() {
+        let mut event = empty_event();
+        event.topics = vec![topic_match("arithmetic_geometry")];
+        let mut weights = HashMap::new();
+        weights.insert("arithmetic_geometry".to_string(), f64::INFINITY);
+        let iw = InterestWeights(weights);
+        let tiers: HashMap<String, SourceTier> = HashMap::new();
+        let (_, components, _) = score_event(&event, &tiers, Some(&iw));
+        assert_eq!(
+            components.topic, 15,
+            "inf weight clamped to 1.0 → 15 * 1.0 = 15"
+        );
     }
 }

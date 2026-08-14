@@ -51,7 +51,11 @@ pub enum DateTimeOrDate {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DatePrecision {
+    /// Reserved for future use (month-precision dates like "August 2026").
+    /// Not currently produced by the parser; kept for serde forward-compat.
     Year,
+    /// Reserved for future use (month-precision dates like "August 2026").
+    /// Not currently produced by the parser; kept for serde forward-compat.
     Month,
     Day,
     DateTime,
@@ -286,11 +290,21 @@ fn parse_date_inner(text: &str, year_hint: Option<i32>) -> Result<EventDate, Dat
     // 2. ISO 8601 single date: "2026-08-08" or "2026-08-08T10:00:00".
     //    Time-bearing variants (RFC 3339 / schema.org `datetime` attributes) are
     //    truncated at the first 'T' or space to extract the date component.
+    //    CORE-19: if the remainder after truncation contains a range separator,
+    //    this is a datetime range (e.g. "2026-08-08 10:00 - 2026-08-09 10:00")
+    //    that the range regexes can't parse — return Unknown rather than a
+    //    falsely-precise single Day.
     let iso_date_part = trimmed
         .find(['T', ' '])
         .map(|i| &trimmed[..i])
         .unwrap_or(trimmed);
     if let Ok(d) = NaiveDate::parse_from_str(iso_date_part, "%Y-%m-%d") {
+        if iso_date_part.len() < trimmed.len() {
+            let remainder = &trimmed[iso_date_part.len()..];
+            if [" - ", " – ", " to ", " / "].iter().any(|sep| remainder.contains(sep)) {
+                return Ok(EventDate::unknown(text.to_string()));
+            }
+        }
         return Ok(EventDate {
             start: Some(DateTimeOrDate::Date(d)),
             end: None,
@@ -1048,6 +1062,20 @@ mod tests {
         assert_eq!(ed4.precision, DatePrecision::Day);
         assert_eq!(start_date(&ed4), d(2026, 8, 8));
         assert!(ed4.end.is_none());
+    }
+
+    // CORE-19: a datetime range like "2026-08-08 10:00 - 2026-08-09 10:00"
+    // must not collapse to a falsely-precise single Day. The ISO single-date
+    // path detects the range separator in the remainder and returns Unknown.
+    #[test]
+    fn datetime_range_returns_unknown_not_day() {
+        let ed = parse_date("2026-08-08 10:00 - 2026-08-09 10:00").unwrap();
+        assert_eq!(ed.precision, DatePrecision::Unknown);
+        assert!(ed.start.is_none());
+
+        let ed2 = parse_date("2026-08-08T10:00 – 2026-08-09T11:00").unwrap();
+        assert_eq!(ed2.precision, DatePrecision::Unknown);
+        assert!(ed2.start.is_none());
     }
 
     #[test]

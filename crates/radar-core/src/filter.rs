@@ -63,9 +63,11 @@ pub fn matches_mode_and_window(
     let Some(start) = event.date.start_date() else {
         return mode == ScanMode::Both;
     };
-    let window_start = today - chrono::Duration::days(before_days as i64);
-    let window_end = today + chrono::Duration::days(after_days as i64);
-    start >= window_start && start <= window_end
+    let window_start = today.checked_sub_signed(chrono::Duration::days(before_days as i64));
+    let window_end = today.checked_add_signed(chrono::Duration::days(after_days as i64));
+    let after_start = window_start.map_or(true, |ws| start >= ws);
+    let before_end = window_end.map_or(true, |we| start <= we);
+    after_start && before_end
 }
 
 #[cfg(test)]
@@ -229,5 +231,34 @@ mod tests {
         assert_eq!(ScanMode::Upcoming.as_str(), "upcoming");
         assert_eq!(ScanMode::Recordings.as_str(), "recordings");
         assert_eq!(ScanMode::Both.as_str(), "both");
+    }
+
+    // CORE-16: very large before_days/after_days must not panic (checked
+    // arithmetic). An overflow on one side means the window is unbounded on
+    // that side, so the event passes if it satisfies the other bound.
+    #[test]
+    fn large_window_does_not_panic() {
+        let ev = event_with(Some(date(2026, 1, 15)), Vec::new());
+        assert!(matches_mode_and_window(
+            &ev,
+            ScanMode::Upcoming,
+            date(2026, 1, 1),
+            u32::MAX,
+            30
+        ));
+        assert!(matches_mode_and_window(
+            &ev,
+            ScanMode::Upcoming,
+            date(2026, 1, 1),
+            30,
+            u32::MAX
+        ));
+        assert!(matches_mode_and_window(
+            &ev,
+            ScanMode::Upcoming,
+            date(2026, 1, 1),
+            u32::MAX,
+            u32::MAX
+        ));
     }
 }
