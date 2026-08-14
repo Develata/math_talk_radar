@@ -65,8 +65,8 @@ pub fn matches_mode_and_window(
     };
     let window_start = today.checked_sub_signed(chrono::Duration::days(before_days as i64));
     let window_end = today.checked_add_signed(chrono::Duration::days(after_days as i64));
-    let after_start = window_start.map_or(true, |ws| start >= ws);
-    let before_end = window_end.map_or(true, |we| start <= we);
+    let after_start = window_start.is_none_or(|ws| start >= ws);
+    let before_end = window_end.is_none_or(|we| start <= we);
     after_start && before_end
 }
 
