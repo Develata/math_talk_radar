@@ -130,14 +130,12 @@ struct Release {
 fn validate_download_url(url: &str) -> Result<(), CliError> {
     let parsed = url::Url::parse(url)
         .map_err(|e| CliError::update(format!("invalid download URL '{url}': {e}")))?;
-    if cfg!(debug_assertions) {
-        if let Some(host) = parsed.host_str() {
-            if (parsed.scheme() == "http" || parsed.scheme() == "https")
-                && (host == "127.0.0.1" || host == "localhost")
-            {
-                return Ok(());
-            }
-        }
+    if cfg!(debug_assertions)
+        && let Some(host) = parsed.host_str()
+        && (parsed.scheme() == "http" || parsed.scheme() == "https")
+        && (host == "127.0.0.1" || host == "localhost")
+    {
+        return Ok(());
     }
     if parsed.scheme() != "https" {
         return Err(CliError::update(format!(
