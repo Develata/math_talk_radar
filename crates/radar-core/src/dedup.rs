@@ -810,7 +810,10 @@ mod tests {
 
         let merged = merge_events(a, b);
         assert_eq!(merged.description.as_deref(), Some("Description from A"));
-        assert!(merged.location.is_some(), "location preserved from higher-scored");
+        assert!(
+            merged.location.is_some(),
+            "location preserved from higher-scored"
+        );
     }
 
     #[test]

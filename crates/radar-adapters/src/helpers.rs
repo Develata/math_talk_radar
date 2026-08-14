@@ -419,7 +419,10 @@ fn classify_raw_media(url: &Url) -> Option<MediaType> {
 /// Returns the original URL unchanged for non-YouTube URLs.
 fn canonical_media_url(url: &Url) -> Url {
     let host = url.host_str().unwrap_or("");
-    if !host.ends_with("youtube.com") && !host.ends_with("youtube-nocookie.com") && host != "youtu.be" {
+    if !host.ends_with("youtube.com")
+        && !host.ends_with("youtube-nocookie.com")
+        && host != "youtu.be"
+    {
         return url.clone();
     }
     let video_id = extract_youtube_id(url);
@@ -437,14 +440,20 @@ fn canonical_media_url(url: &Url) -> Url {
 fn extract_youtube_id(url: &Url) -> Option<String> {
     let host = url.host_str()?;
     if host == "youtu.be" {
-        return url.path().trim_start_matches('/').get(0..11).map(|s| s.to_string());
+        return url
+            .path()
+            .trim_start_matches('/')
+            .get(0..11)
+            .map(|s| s.to_string());
     }
     let path = url.path();
     if path.contains("/embed/") || path.contains("/shorts/") {
         let segment = path.rsplit('/').next()?;
         return segment.get(0..11).map(|s| s.to_string());
     }
-    url.query_pairs().find(|(k, _)| k == "v").map(|(_, v)| v.into_owned())
+    url.query_pairs()
+        .find(|(k, _)| k == "v")
+        .map(|(_, v)| v.into_owned())
 }
 
 fn make_source_evidence(base_url: &Url) -> SourceEvidence {
@@ -864,7 +873,11 @@ mod tests {
         let html = r#"<a href="https://www.youtube.com/watch?v=abc12345678">Watch</a>
         <iframe src="https://www.youtube.com/embed/abc12345678"></iframe>"#;
         let media = detect_media(&doc(html), &base());
-        assert_eq!(media.len(), 1, "watch link and embed of same video must dedupe");
+        assert_eq!(
+            media.len(),
+            1,
+            "watch link and embed of same video must dedupe"
+        );
         assert_eq!(media[0].platform.as_deref(), Some("youtube"));
     }
 
@@ -873,7 +886,11 @@ mod tests {
         let html = r#"<a href="https://youtu.be/abc12345678">Short</a>
         <iframe src="https://www.youtube-nocookie.com/embed/abc12345678"></iframe>"#;
         let media = detect_media(&doc(html), &base());
-        assert_eq!(media.len(), 1, "youtu.be and nocookie embed of same video must dedupe");
+        assert_eq!(
+            media.len(),
+            1,
+            "youtu.be and nocookie embed of same video must dedupe"
+        );
     }
 
     #[test]

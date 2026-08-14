@@ -663,14 +663,22 @@ fn refuses_to_open_newer_schema_version() {
         let txn = db.begin_write().expect("txn");
         {
             let mut vtable = txn.open_table(SCHEMA_VERSION).expect("schema table");
-            vtable.insert("version", 999u32).expect("write future version");
+            vtable
+                .insert("version", 999u32)
+                .expect("write future version");
         }
         txn.commit().expect("commit");
     }
 
     let err = Repository::open(&db_path).unwrap_err();
     assert!(
-        matches!(err, StateError::Schema { expected: 2, found: 999 }),
+        matches!(
+            err,
+            StateError::Schema {
+                expected: 2,
+                found: 999
+            }
+        ),
         "got {err:?}"
     );
 }

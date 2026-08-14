@@ -113,10 +113,10 @@ impl SourceAdapter for JsonLdAdapter {
             let document = scraper::Html::parse_document(&html);
             access = helpers::classify_access(&document);
             for block in extract_jsonld_blocks(&html) {
-            for ev in find_events(&block).into_iter().flatten() {
-                if !event_matches_stub(ev, &stub) {
-                    continue;
-                }
+                for ev in find_events(&block).into_iter().flatten() {
+                    if !event_matches_stub(ev, &stub) {
+                        continue;
+                    }
                     if description.is_none() {
                         description = ev
                             .get("description")

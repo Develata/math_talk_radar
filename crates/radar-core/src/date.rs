@@ -301,7 +301,10 @@ fn parse_date_inner(text: &str, year_hint: Option<i32>) -> Result<EventDate, Dat
     if let Ok(d) = NaiveDate::parse_from_str(iso_date_part, "%Y-%m-%d") {
         if iso_date_part.len() < trimmed.len() {
             let remainder = &trimmed[iso_date_part.len()..];
-            if [" - ", " – ", " to ", " / "].iter().any(|sep| remainder.contains(sep)) {
+            if [" - ", " – ", " to ", " / "]
+                .iter()
+                .any(|sep| remainder.contains(sep))
+            {
                 return Ok(EventDate::unknown(text.to_string()));
             }
         }

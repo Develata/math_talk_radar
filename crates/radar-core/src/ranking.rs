@@ -479,7 +479,10 @@ mod tests {
         let iw = InterestWeights(weights);
         let tiers: HashMap<String, SourceTier> = HashMap::new();
         let (_, components, reasons) = score_event(&event, &tiers, Some(&iw));
-        assert_eq!(components.topic, 15, "NaN weight → neutral 1.0 → contribution 15");
+        assert_eq!(
+            components.topic, 15,
+            "NaN weight → neutral 1.0 → contribution 15"
+        );
         assert!(reasons.contains(&"matched_topic: arithmetic_geometry".to_string()));
     }
 

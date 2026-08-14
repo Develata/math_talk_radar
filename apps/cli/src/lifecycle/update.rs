@@ -210,10 +210,7 @@ pub async fn run(force_unmanaged: bool) -> Result<String, CliError> {
         .as_ref()
         .map(|m| m.binary_path == current_binary)
         .unwrap_or(false);
-    if !managed_by_manifest
-        && !force_unmanaged
-        && paths::is_unmanaged_binary(&current_binary)
-    {
+    if !managed_by_manifest && !force_unmanaged && paths::is_unmanaged_binary(&current_binary) {
         return Err(CliError::update(format!(
             "refusing to update unmanaged binary: {} (use --force-unmanaged to override)",
             current_binary.display()
