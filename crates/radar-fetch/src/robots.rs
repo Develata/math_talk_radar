@@ -38,7 +38,8 @@ impl RobotsRules {
     }
 
     pub fn is_allowed(&self, url: &Url) -> bool {
-        let path = url.path();
+        let decoded = percent_decode_path(url.path());
+        let path = decoded.as_str();
         let mut best_match: Option<(usize, bool)> = None; // (length, is_allow)
         for rule in &self.rules {
             let (pattern, is_allow) = match rule {
@@ -238,6 +239,38 @@ fn host_key(url: &Url) -> String {
     }
 }
 
+/// RFC 9309 §2.2.1: robots path matching operates on the percent-decoded
+/// path. `Url::path()` returns the encoded form, so we decode `%XX` sequences
+/// (including multi-byte UTF-8) before matching against rule patterns.
+fn percent_decode_path(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(input.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let h = hex_digit(bytes[i + 1]);
+            let l = hex_digit(bytes[i + 2]);
+            if let (Some(h), Some(l)) = (h, l) {
+                out.push((h << 4) | l);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn hex_digit(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod robots_tests {
     use super::*;
@@ -323,5 +356,18 @@ mod robots_tests {
         assert!(!rules.is_allowed(&Url::parse("https://example.com/").unwrap()));
         assert!(!rules.is_allowed(&Url::parse("https://example.com/any/path").unwrap()));
         assert!(!rules.is_allowed(&Url::parse("https://example.com/robots.txt").unwrap()));
+    }
+
+    // FETCH-8: RFC 9309 §2.2.1 requires matching against the percent-decoded
+    // path. A disallow rule for /café must block the encoded form /caf%C3%A9.
+    #[test]
+    fn percent_encoded_path_matches_decoded_rule() {
+        let txt = "User-agent: *\nDisallow: /café\n";
+        let rules = parse_robots(txt);
+        let u = Url::parse("https://example.com/caf%C3%A9").unwrap();
+        assert!(
+            !rules.is_allowed(&u),
+            "percent-encoded path must match decoded rule"
+        );
     }
 }

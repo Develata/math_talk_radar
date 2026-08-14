@@ -62,6 +62,11 @@ pub fn parse_retry_after(value: &str, now: DateTime<Utc>) -> Option<Duration> {
     }
     let target = NaiveDateTime::parse_from_str(trimmed, "%a, %d %b %Y %H:%M:%S GMT").ok()?;
     let target_utc = target.and_utc();
+    let expected_abbrev = target_utc.format("%a").to_string();
+    let input_abbrev = trimmed.split(',').next().unwrap_or("").trim();
+    if !input_abbrev.eq_ignore_ascii_case(&expected_abbrev) {
+        return None;
+    }
     let secs = target_utc.signed_duration_since(now).num_seconds();
     if secs <= 0 {
         return Some(Duration::ZERO);
@@ -202,5 +207,32 @@ mod tests {
         let now = Utc::now();
         assert_eq!(parse_retry_after("not a date", now), None);
         assert_eq!(parse_retry_after("", now), None);
+    }
+
+    // FETCH-9: a mismatched weekday (e.g. "Mon, 06 Nov 1994" when Nov 6 1994
+    // is actually a Sunday) must be rejected — chrono's %a accepts any weekday
+    // name without cross-checking the actual date.
+    #[test]
+    fn parse_retry_after_rejects_mismatched_weekday() {
+        let now = Utc::now();
+        assert_eq!(
+            parse_retry_after("Mon, 06 Nov 1994 08:49:37 GMT", now),
+            None,
+            "Nov 6 1994 is Sunday, not Monday"
+        );
+    }
+
+    #[test]
+    fn parse_retry_after_accepts_correct_weekday() {
+        let now = NaiveDateTime::parse_from_str(
+            "Sun, 06 Nov 1994 08:49:37 GMT",
+            "%a, %d %b %Y %H:%M:%S GMT",
+        )
+        .unwrap()
+        .and_utc();
+        assert_eq!(
+            parse_retry_after("Sun, 06 Nov 1994 08:51:37 GMT", now),
+            Some(Duration::from_secs(120))
+        );
     }
 }

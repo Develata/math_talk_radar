@@ -44,13 +44,21 @@ async fn fetch_robots_txt(
     client: &FetchClient,
     start_url: Url,
     http_policy: &HttpPolicy,
+    deadline: Option<Instant>,
 ) -> Result<RobotsRules, FetchError> {
+    if past_deadline(deadline) {
+        return Err(FetchError::Timeout);
+    }
     let mut current = start_url;
     for _ in 0..=http_policy.redirect_limit {
+        let timeout = remaining_time(deadline, http_policy.request_timeout);
+        if timeout.is_zero() {
+            return Err(FetchError::Timeout);
+        }
         let mut resp = client
             .handle()
             .get(current.as_str())
-            .timeout(http_policy.request_timeout)
+            .timeout(timeout)
             .send()
             .await
             .map_err(FetchError::from)?;
@@ -111,6 +119,7 @@ async fn check_robots(
     url: &Url,
     http_policy: &HttpPolicy,
     robots: &RobotsCache,
+    deadline: Option<Instant>,
 ) -> Result<(), FetchError> {
     let owned_url = url.clone();
     let client_clone = client.clone();
@@ -118,7 +127,7 @@ async fn check_robots(
     let rules = robots
         .get_or_init(url, move || async move {
             match robots_url_for(&owned_url) {
-                Some(ru) => fetch_robots_txt(&client_clone, ru, &hp).await,
+                Some(ru) => fetch_robots_txt(&client_clone, ru, &hp, deadline).await,
                 None => Ok(RobotsRules::default()),
             }
         })
@@ -153,7 +162,7 @@ pub async fn fetch_one(
 
     // Robots check (initial URL). check_robots caches rules per host; the
     // redirect loop below re-checks when a hop lands on a new host.
-    check_robots(client, url, http_policy, robots).await?;
+    check_robots(client, url, http_policy, robots, deadline).await?;
 
     // Manual redirect loop (Oracle #7). Network errors (B1, §15: connection
     // reset, transient) and status retries (§15: 408, 429, 5xx) share a single
@@ -167,15 +176,17 @@ pub async fn fetch_one(
     let mut retries_used: u32 = 0;
 
     loop {
+        // FETCH-7: check the deadline before acquiring the per-host permit.
+        // A long permit wait can let the deadline pass; recomputing after
+        // the await ensures the send uses a fresh timeout.
+        if past_deadline(deadline) {
+            return Err(FetchError::Timeout);
+        }
+        let _host_permit = client.acquire_host_permit(&current_url).await;
         let timeout = remaining_time(deadline, http_policy.request_timeout);
         if timeout.is_zero() {
             return Err(FetchError::Timeout);
         }
-
-        // FS-2: per-host concurrency limit keyed on the actual request URL,
-        // not the source entrypoint. The permit is released when it drops at
-        // the end of the iteration (redirect/retry) or on return.
-        let _host_permit = client.acquire_host_permit(&current_url).await;
 
         let mut resp = match client
             .handle()
@@ -220,7 +231,7 @@ pub async fn fetch_one(
             // cached rules.
             let new_host = new_url.host_str().map(|h| h.to_string());
             if new_host != last_host || new_url.port() != last_port {
-                check_robots(client, &new_url, http_policy, robots).await?;
+                check_robots(client, &new_url, http_policy, robots, deadline).await?;
                 last_host = new_host;
                 last_port = new_url.port();
             }
