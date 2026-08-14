@@ -30,8 +30,9 @@ impl SourceAdapter for JsonLdAdapter {
     ) -> Result<Vec<EventStub>, AdapterError> {
         let html = crate::helpers::doc_body(&document.body);
         let mut stubs = Vec::new();
+        let mut global_idx = 0usize;
         for block in extract_jsonld_blocks(&html) {
-            for (idx, ev) in find_events(&block).into_iter().flatten().enumerate() {
+            for ev in find_events(&block).into_iter().flatten() {
                 let title = ev
                     .get("name")
                     .and_then(|v| v.as_str())
@@ -49,8 +50,11 @@ impl SourceAdapter for JsonLdAdapter {
                     .unwrap_or_else(|| {
                         // ADAP-12: query param (not fragment) so canonicalize_url
                         // preserves it, keeping each unnamed event's id distinct.
+                        // ADAP-16: counter is global across all JSON-LD blocks so
+                        // unnamed events in different blocks get distinct ids.
                         let mut u = document.url.clone();
-                        u.query_pairs_mut().append_pair("mtr-eid", &idx.to_string());
+                        u.query_pairs_mut()
+                            .append_pair("mtr-eid", &global_idx.to_string());
                         u
                     });
                 let date_hint = ev
@@ -69,6 +73,7 @@ impl SourceAdapter for JsonLdAdapter {
                         native_id: None,
                     },
                 });
+                global_idx += 1;
             }
         }
         Ok(stubs)
@@ -108,10 +113,10 @@ impl SourceAdapter for JsonLdAdapter {
             let document = scraper::Html::parse_document(&html);
             access = helpers::classify_access(&document);
             for block in extract_jsonld_blocks(&html) {
-                for ev in find_events(&block).into_iter().flatten() {
-                    if ev.get("name").and_then(|v| v.as_str()) != Some(&stub.title) {
-                        continue;
-                    }
+            for ev in find_events(&block).into_iter().flatten() {
+                if !event_matches_stub(ev, &stub) {
+                    continue;
+                }
                     if description.is_none() {
                         description = ev
                             .get("description")
@@ -222,6 +227,28 @@ fn urls_match_ignoring_mtr_eid(a: &Url, b: &Url) -> bool {
         s
     };
     strip(a) == strip(b)
+}
+
+/// ADAP-21: match a JSON-LD event node to a stub by name OR url/@id. Title
+/// alone is fragile — a detail page may use a slightly different name than the
+/// listing, but the url or @id is stable.
+fn event_matches_stub(ev: &serde_json::Value, stub: &EventStub) -> bool {
+    if ev.get("name").and_then(|v| v.as_str()) == Some(&stub.title) {
+        return true;
+    }
+    if let Some(url_str) = ev.get("url").and_then(|v| v.as_str())
+        && let Ok(url) = Url::parse(url_str)
+        && url == stub.url
+    {
+        return true;
+    }
+    if let Some(id_str) = ev.get("@id").and_then(|v| v.as_str())
+        && let Ok(id) = Url::parse(id_str)
+        && id == stub.url
+    {
+        return true;
+    }
+    false
 }
 
 /// Parse every `<script type="application/ld+json">` block in `html` into a
@@ -444,6 +471,33 @@ mod tests {
         assert_eq!(stubs[0].url.as_str(), "https://example.com/event/x");
     }
 
+    // ADAP-16: the per-block enumerate index used to reset to 0 for each
+    // JSON-LD block, so two unnamed events in separate blocks both got
+    // mtr-eid=0 → same event_id → second event silently lost. The counter
+    // must be global across all blocks.
+    #[test]
+    fn discover_unnamed_events_across_blocks_get_distinct_ids() {
+        let html = r#"<script type="application/ld+json">
+            {"@type":"Event","startDate":"2026-08-01"}
+        </script>
+        <script type="application/ld+json">
+            {"@type":"Event","startDate":"2026-09-01"}
+        </script>"#;
+        let doc = make_doc(html);
+        let spec = make_spec();
+        let stubs = JsonLdAdapter.discover(&doc, &spec).unwrap();
+        assert_eq!(stubs.len(), 2);
+        assert_ne!(
+            stubs[0].url, stubs[1].url,
+            "unnamed events in separate blocks must get distinct synthetic urls"
+        );
+        assert_ne!(
+            event_id(&stubs[0].title, stubs[0].url.as_str()),
+            event_id(&stubs[1].title, stubs[1].url.as_str()),
+            "unnamed events in separate blocks must get distinct event_ids"
+        );
+    }
+
     #[test]
     fn discover_no_jsonld_returns_empty() {
         let html = "<html><body>no jsonld</body></html>";
@@ -575,6 +629,41 @@ mod tests {
             Some("A conference on algebra")
         );
         assert_eq!(candidate.event.location.as_ref().unwrap().name, "Berlin");
+    }
+
+    // ADAP-21: enrich must match by url or @id, not just by name. A detail
+    // page may use a slightly different title than the listing feed; matching
+    // only on name would lose the performer/description enrichment.
+    #[test]
+    fn enrich_matches_by_url_when_name_differs() {
+        let html = r#"<script type="application/ld+json">
+        {"@type":"Event","name":"Slightly Different Title","url":"https://example.com/a",
+         "performer":{"name":"Prof. X"},
+         "description":"Real description"}
+        </script>"#;
+        let doc = make_doc(html);
+        let spec = make_spec();
+        let stub = EventStub {
+            title: "Original Title".to_string(),
+            url: Url::parse("https://example.com/a").unwrap(),
+            date_hint: None,
+            source: SourceEvidence {
+                source_id: "test-jsonld".to_string(),
+                source_url: Url::parse("https://example.com/page").unwrap(),
+                evidence: None,
+                captured_at: None,
+                native_id: None,
+            },
+        };
+        let candidate = JsonLdAdapter
+            .enrich(stub, std::slice::from_ref(&doc), &spec)
+            .unwrap();
+        assert_eq!(
+            candidate.event.description.as_deref(),
+            Some("Real description"),
+            "enrich must match by url even when the JSON-LD event name differs from the stub title"
+        );
+        assert!(!candidate.event.talks.is_empty());
     }
 
     #[test]

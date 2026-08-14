@@ -97,9 +97,10 @@ impl SourceAdapter for RssAdapter {
             ),
         };
 
-        let date = stub.date_hint.clone().unwrap_or_else(|| {
-            parse_date("").unwrap_or_else(|_| EventDate::unknown(String::new()))
-        });
+        let date = stub
+            .date_hint
+            .clone()
+            .unwrap_or_else(|| EventDate::unknown(String::new()));
 
         let event = Event {
             id: event_id(&stub.title, stub.url.as_str()),

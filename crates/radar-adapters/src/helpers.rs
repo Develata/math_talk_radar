@@ -212,11 +212,15 @@ pub(crate) fn clean_text(text: &str) -> String {
 /// Within-event duplicates (the same URL surfaced by more than one selector,
 /// e.g. an `<a>` link and an `<iframe>` embedding the same video) are
 /// deduplicated by URL so a single resource is not recorded twice.
+/// ADAP-19: YouTube watch and embed URLs for the same video id are canonicalized
+/// to the watch form before dedup, so `<a href="youtube.com/watch?v=X">` and
+/// `<iframe src="youtube.com/embed/X">` collapse into one resource.
 pub fn detect_media(document: &Html, base_url: &Url) -> Vec<MediaResource> {
     let mut results = Vec::new();
     let mut seen: std::collections::HashSet<Url> = std::collections::HashSet::new();
     let mut push_dedup = |media: MediaResource, results: &mut Vec<MediaResource>| {
-        if seen.insert(media.url.clone()) {
+        let canonical = canonical_media_url(&media.url);
+        if seen.insert(canonical) {
             results.push(media);
         }
     };
@@ -335,6 +339,18 @@ fn classify_link(
             source: make_source_evidence(base_url),
         });
     }
+    if let Some(media_type) = classify_raw_media(url) {
+        return Some(MediaResource {
+            id: MediaId(deterministic_id(&[url.as_str()])),
+            media_type,
+            title: None,
+            url: url.clone(),
+            platform: None,
+            public_access: PublicAccess::Unknown,
+            published_at: None,
+            source: make_source_evidence(base_url),
+        });
+    }
     None
 }
 
@@ -366,7 +382,11 @@ fn make_audio(url: &Url, base_url: &Url) -> MediaResource {
 
 fn classify_video_platform(url: &Url) -> Option<&'static str> {
     let s = url.as_str();
-    if s.contains("youtube.com/watch") || s.contains("youtu.be/") || s.contains("youtube.com/embed")
+    if s.contains("youtube.com/watch")
+        || s.contains("youtu.be/")
+        || s.contains("youtube.com/embed")
+        || s.contains("youtube-nocookie.com/embed")
+        || s.contains("youtube.com/shorts")
     {
         Some("youtube")
     } else if s.contains("vimeo.com/") {
@@ -380,6 +400,51 @@ fn classify_video_platform(url: &Url) -> Option<&'static str> {
 
 fn is_pdf(url: &Url) -> bool {
     url.path().to_lowercase().ends_with(".pdf")
+}
+
+/// ADAP-18: classify direct links to raw audio/video files by extension.
+/// A `<a href="talk.mp4">` link is a recording just as much as a `<video>` tag.
+fn classify_raw_media(url: &Url) -> Option<MediaType> {
+    let path = url.path().to_lowercase();
+    let ext = path.rsplit('.').next()?;
+    match ext {
+        "mp4" | "webm" | "mkv" | "mov" | "avi" | "m4v" => Some(MediaType::Video),
+        "mp3" | "ogg" | "opus" | "wav" | "m4a" | "aac" | "flac" => Some(MediaType::Audio),
+        _ => None,
+    }
+}
+
+/// ADAP-19: canonicalize a YouTube URL to its watch form so the same video
+/// surfaced as a watch link and an embed iframe dedupes to one resource.
+/// Returns the original URL unchanged for non-YouTube URLs.
+fn canonical_media_url(url: &Url) -> Url {
+    let host = url.host_str().unwrap_or("");
+    if !host.ends_with("youtube.com") && !host.ends_with("youtube-nocookie.com") && host != "youtu.be" {
+        return url.clone();
+    }
+    let video_id = extract_youtube_id(url);
+    if let Some(id) = video_id {
+        let mut canonical = Url::parse("https://www.youtube.com/watch").unwrap();
+        canonical.query_pairs_mut().append_pair("v", &id);
+        canonical
+    } else {
+        url.clone()
+    }
+}
+
+/// Extract the 11-character video id from any YouTube URL form
+/// (watch?v=, youtu.be/, /embed/, /shorts/). Returns None for malformed URLs.
+fn extract_youtube_id(url: &Url) -> Option<String> {
+    let host = url.host_str()?;
+    if host == "youtu.be" {
+        return url.path().trim_start_matches('/').get(0..11).map(|s| s.to_string());
+    }
+    let path = url.path();
+    if path.contains("/embed/") || path.contains("/shorts/") {
+        let segment = path.rsplit('/').next()?;
+        return segment.get(0..11).map(|s| s.to_string());
+    }
+    url.query_pairs().find(|(k, _)| k == "v").map(|(_, v)| v.into_owned())
 }
 
 fn make_source_evidence(base_url: &Url) -> SourceEvidence {
@@ -749,6 +814,66 @@ mod tests {
         let media = detect_media(&doc(html), &base());
         assert_eq!(media.len(), 1);
         assert_eq!(media[0].platform.as_deref(), Some("youtube"));
+    }
+
+    // ADAP-17: youtube-nocookie.com embed iframes are a common privacy-
+    // preserving embed form and must be classified as YouTube videos.
+    #[test]
+    fn media_youtube_nocookie_embed() {
+        let html = r#"<iframe src="https://www.youtube-nocookie.com/embed/abc123"></iframe>"#;
+        let media = detect_media(&doc(html), &base());
+        assert_eq!(media.len(), 1);
+        assert_eq!(media[0].media_type, MediaType::Video);
+        assert_eq!(media[0].platform.as_deref(), Some("youtube"));
+    }
+
+    // ADAP-17: youtube.com/shorts/ links are a growing video form.
+    #[test]
+    fn media_youtube_shorts_link() {
+        let html = r#"<a href="https://www.youtube.com/shorts/abc12345678">Short</a>"#;
+        let media = detect_media(&doc(html), &base());
+        assert_eq!(media.len(), 1);
+        assert_eq!(media[0].media_type, MediaType::Video);
+        assert_eq!(media[0].platform.as_deref(), Some("youtube"));
+    }
+
+    // ADAP-18: direct links to raw media files must be classified, not just
+    // <video>/<audio> elements. A page linking <a href="talk.mp4"> is a
+    // recording just as much as <video src="talk.mp4">.
+    #[test]
+    fn media_raw_video_link() {
+        let html = r#"<a href="https://example.com/lecture.mp4">Recording</a>"#;
+        let media = detect_media(&doc(html), &base());
+        assert_eq!(media.len(), 1);
+        assert_eq!(media[0].media_type, MediaType::Video);
+    }
+
+    #[test]
+    fn media_raw_audio_link() {
+        let html = r#"<a href="https://example.com/talk.mp3">Audio</a>"#;
+        let media = detect_media(&doc(html), &base());
+        assert_eq!(media.len(), 1);
+        assert_eq!(media[0].media_type, MediaType::Audio);
+    }
+
+    // ADAP-19: the same YouTube video surfaced as both a watch link and an
+    // embed iframe must dedupe to one resource. The URLs differ
+    // (watch?v=X vs /embed/X) so naive URL dedup would record it twice.
+    #[test]
+    fn media_youtube_watch_and_embed_dedup() {
+        let html = r#"<a href="https://www.youtube.com/watch?v=abc12345678">Watch</a>
+        <iframe src="https://www.youtube.com/embed/abc12345678"></iframe>"#;
+        let media = detect_media(&doc(html), &base());
+        assert_eq!(media.len(), 1, "watch link and embed of same video must dedupe");
+        assert_eq!(media[0].platform.as_deref(), Some("youtube"));
+    }
+
+    #[test]
+    fn media_youtu_be_and_embed_dedup() {
+        let html = r#"<a href="https://youtu.be/abc12345678">Short</a>
+        <iframe src="https://www.youtube-nocookie.com/embed/abc12345678"></iframe>"#;
+        let media = detect_media(&doc(html), &base());
+        assert_eq!(media.len(), 1, "youtu.be and nocookie embed of same video must dedupe");
     }
 
     #[test]
