@@ -412,11 +412,9 @@ pub fn dedup_events(events: Vec<Event>) -> Vec<Event> {
     let mut cluster_keys: Vec<DedupKeys> = Vec::with_capacity(sorted.len());
     for ev in sorted {
         let incoming = DedupKeys::from_event(&ev);
-        let mut current = Some(ev);
-        let mut current_keys = Some(incoming);
+        let mut current: Option<(Event, DedupKeys)> = Some((ev, incoming));
         for (rep, rep_keys) in clusters.iter_mut().zip(cluster_keys.iter_mut()) {
-            let (Some(remaining), Some(remaining_keys)) = (current.take(), current_keys.take())
-            else {
+            let Some((remaining, remaining_keys)) = current.take() else {
                 break;
             };
             if rep_keys.duplicate_signal(&remaining_keys).is_some() {
@@ -424,13 +422,12 @@ pub fn dedup_events(events: Vec<Event>) -> Vec<Event> {
                 *rep = merge_events(old, remaining);
                 *rep_keys = DedupKeys::from_event(rep);
             } else {
-                current = Some(remaining);
-                current_keys = Some(remaining_keys);
+                current = Some((remaining, remaining_keys));
             }
         }
-        if let Some(remaining) = current {
+        if let Some((remaining, keys)) = current {
             clusters.push(remaining);
-            cluster_keys.push(current_keys.unwrap());
+            cluster_keys.push(keys);
         }
     }
     clusters
