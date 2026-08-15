@@ -345,3 +345,34 @@ fn uns_005_stale_manifest_protects_dev_binary() {
         .failure()
         .code(11);
 }
+
+// R9-H12: uninstall must refuse while an update lock is held. A concurrent
+// update could be mid-rename; deleting the binary underneath it would leave
+// update's self-test running against a deleted path. The lock file is
+// pre-created with PID 1 (init, always alive) and starttime 0 (treated as
+// "alive, do not steal"), so the stale-recovery path does not reclaim it.
+// Uninstall must fail with exit 11 and leave the binary intact.
+#[test]
+fn r9_h12_uninstall_refuses_while_update_lock_held() {
+    let sandbox = Sandbox::new();
+    let binary = sandbox.setup_full(VALID_SCRIPT);
+
+    std::fs::create_dir_all(sandbox.data_dir()).expect("create data dir");
+    std::fs::write(sandbox.data_dir().join("update.lock"), "1:0:12345").expect("write update.lock");
+
+    let mut cmd = bin();
+    sandbox.set_env(&mut cmd);
+    cmd.args(["uninstall", "--keep-data", "--yes"])
+        .assert()
+        .failure()
+        .code(11);
+
+    assert!(
+        binary.exists(),
+        "binary must NOT be deleted while lock is held"
+    );
+    assert!(
+        sandbox.config_dir().exists(),
+        "config dir must NOT be deleted while lock is held"
+    );
+}

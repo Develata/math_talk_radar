@@ -35,7 +35,13 @@ const RELEASE_USER_AGENT: &str = concat!(
 /// Drop from removing a different process's lock). Stale recovery uses
 /// atomic `rename` to a tombstone — only one contender wins, eliminating the
 /// TOCTOU race where two processes both `remove_file` + `create_new`.
-struct UpdateGuard {
+///
+/// H12: the same lock serializes `uninstall` vs `update`. Without it, a
+/// concurrent `uninstall` could delete the binary and rollback copy while
+/// `update` is mid-replace, leaving update's `rename` or post-replace
+/// self-test running against a deleted path. `uninstall` acquires this lock
+/// before resolving or deleting any path.
+pub(crate) struct UpdateGuard {
     path: PathBuf,
     token: u64,
 }
@@ -71,7 +77,7 @@ fn write_lock_content(file: &mut std::fs::File) -> Result<u64, CliError> {
     Ok(token)
 }
 
-fn acquire_update_lock() -> Result<UpdateGuard, CliError> {
+pub(crate) fn acquire_update_lock() -> Result<UpdateGuard, CliError> {
     let lock_path = paths::data_dir().join("update.lock");
     if let Some(parent) = lock_path.parent() {
         std::fs::create_dir_all(parent)

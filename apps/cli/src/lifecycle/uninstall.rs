@@ -21,6 +21,19 @@ pub async fn run(args: UninstallArgs) -> Result<String, CliError> {
         return Err(CliError::uninstall("noninteractive mode requires --yes"));
     }
 
+    // H12: serialize against `update`. Without this lock, a concurrent
+    // `update` could be mid-rename while `uninstall` deletes the binary and
+    // rollback copy — update's post-replace self-test would then run against
+    // a deleted path, or its `rename` would fail into a half-deleted tree.
+    // The lock is acquired before any path resolution or deletion. `--dry-run`
+    // also acquires it so a dry-run cannot inspect a tree that a live update
+    // is mutating underneath it. The lock-failure error is remapped to an
+    // uninstall-fatal code (exit 11) so the exit code matches the command
+    // the user ran, not the shared lock's origin subsystem.
+    let _lock = crate::lifecycle::update::acquire_update_lock().map_err(|e| {
+        CliError::uninstall(format!("could not acquire update lock: {}", e.message))
+    })?;
+
     let data_dir = paths::data_dir();
     let config_dir = paths::config_dir();
     let cache_dir = paths::cache_dir();
