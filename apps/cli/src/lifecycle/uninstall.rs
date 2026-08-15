@@ -104,25 +104,34 @@ pub async fn run(args: UninstallArgs) -> Result<String, CliError> {
 /// B2-1: `is_binary=true` forces `remove_file` — a binary path must NEVER be
 /// recursively deleted even if it somehow points at a directory. Only the
 /// app's own config/cache/data dirs use `remove_dir_all`.
+///
+/// B07: safe_canonicalize's result must drive the actual deletion. The
+/// previous code validated the canonical path but then deleted the original
+/// (possibly symlink-bearing) path — a TOCTOU where an attacker swaps the
+/// path for a symlink between canonicalize and remove. Deleting the
+/// canonical path avoids following any symlink: it is the resolved, real
+/// location. The `is_binary`/`is_dir` checks use `symlink_metadata` on the
+/// canonical path (which never follows symlinks) so the file-type decision
+/// matches the path being deleted.
 fn delete_path(path: &Path, is_binary: bool) -> Result<(), CliError> {
-    paths::safe_canonicalize(path).map_err(CliError::uninstall)?;
-    let meta = std::fs::symlink_metadata(path)
-        .map_err(|e| CliError::uninstall(format!("stat {}: {e}", path.display())))?;
+    let canonical = paths::safe_canonicalize(path).map_err(CliError::uninstall)?;
+    let meta = std::fs::symlink_metadata(&canonical)
+        .map_err(|e| CliError::uninstall(format!("stat {}: {e}", canonical.display())))?;
     if is_binary {
         if meta.is_dir() {
             return Err(CliError::uninstall(format!(
                 "refusing to delete binary path that is a directory: {}",
-                path.display()
+                canonical.display()
             )));
         }
-        std::fs::remove_file(path)
-            .map_err(|e| CliError::uninstall(format!("delete {}: {e}", path.display())))?;
+        std::fs::remove_file(&canonical)
+            .map_err(|e| CliError::uninstall(format!("delete {}: {e}", canonical.display())))?;
     } else if meta.is_dir() {
-        std::fs::remove_dir_all(path)
-            .map_err(|e| CliError::uninstall(format!("delete {}: {e}", path.display())))?;
+        std::fs::remove_dir_all(&canonical)
+            .map_err(|e| CliError::uninstall(format!("delete {}: {e}", canonical.display())))?;
     } else {
-        std::fs::remove_file(path)
-            .map_err(|e| CliError::uninstall(format!("delete {}: {e}", path.display())))?;
+        std::fs::remove_file(&canonical)
+            .map_err(|e| CliError::uninstall(format!("delete {}: {e}", canonical.display())))?;
     }
     Ok(())
 }

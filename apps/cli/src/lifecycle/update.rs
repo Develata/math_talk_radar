@@ -362,7 +362,14 @@ async fn download_to_file_with_hash(url: &str, dest: &Path) -> Result<String, Cl
             resp.status()
         )));
     }
-    let mut file = std::fs::File::create(dest)
+    // B05: create_new refuses to open an existing file or follow a symlink
+    // at dest. A predictable staging path let a local attacker pre-create a
+    // symlink there; File::create would follow it and overwrite the target.
+    // create_new + the random suffix from temp_dir_for_binary close this.
+    let mut file = std::fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(dest)
         .map_err(|e| CliError::update(format!("create temp file failed: {e}")))?;
     // CLI-11: a mid-stream download or write error previously leaked the temp
     // file (only the checksum/self-test/rename paths cleaned up). Centralize

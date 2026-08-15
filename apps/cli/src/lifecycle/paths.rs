@@ -99,18 +99,24 @@ pub fn data_dir() -> PathBuf {
     xdg_dir("XDG_DATA_HOME", ".local/share")
 }
 
-/// Temp directory for update downloads: sibling of the binary, prefixed
-/// `.{binary_name}.` so stale files are identifiable (§34.3).
+/// Temp directory for update downloads: sibling of the binary, with a
+/// random suffix so the staging path is unpredictable (B05). A predictable
+/// path like `.{stem}.update.{unix_seconds}` lets a local attacker pre-create
+/// a symlink at that exact location and have the download overwrite the
+/// symlink target. The suffix mixes nanosecond time + PID for uniqueness
+/// across concurrent invocations.
 pub fn temp_dir_for_binary(binary: &Path) -> PathBuf {
     let parent = binary.parent().unwrap_or_else(|| Path::new("."));
     let stem = binary
         .file_name()
         .and_then(|s| s.to_str())
         .unwrap_or("math_talk_radar");
-    let mut name = String::from(".");
-    name.push_str(stem);
-    name.push_str(".update.");
-    name.push_str(&chrono::Utc::now().timestamp().to_string());
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(1);
+    let pid = std::process::id();
+    let name = format!(".{stem}.update.{pid}.{nanos}");
     parent.join(name)
 }
 
@@ -172,10 +178,54 @@ pub fn is_unmanaged_binary(binary: &Path) -> bool {
 
 fn xdg_dir(env_var: &str, default_sub: &str) -> PathBuf {
     if let Some(xdg) = std::env::var_os(env_var) {
-        return PathBuf::from(xdg).join(APP_SLUG);
+        let p = PathBuf::from(&xdg);
+        // B08: reject empty or relative XDG values. An empty value yields a
+        // relative `math_talk_radar` path anchored at the CWD — uninstall's
+        // safe_canonicalize would resolve it to the CWD and (if the CWD is
+        // not protected) delete files there. A relative value like `./foo`
+        // has the same hazard. Fall through to the default instead.
+        if !xdg.is_empty() && p.is_absolute() {
+            return p.join(APP_SLUG);
+        }
     }
     if let Some(home) = std::env::var_os("HOME") {
         return PathBuf::from(home).join(default_sub).join(APP_SLUG);
     }
     PathBuf::from(default_sub).join(APP_SLUG)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // R9-B05: two staging paths for the same binary must differ — the suffix
+    // is random (PID + nanos), not a predictable timestamp.
+    #[test]
+    fn temp_dir_for_binary_is_unique_per_call() {
+        let bin = Path::new("/usr/local/bin/math_talk_radar");
+        let a = temp_dir_for_binary(bin);
+        let b = temp_dir_for_binary(bin);
+        assert_ne!(a, b, "staging paths must be unpredictable per call");
+    }
+
+    // R9-B05: the staging path retains the binary stem prefix so stale files
+    // are identifiable.
+    #[test]
+    fn temp_dir_for_binary_preserves_stem_prefix() {
+        let bin = Path::new("/opt/app/math_talk_radar");
+        let p = temp_dir_for_binary(bin);
+        let name = p.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(
+            name.starts_with(".math_talk_radar.update."),
+            "staging name must start with .{{stem}}.update., got {name}"
+        );
+    }
+
+    // R9-B05: the staging path is a sibling of the binary, not in /tmp.
+    #[test]
+    fn temp_dir_for_binary_is_sibling_of_binary() {
+        let bin = Path::new("/usr/local/bin/math_talk_radar");
+        let p = temp_dir_for_binary(bin);
+        assert_eq!(p.parent(), bin.parent());
+    }
 }
