@@ -249,6 +249,35 @@ async fn upd_004_broken_candidate_preserves_binary() {
     );
 }
 
+// R9-H11: an oversized checksum download must be rejected before the binary
+// is touched. MAX_CHECKSUM_BYTES is 1024; serve 2 KiB and assert exit 10
+// with the working binary unchanged. This exercises both the Content-Length
+// pre-check and the post-download body-size guard (wiremock sets the header).
+#[tokio::test]
+async fn r9_h11_oversized_checksum_rejected() {
+    let server = MockServer::start().await;
+    let oversize = "a".repeat(2048);
+    mount_release(&server, "v99.0.0", VALID_SCRIPT, Some(&oversize)).await;
+
+    let sandbox = Sandbox::new();
+    let binary = sandbox.setup_full(VALID_SCRIPT);
+    let content_before = std::fs::read(&binary).expect("read binary before");
+
+    let mut cmd = bin();
+    sandbox.set_env(&mut cmd);
+    cmd.env("MATH_TALK_RADAR_RELEASE_API", server.uri())
+        .args(["update"])
+        .assert()
+        .failure()
+        .code(10);
+
+    let content_after = std::fs::read(&binary).expect("read binary after");
+    assert_eq!(
+        content_before, content_after,
+        "binary must be unchanged when checksum download exceeds size limit"
+    );
+}
+
 // UNS-001: dry-run mutates nothing.
 #[test]
 fn uns_001_dry_run_zero_mutation() {

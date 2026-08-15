@@ -17,6 +17,16 @@ const RELEASE_USER_AGENT: &str = concat!(
     " (+https://github.com/Develata/math_talk_radar)"
 );
 
+/// R9-H11: bounds for update downloads. Without these a malicious or
+/// misbehaving CDN could stream indefinitely, hanging the updater or
+/// filling the disk. The binary cap leaves headroom over the largest real
+/// musl release (~8 MiB); the checksum is a single 64-hex-char line. The
+/// overall deadline bounds connect+download+read so a slow-drip server
+/// cannot hold the lock forever.
+const DOWNLOAD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+const MAX_BINARY_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_CHECKSUM_BYTES: u64 = 1024;
+
 /// H7: independent update lock (§34.3). Without this, two concurrent
 /// `math_talk_radar update` invocations would race on the same binary:
 /// both download, both verify, both try atomic-replace — one wins, the
@@ -266,6 +276,8 @@ fn validate_download_url(url: &str) -> Result<(), CliError> {
 fn http_client() -> Result<reqwest::Client, CliError> {
     reqwest::Client::builder()
         .user_agent(RELEASE_USER_AGENT)
+        .timeout(DOWNLOAD_TIMEOUT)
+        .connect_timeout(std::time::Duration::from_secs(15))
         .build()
         .map_err(|e| CliError::update(format!("http client build failed: {e}")))
 }
@@ -333,7 +345,10 @@ fn find_assets(release: &Release) -> Result<(&ReleaseAsset, &ReleaseAsset), CliE
     Ok((binary, checksum))
 }
 
-async fn download_bytes(url: &str) -> Result<Vec<u8>, CliError> {
+/// R9-H11: download a bounded body into memory. `max_bytes` caps the total
+/// size so a malicious CDN cannot exhaust memory. Used for the checksum
+/// file (small). The binary uses the streaming path instead.
+async fn download_bytes(url: &str, max_bytes: u64) -> Result<Vec<u8>, CliError> {
     let client = http_client()?;
     let resp = client
         .get(url)
@@ -346,10 +361,24 @@ async fn download_bytes(url: &str) -> Result<Vec<u8>, CliError> {
             resp.status()
         )));
     }
-    resp.bytes()
+    if let Some(len) = resp.content_length()
+        && len > max_bytes
+    {
+        return Err(CliError::update(format!(
+            "download size {len} exceeds limit {max_bytes}"
+        )));
+    }
+    let bytes = resp
+        .bytes()
         .await
-        .map(|b| b.to_vec())
-        .map_err(|e| CliError::update(format!("download body read failed: {e}")))
+        .map_err(|e| CliError::update(format!("download body read failed: {e}")))?;
+    if bytes.len() as u64 > max_bytes {
+        return Err(CliError::update(format!(
+            "download body {} bytes exceeds limit {max_bytes}",
+            bytes.len()
+        )));
+    }
+    Ok(bytes.to_vec())
 }
 
 /// Stream the download body to `dest` while hashing incrementally, returning
@@ -368,6 +397,16 @@ async fn download_to_file_with_hash(url: &str, dest: &Path) -> Result<String, Cl
             resp.status()
         )));
     }
+    // R9-H11: reject oversized downloads early when the CDN declares a
+    // Content-Length, then enforce it again in the streaming loop in case
+    // the declared length was absent or a lie.
+    if let Some(len) = resp.content_length()
+        && len > MAX_BINARY_BYTES
+    {
+        return Err(CliError::update(format!(
+            "download size {len} exceeds binary limit {MAX_BINARY_BYTES}"
+        )));
+    }
     // B05: create_new refuses to open an existing file or follow a symlink
     // at dest. A predictable staging path let a local attacker pre-create a
     // symlink there; File::create would follow it and overwrite the target.
@@ -383,9 +422,18 @@ async fn download_to_file_with_hash(url: &str, dest: &Path) -> Result<String, Cl
     let stream_result: Result<String, CliError> = async {
         let mut hasher = Sha256::new();
         let mut stream = resp.bytes_stream();
+        let mut total: u64 = 0;
         while let Some(chunk) = stream.next().await {
             let chunk =
                 chunk.map_err(|e| CliError::update(format!("download stream error: {e}")))?;
+            total = total
+                .checked_add(chunk.len() as u64)
+                .ok_or_else(|| CliError::update("download size overflowed u64"))?;
+            if total > MAX_BINARY_BYTES {
+                return Err(CliError::update(format!(
+                    "download body exceeded binary limit {MAX_BINARY_BYTES} bytes"
+                )));
+            }
             hasher.update(&chunk);
             std::io::Write::write_all(&mut file, &chunk)
                 .map_err(|e| CliError::update(format!("write temp file failed: {e}")))?;
@@ -474,7 +522,8 @@ pub async fn run(force_unmanaged: bool) -> Result<String, CliError> {
     let (binary_asset, checksum_asset) = find_assets(&release)?;
     validate_download_url(&checksum_asset.browser_download_url)?;
     validate_download_url(&binary_asset.browser_download_url)?;
-    let checksum_bytes = download_bytes(&checksum_asset.browser_download_url).await?;
+    let checksum_bytes =
+        download_bytes(&checksum_asset.browser_download_url, MAX_CHECKSUM_BYTES).await?;
     let expected_hash = parse_checksum_file(&String::from_utf8_lossy(&checksum_bytes))?;
 
     let temp_path = paths::temp_dir_for_binary(&current_binary);
