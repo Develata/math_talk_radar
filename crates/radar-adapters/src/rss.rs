@@ -73,7 +73,7 @@ impl SourceAdapter for RssAdapter {
         &self,
         stub: EventStub,
         documents: &[FetchedDocument],
-        _source: &SourceSpec,
+        source: &SourceSpec,
     ) -> Result<EventCandidate, AdapterError> {
         let (fields, media, access) = match documents.first() {
             Some(doc)
@@ -86,7 +86,7 @@ impl SourceAdapter for RssAdapter {
                 let document = scraper::Html::parse_document(&body);
                 (
                     helpers::extract_html_fields(&document),
-                    helpers::detect_media(&document, &doc.final_url),
+                    helpers::detect_media(&document, &doc.final_url, &source.id),
                     helpers::classify_access(&document),
                 )
             }

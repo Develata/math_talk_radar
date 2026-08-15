@@ -253,7 +253,7 @@ impl SourceAdapter for HtmlGenericAdapter {
         &self,
         stub: EventStub,
         documents: &[FetchedDocument],
-        _source: &SourceSpec,
+        source: &SourceSpec,
     ) -> Result<EventCandidate, AdapterError> {
         let event = match documents.first() {
             None => minimal_event_from_stub(&stub),
@@ -262,7 +262,7 @@ impl SourceAdapter for HtmlGenericAdapter {
                 let base_url = &doc.final_url;
                 let document = scraper::Html::parse_document(&body);
                 let fields = helpers::extract_html_fields(&document);
-                let media = helpers::detect_media(&document, base_url);
+                let media = helpers::detect_media(&document, base_url, &source.id);
                 let access = helpers::classify_access(&document);
 
                 // Event type from stub title + extracted description text.

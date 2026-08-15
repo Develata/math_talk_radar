@@ -182,7 +182,7 @@ fn src_005_html_generic_filters_nav_and_finds_events() {
 fn med_001_youtube_video_detected() {
     let base = Url::parse("https://example.com/test").unwrap();
     let document = Html::parse_document(MEDIA_DETECTION);
-    let media = helpers::detect_media(&document, &base);
+    let media = helpers::detect_media(&document, &base, "test-source");
     let has_youtube = media
         .iter()
         .any(|m| m.media_type == MediaType::Video && m.platform.as_deref() == Some("youtube"));
@@ -200,7 +200,7 @@ fn med_001_youtube_video_detected() {
 fn med_002_pdf_slides_detected() {
     let base = Url::parse("https://example.com/test").unwrap();
     let document = Html::parse_document(MEDIA_DETECTION);
-    let media = helpers::detect_media(&document, &base);
+    let media = helpers::detect_media(&document, &base, "test-source");
     let has_slides = media.iter().any(|m| m.media_type == MediaType::Slides);
     assert!(
         has_slides,

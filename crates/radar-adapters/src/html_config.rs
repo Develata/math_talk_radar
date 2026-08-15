@@ -172,7 +172,7 @@ impl SourceAdapter for HtmlConfigAdapter {
             })
             .collect();
 
-        let media = detect_media(&html, &base_url);
+        let media = detect_media(&html, &base_url, &source.id);
         let access = classify_access(&html);
 
         let event_type = detect_event_type(&title);

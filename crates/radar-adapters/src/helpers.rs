@@ -233,7 +233,7 @@ pub fn strip_html_to_text(html: &str) -> String {
 /// ADAP-19: YouTube watch and embed URLs for the same video id are canonicalized
 /// to the watch form before dedup, so `<a href="youtube.com/watch?v=X">` and
 /// `<iframe src="youtube.com/embed/X">` collapse into one resource.
-pub fn detect_media(document: &Html, base_url: &Url) -> Vec<MediaResource> {
+pub fn detect_media(document: &Html, base_url: &Url, source_id: &str) -> Vec<MediaResource> {
     let mut results = Vec::new();
     let mut seen: std::collections::HashSet<Url> = std::collections::HashSet::new();
     let mut push_dedup = |media: MediaResource, results: &mut Vec<MediaResource>| {
@@ -249,7 +249,9 @@ pub fn detect_media(document: &Html, base_url: &Url) -> Vec<MediaResource> {
                 && let Ok(resolved) = base_url.join(href)
             {
                 let title_attr = element.attr("title");
-                if let Some(media) = classify_link(&resolved, &element, title_attr, base_url) {
+                if let Some(media) =
+                    classify_link(&resolved, &element, title_attr, base_url, source_id)
+                {
                     push_dedup(media, &mut results);
                 }
             }
@@ -262,7 +264,7 @@ pub fn detect_media(document: &Html, base_url: &Url) -> Vec<MediaResource> {
                 && let Ok(resolved) = base_url.join(src)
                 && classify_video_platform(&resolved).is_some()
             {
-                push_dedup(make_video(&resolved, base_url), &mut results);
+                push_dedup(make_video(&resolved, base_url, source_id), &mut results);
             }
         }
     }
@@ -272,14 +274,14 @@ pub fn detect_media(document: &Html, base_url: &Url) -> Vec<MediaResource> {
             if let Some(src) = element.attr("src")
                 && let Ok(resolved) = base_url.join(src)
             {
-                push_dedup(make_video(&resolved, base_url), &mut results);
+                push_dedup(make_video(&resolved, base_url, source_id), &mut results);
             }
             for child in element.children().filter_map(scraper::ElementRef::wrap) {
                 if child.value().name() == "source"
                     && let Some(src) = child.attr("src")
                     && let Ok(resolved) = base_url.join(src)
                 {
-                    push_dedup(make_video(&resolved, base_url), &mut results);
+                    push_dedup(make_video(&resolved, base_url, source_id), &mut results);
                 }
             }
         }
@@ -290,14 +292,14 @@ pub fn detect_media(document: &Html, base_url: &Url) -> Vec<MediaResource> {
             if let Some(src) = element.attr("src")
                 && let Ok(resolved) = base_url.join(src)
             {
-                push_dedup(make_audio(&resolved, base_url), &mut results);
+                push_dedup(make_audio(&resolved, base_url, source_id), &mut results);
             }
             for child in element.children().filter_map(scraper::ElementRef::wrap) {
                 if child.value().name() == "source"
                     && let Some(src) = child.attr("src")
                     && let Ok(resolved) = base_url.join(src)
                 {
-                    push_dedup(make_audio(&resolved, base_url), &mut results);
+                    push_dedup(make_audio(&resolved, base_url, source_id), &mut results);
                 }
             }
         }
@@ -311,6 +313,7 @@ fn classify_link(
     element: &scraper::ElementRef,
     title_attr: Option<&str>,
     base_url: &Url,
+    source_id: &str,
 ) -> Option<MediaResource> {
     if let Some(platform) = classify_video_platform(url) {
         return Some(MediaResource {
@@ -321,7 +324,7 @@ fn classify_link(
             platform: Some(platform.into()),
             public_access: PublicAccess::Unknown,
             published_at: None,
-            source: make_source_evidence(base_url),
+            source: make_source_evidence(base_url, source_id),
         });
     }
     if is_pdf(url) {
@@ -354,7 +357,7 @@ fn classify_link(
             platform: None,
             public_access: PublicAccess::Unknown,
             published_at: None,
-            source: make_source_evidence(base_url),
+            source: make_source_evidence(base_url, source_id),
         });
     }
     if let Some(media_type) = classify_raw_media(url) {
@@ -366,13 +369,13 @@ fn classify_link(
             platform: None,
             public_access: PublicAccess::Unknown,
             published_at: None,
-            source: make_source_evidence(base_url),
+            source: make_source_evidence(base_url, source_id),
         });
     }
     None
 }
 
-fn make_video(url: &Url, base_url: &Url) -> MediaResource {
+fn make_video(url: &Url, base_url: &Url, source_id: &str) -> MediaResource {
     MediaResource {
         id: MediaId(deterministic_id(&[url.as_str()])),
         media_type: MediaType::Video,
@@ -381,11 +384,11 @@ fn make_video(url: &Url, base_url: &Url) -> MediaResource {
         platform: classify_video_platform(url).map(|s| s.into()),
         public_access: PublicAccess::Unknown,
         published_at: None,
-        source: make_source_evidence(base_url),
+        source: make_source_evidence(base_url, source_id),
     }
 }
 
-fn make_audio(url: &Url, base_url: &Url) -> MediaResource {
+fn make_audio(url: &Url, base_url: &Url, source_id: &str) -> MediaResource {
     MediaResource {
         id: MediaId(deterministic_id(&[url.as_str()])),
         media_type: MediaType::Audio,
@@ -394,7 +397,7 @@ fn make_audio(url: &Url, base_url: &Url) -> MediaResource {
         platform: None,
         public_access: PublicAccess::Unknown,
         published_at: None,
-        source: make_source_evidence(base_url),
+        source: make_source_evidence(base_url, source_id),
     }
 }
 
@@ -500,9 +503,9 @@ fn valid_youtube_id(s: &str) -> Option<&str> {
     }
 }
 
-fn make_source_evidence(base_url: &Url) -> SourceEvidence {
+fn make_source_evidence(base_url: &Url, source_id: &str) -> SourceEvidence {
     SourceEvidence {
-        source_id: String::new(),
+        source_id: source_id.to_string(),
         source_url: base_url.clone(),
         evidence: None,
         captured_at: None,
@@ -773,16 +776,51 @@ mod tests {
     #[test]
     fn media_youtube_link() {
         let html = r#"<a href="https://www.youtube.com/watch?v=abc123">Watch</a>"#;
-        let media = detect_media(&doc(html), &base());
+        let media = detect_media(&doc(html), &base(), "test-source");
         assert_eq!(media.len(), 1);
         assert_eq!(media[0].media_type, MediaType::Video);
         assert_eq!(media[0].platform.as_deref(), Some("youtube"));
     }
 
+    // R9-M05: detect_media must propagate source_id into every MediaResource's
+    // SourceEvidence so media records carry provenance. Previously
+    // make_source_evidence hardcoded an empty string.
+    #[test]
+    fn media_carries_source_id() {
+        let html = r#"<a href="https://www.youtube.com/watch?v=abc123">Watch</a>"#;
+        let media = detect_media(&doc(html), &base(), "my-source-id");
+        assert_eq!(media.len(), 1);
+        assert_eq!(media[0].source.source_id, "my-source-id");
+    }
+
+    #[test]
+    fn media_pdf_carries_source_id() {
+        let html = r#"<a href="https://example.com/slides.pdf">Download slides</a>"#;
+        let media = detect_media(&doc(html), &base(), "pdf-source");
+        assert_eq!(media.len(), 1);
+        assert_eq!(media[0].source.source_id, "pdf-source");
+    }
+
+    #[test]
+    fn media_iframe_carries_source_id() {
+        let html = r#"<iframe src="https://www.youtube.com/embed/abc123"></iframe>"#;
+        let media = detect_media(&doc(html), &base(), "iframe-src");
+        assert_eq!(media.len(), 1);
+        assert_eq!(media[0].source.source_id, "iframe-src");
+    }
+
+    #[test]
+    fn media_video_tag_carries_source_id() {
+        let html = r#"<video src="https://example.com/talk.mp4"></video>"#;
+        let media = detect_media(&doc(html), &base(), "video-src");
+        assert_eq!(media.len(), 1);
+        assert_eq!(media[0].source.source_id, "video-src");
+    }
+
     #[test]
     fn media_pdf_slides() {
         let html = r#"<a href="https://example.com/slides.pdf">Download slides</a>"#;
-        let media = detect_media(&doc(html), &base());
+        let media = detect_media(&doc(html), &base(), "test-source");
         assert_eq!(media.len(), 1);
         assert_eq!(media[0].media_type, MediaType::Slides);
     }
@@ -790,7 +828,7 @@ mod tests {
     #[test]
     fn media_pdf_program() {
         let html = r#"<a href="https://example.com/program.pdf">Program</a>"#;
-        let media = detect_media(&doc(html), &base());
+        let media = detect_media(&doc(html), &base(), "test-source");
         assert_eq!(media.len(), 1);
         assert_eq!(media[0].media_type, MediaType::ProgramPdf);
     }
@@ -798,7 +836,7 @@ mod tests {
     #[test]
     fn media_pdf_abstract() {
         let html = r#"<a href="https://example.com/abstract.pdf">Abstract</a>"#;
-        let media = detect_media(&doc(html), &base());
+        let media = detect_media(&doc(html), &base(), "test-source");
         assert_eq!(media.len(), 1);
         assert_eq!(media[0].media_type, MediaType::AbstractPdf);
     }
@@ -806,21 +844,21 @@ mod tests {
     #[test]
     fn media_pdf_other() {
         let html = r#"<a href="https://example.com/paper.pdf">Paper</a>"#;
-        let media = detect_media(&doc(html), &base());
+        let media = detect_media(&doc(html), &base(), "test-source");
         assert_eq!(media.len(), 1);
         assert_eq!(media[0].media_type, MediaType::Other);
     }
 
     #[test]
     fn media_empty() {
-        let media = detect_media(&doc(""), &base());
+        let media = detect_media(&doc(""), &base(), "test-source");
         assert!(media.is_empty());
     }
 
     #[test]
     fn media_vimeo() {
         let html = r#"<a href="https://vimeo.com/12345">Video</a>"#;
-        let media = detect_media(&doc(html), &base());
+        let media = detect_media(&doc(html), &base(), "test-source");
         assert_eq!(media.len(), 1);
         assert_eq!(media[0].media_type, MediaType::Video);
         assert_eq!(media[0].platform.as_deref(), Some("vimeo"));
@@ -829,7 +867,7 @@ mod tests {
     #[test]
     fn media_bilibili() {
         let html = r#"<a href="https://www.bilibili.com/video/BV1234">Video</a>"#;
-        let media = detect_media(&doc(html), &base());
+        let media = detect_media(&doc(html), &base(), "test-source");
         assert_eq!(media.len(), 1);
         assert_eq!(media[0].media_type, MediaType::Video);
         assert_eq!(media[0].platform.as_deref(), Some("bilibili"));
@@ -838,7 +876,7 @@ mod tests {
     #[test]
     fn media_iframe_video_platform() {
         let html = r#"<iframe src="https://www.youtube.com/embed/abc123"></iframe>"#;
-        let media = detect_media(&doc(html), &base());
+        let media = detect_media(&doc(html), &base(), "test-source");
         assert_eq!(media.len(), 1);
         assert_eq!(media[0].media_type, MediaType::Video);
         assert_eq!(media[0].platform.as_deref(), Some("youtube"));
@@ -847,14 +885,14 @@ mod tests {
     #[test]
     fn media_iframe_non_video_ignored() {
         let html = r#"<iframe src="https://calendar.google.com/embed"></iframe>"#;
-        let media = detect_media(&doc(html), &base());
+        let media = detect_media(&doc(html), &base(), "test-source");
         assert!(media.is_empty());
     }
 
     #[test]
     fn media_video_element_source_child() {
         let html = r#"<video><source src="https://example.com/talk.mp4"></video>"#;
-        let media = detect_media(&doc(html), &base());
+        let media = detect_media(&doc(html), &base(), "test-source");
         assert_eq!(media.len(), 1);
         assert_eq!(media[0].media_type, MediaType::Video);
         assert_eq!(media[0].url.as_str(), "https://example.com/talk.mp4");
@@ -863,7 +901,7 @@ mod tests {
     #[test]
     fn media_audio_element() {
         let html = r#"<audio src="https://example.com/talk.mp3"></audio>"#;
-        let media = detect_media(&doc(html), &base());
+        let media = detect_media(&doc(html), &base(), "test-source");
         assert_eq!(media.len(), 1);
         assert_eq!(media[0].media_type, MediaType::Audio);
     }
@@ -871,7 +909,7 @@ mod tests {
     #[test]
     fn media_audio_element_source_child() {
         let html = r#"<audio><source src="https://example.com/talk.opus"></audio>"#;
-        let media = detect_media(&doc(html), &base());
+        let media = detect_media(&doc(html), &base(), "test-source");
         assert_eq!(media.len(), 1);
         assert_eq!(media[0].media_type, MediaType::Audio);
         assert_eq!(media[0].url.as_str(), "https://example.com/talk.opus");
@@ -880,7 +918,7 @@ mod tests {
     #[test]
     fn media_relative_url() {
         let html = r#"<a href="/talks/video.pdf">slides</a>"#;
-        let media = detect_media(&doc(html), &base());
+        let media = detect_media(&doc(html), &base(), "test-source");
         assert_eq!(media.len(), 1);
         assert_eq!(media[0].url.as_str(), "https://example.com/talks/video.pdf");
         assert_eq!(media[0].media_type, MediaType::Slides);
@@ -889,7 +927,7 @@ mod tests {
     #[test]
     fn media_youtu_be() {
         let html = r#"<a href="https://youtu.be/abc123">Short link</a>"#;
-        let media = detect_media(&doc(html), &base());
+        let media = detect_media(&doc(html), &base(), "test-source");
         assert_eq!(media.len(), 1);
         assert_eq!(media[0].platform.as_deref(), Some("youtube"));
     }
@@ -899,7 +937,7 @@ mod tests {
     #[test]
     fn media_youtube_nocookie_embed() {
         let html = r#"<iframe src="https://www.youtube-nocookie.com/embed/abc123"></iframe>"#;
-        let media = detect_media(&doc(html), &base());
+        let media = detect_media(&doc(html), &base(), "test-source");
         assert_eq!(media.len(), 1);
         assert_eq!(media[0].media_type, MediaType::Video);
         assert_eq!(media[0].platform.as_deref(), Some("youtube"));
@@ -909,7 +947,7 @@ mod tests {
     #[test]
     fn media_youtube_shorts_link() {
         let html = r#"<a href="https://www.youtube.com/shorts/abc12345678">Short</a>"#;
-        let media = detect_media(&doc(html), &base());
+        let media = detect_media(&doc(html), &base(), "test-source");
         assert_eq!(media.len(), 1);
         assert_eq!(media[0].media_type, MediaType::Video);
         assert_eq!(media[0].platform.as_deref(), Some("youtube"));
@@ -921,7 +959,7 @@ mod tests {
     #[test]
     fn media_raw_video_link() {
         let html = r#"<a href="https://example.com/lecture.mp4">Recording</a>"#;
-        let media = detect_media(&doc(html), &base());
+        let media = detect_media(&doc(html), &base(), "test-source");
         assert_eq!(media.len(), 1);
         assert_eq!(media[0].media_type, MediaType::Video);
     }
@@ -929,7 +967,7 @@ mod tests {
     #[test]
     fn media_raw_audio_link() {
         let html = r#"<a href="https://example.com/talk.mp3">Audio</a>"#;
-        let media = detect_media(&doc(html), &base());
+        let media = detect_media(&doc(html), &base(), "test-source");
         assert_eq!(media.len(), 1);
         assert_eq!(media[0].media_type, MediaType::Audio);
     }
@@ -941,7 +979,7 @@ mod tests {
     fn media_youtube_watch_and_embed_dedup() {
         let html = r#"<a href="https://www.youtube.com/watch?v=abc12345678">Watch</a>
         <iframe src="https://www.youtube.com/embed/abc12345678"></iframe>"#;
-        let media = detect_media(&doc(html), &base());
+        let media = detect_media(&doc(html), &base(), "test-source");
         assert_eq!(
             media.len(),
             1,
@@ -954,7 +992,7 @@ mod tests {
     fn media_youtu_be_and_embed_dedup() {
         let html = r#"<a href="https://youtu.be/abc12345678">Short</a>
         <iframe src="https://www.youtube-nocookie.com/embed/abc12345678"></iframe>"#;
-        let media = detect_media(&doc(html), &base());
+        let media = detect_media(&doc(html), &base(), "test-source");
         assert_eq!(
             media.len(),
             1,
@@ -965,7 +1003,7 @@ mod tests {
     #[test]
     fn media_malformed_no_panic() {
         let html = "<<<>><a href=>broken</a>";
-        let media = detect_media(&doc(html), &base());
+        let media = detect_media(&doc(html), &base(), "test-source");
         let _ = media;
     }
 
