@@ -50,7 +50,7 @@ impl SourceAdapter for RssAdapter {
                     date_hint,
                     source: SourceEvidence {
                         source_id: source.id.clone(),
-                        source_url: document.url.clone(),
+                        source_url: document.final_url.clone(),
                         evidence: None,
                         captured_at: Some(document.fetched_at),
                         native_id: None,
@@ -86,7 +86,7 @@ impl SourceAdapter for RssAdapter {
                 let document = scraper::Html::parse_document(&body);
                 (
                     helpers::extract_html_fields(&document),
-                    helpers::detect_media(&document, &doc.url),
+                    helpers::detect_media(&document, &doc.final_url),
                     helpers::classify_access(&document),
                 )
             }

@@ -51,7 +51,7 @@ impl SourceAdapter for HtmlConfigAdapter {
                     Some(h) => h,
                     None => continue,
                 };
-                let url = match document.url.join(href) {
+                let url = match document.final_url.join(href) {
                     Ok(u) => u,
                     Err(_) => continue,
                 };
@@ -74,7 +74,7 @@ impl SourceAdapter for HtmlConfigAdapter {
                     date_hint,
                     source: SourceEvidence {
                         source_id: source.id.clone(),
-                        source_url: document.url.clone(),
+                        source_url: document.final_url.clone(),
                         evidence: None,
                         captured_at: Some(document.fetched_at),
                         native_id: None,

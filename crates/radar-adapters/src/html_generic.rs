@@ -199,7 +199,10 @@ impl SourceAdapter for HtmlGenericAdapter {
         let Some(selector) = helpers::cached_selector("a") else {
             return Ok(Vec::new());
         };
-        let base_url = &document.url;
+        // H04: resolve relative hrefs against final_url (post-redirect) so a
+        // redirect from /events to /events/2026 yields /events/2026/talk/123,
+        // not /events/talk/123 against the pre-redirect path.
+        let base_url = &document.final_url;
         let mut stubs = Vec::new();
         for element in parsed.select(selector) {
             let Some(href) = element.attr("href") else {
@@ -256,7 +259,7 @@ impl SourceAdapter for HtmlGenericAdapter {
             None => minimal_event_from_stub(&stub),
             Some(doc) => {
                 let body = crate::helpers::doc_body(&doc.body);
-                let base_url = &doc.url;
+                let base_url = &doc.final_url;
                 let document = scraper::Html::parse_document(&body);
                 let fields = helpers::extract_html_fields(&document);
                 let media = helpers::detect_media(&document, base_url);

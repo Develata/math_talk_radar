@@ -95,7 +95,7 @@ impl SourceAdapter for IcsAdapter {
                 date_hint,
                 source: SourceEvidence {
                     source_id: source.id.clone(),
-                    source_url: document.url.clone(),
+                    source_url: document.final_url.clone(),
                     evidence: Some("ics".into()),
                     captured_at: Some(document.fetched_at),
                     native_id: uid,

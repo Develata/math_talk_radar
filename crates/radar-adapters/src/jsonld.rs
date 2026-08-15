@@ -52,7 +52,9 @@ impl SourceAdapter for JsonLdAdapter {
                         // preserves it, keeping each unnamed event's id distinct.
                         // ADAP-16: counter is global across all JSON-LD blocks so
                         // unnamed events in different blocks get distinct ids.
-                        let mut u = document.url.clone();
+                        // H04: base the synthetic URL on final_url (post-redirect)
+                        // so the mtr-eid query param attaches to the real origin.
+                        let mut u = document.final_url.clone();
                         u.query_pairs_mut()
                             .append_pair("mtr-eid", &global_idx.to_string());
                         u
@@ -67,7 +69,7 @@ impl SourceAdapter for JsonLdAdapter {
                     date_hint,
                     source: SourceEvidence {
                         source_id: source.id.clone(),
-                        source_url: document.url.clone(),
+                        source_url: document.final_url.clone(),
                         evidence: None,
                         captured_at: Some(document.fetched_at),
                         native_id: None,
@@ -81,7 +83,7 @@ impl SourceAdapter for JsonLdAdapter {
 
     fn plan_enrichment(&self, event: &EventStub, _source: &SourceSpec) -> Vec<FetchPlan> {
         // When a JSON-LD Event had no `url`, `discover` synthesized the stub's
-        // url from the listing page (`document.url`) with a synthetic
+        // url from the listing page (`document.final_url`) with a synthetic
         // `mtr-eid` query param to keep distinct unnamed events from collapsing
         // to one `event_id`. Re-fetching that same listing page once per
         // url-less stub would burn the request budget N times for data already
@@ -128,7 +130,7 @@ impl SourceAdapter for JsonLdAdapter {
                     }
                     let talk_source = SourceEvidence {
                         source_id: source.id.clone(),
-                        source_url: doc.url.clone(),
+                        source_url: doc.final_url.clone(),
                         evidence: None,
                         captured_at: Some(doc.fetched_at),
                         native_id: None,
