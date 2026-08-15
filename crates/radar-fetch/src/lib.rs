@@ -17,7 +17,7 @@ pub(crate) mod robots;
 
 pub use budget::RequestBudget;
 pub use client::{FetchBuildError, FetchClient};
-pub use engine::{SourceFetchResult, fetch_all, fetch_source, past_deadline};
+pub use engine::{MAX_STUBS_PER_SOURCE, SourceFetchResult, fetch_all, fetch_source, past_deadline};
 pub use error::FetchError;
 pub use fetch_policy::FetchPolicy;
 pub use policy::HttpPolicy;

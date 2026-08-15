@@ -23,6 +23,15 @@ pub struct SourceFetchResult {
     pub health: SourceHealth,
 }
 
+/// R9-H10: per-source upper bound on discovered stubs that proceed to
+/// enrichment. Output caps (`--max-events`/`--max-talks`) only truncate the
+/// final output; without this cap a single runaway source listing tens of
+/// thousands of events would drive unbounded enrichment fetches, dedup,
+/// scoring, and state writes before any output cap fires. The limit is
+/// generous for legitimate calendars (the largest real source in the
+/// registry lists ~600 events) while bounding worst-case resource use.
+pub const MAX_STUBS_PER_SOURCE: usize = 2000;
+
 pub fn past_deadline(deadline: Option<Instant>) -> bool {
     deadline.map(|d| Instant::now() >= d).unwrap_or(false)
 }
@@ -463,7 +472,7 @@ pub async fn fetch_source(
         }
     };
 
-    let stubs = match adapter.discover(&doc, source) {
+    let mut stubs = match adapter.discover(&doc, source) {
         Ok(s) => s,
         Err(AdapterError::Parse { .. })
         | Err(AdapterError::DynamicUnsupported(_))
@@ -480,6 +489,14 @@ pub async fn fetch_source(
             };
         }
     };
+
+    // R9-H10: cap stubs before enrichment so a runaway source cannot drive
+    // unbounded downstream work. Truncation is reflected in the source
+    // status (Partial) so the operator sees the source was clipped.
+    let stubs_truncated = stubs.len() > MAX_STUBS_PER_SOURCE;
+    if stubs_truncated {
+        stubs.truncate(MAX_STUBS_PER_SOURCE);
+    }
 
     let mut candidates = Vec::new();
     let mut enrichment_failures = 0u32;
@@ -530,7 +547,7 @@ pub async fn fetch_source(
     }
 
     let events = candidates.len() as u32;
-    let status = if enrichment_failures > 0 {
+    let status = if enrichment_failures > 0 || stubs_truncated {
         SourceStatus::Partial
     } else {
         SourceStatus::Ok

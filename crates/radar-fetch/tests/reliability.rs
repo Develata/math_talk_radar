@@ -5,12 +5,16 @@
 //! HTTP server and drives [`radar_fetch::fetch_all`] against it. No real
 //! network is touched.
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
+
 use radar_core::config::{AdapterKind, SourceKind, SourceTier};
 use radar_core::{
-    AdapterError, EventCandidate, EventStub, FetchPlan, FetchedDocument, SourceAdapter, SourceSpec,
-    SourceStatus,
+    AccessInfo, AdapterError, Event, EventCandidate, EventDate, EventId, EventStatus, EventStub,
+    EventType, FetchPlan, FetchedDocument, OnlineAvailability, PublicAccess, SourceAdapter,
+    SourceEvidence, SourceSpec, SourceStatus,
 };
-use radar_fetch::{FetchClient, HttpPolicy, fetch_all};
+use radar_fetch::{FetchClient, HttpPolicy, MAX_STUBS_PER_SOURCE, fetch_all};
 use wiremock::matchers::path;
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -175,5 +179,139 @@ async fn robots_txt_fetched_once_per_host() {
     assert_eq!(
         robots_count, 1,
         "robots.txt must be fetched exactly once per host (OnceCell de-dup)",
+    );
+}
+
+// R9-H10: a source that discovers more stubs than MAX_STUBS_PER_SOURCE must
+// have the excess dropped before enrichment, and its status must reflect the
+// truncation (Partial). This test uses an adapter whose `discover` returns
+// MAX_STUBS_PER_SOURCE + 5 stubs and counts `enrich` invocations via an
+// atomic — the count must equal exactly MAX_STUBS_PER_SOURCE.
+struct ManyStubsAdapter {
+    enrich_calls: Arc<AtomicU32>,
+}
+
+impl SourceAdapter for ManyStubsAdapter {
+    fn discover(
+        &self,
+        _document: &FetchedDocument,
+        source: &SourceSpec,
+    ) -> Result<Vec<EventStub>, AdapterError> {
+        let source_url = source
+            .entrypoint
+            .clone()
+            .unwrap_or_else(|| url::Url::parse("https://example.com/").unwrap());
+        let n = MAX_STUBS_PER_SOURCE + 5;
+        let stubs = (0..n)
+            .map(|i| EventStub {
+                title: format!("Event {i}"),
+                url: url::Url::parse(&format!("https://example.com/e{i}")).unwrap(),
+                date_hint: None,
+                source: SourceEvidence {
+                    source_id: source.id.clone(),
+                    source_url: source_url.clone(),
+                    evidence: None,
+                    captured_at: None,
+                    native_id: None,
+                },
+            })
+            .collect();
+        Ok(stubs)
+    }
+
+    fn plan_enrichment(&self, _event: &EventStub, _source: &SourceSpec) -> Vec<FetchPlan> {
+        Vec::new()
+    }
+
+    fn enrich(
+        &self,
+        stub: EventStub,
+        _documents: &[FetchedDocument],
+        source: &SourceSpec,
+    ) -> Result<EventCandidate, AdapterError> {
+        self.enrich_calls.fetch_add(1, Ordering::SeqCst);
+        let event = Event {
+            id: EventId(format!("e-{}", stub.title)),
+            title: stub.title.clone(),
+            url: Some(stub.url.clone()),
+            event_type: EventType::Conference,
+            status: EventStatus::Unknown,
+            date: EventDate::unknown(String::new()),
+            location: None,
+            description: None,
+            topics: Vec::new(),
+            people: Vec::new(),
+            talks: Vec::new(),
+            media: Vec::new(),
+            access: AccessInfo {
+                access: PublicAccess::Unknown,
+                online: OnlineAvailability::Unknown,
+            },
+            sources: vec![stub.source.clone()],
+            score: 0.0,
+            score_components: radar_core::ranking::ScoreComponents::default(),
+            rank_reasons: Vec::new(),
+            first_seen_at: None,
+            last_seen_at: None,
+        };
+        Ok(EventCandidate {
+            event,
+            stub: EventStub {
+                title: stub.title,
+                url: url::Url::parse("https://example.com/").unwrap(),
+                date_hint: None,
+                source: SourceEvidence {
+                    source_id: source.id.clone(),
+                    source_url: url::Url::parse("https://example.com/").unwrap(),
+                    evidence: None,
+                    captured_at: None,
+                    native_id: None,
+                },
+            },
+        })
+    }
+}
+
+#[tokio::test]
+async fn r9_h10_stubs_capped_before_enrichment() {
+    let server = MockServer::start().await;
+    let uri = server.uri();
+
+    Mock::given(path("/robots.txt"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(ROBOTS_BODY))
+        .mount(&server)
+        .await;
+    Mock::given(path("/source_0"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(SUCCESS_BODY))
+        .mount(&server)
+        .await;
+
+    let enrich_calls = Arc::new(AtomicU32::new(0));
+    let sources = vec![make_source(0, &uri)];
+    let client = FetchClient::new(HttpPolicy::default()).unwrap();
+    let calls_for_adapter = enrich_calls.clone();
+    let results = fetch_all(&client, &sources, None, move |_| {
+        Box::new(ManyStubsAdapter {
+            enrich_calls: calls_for_adapter.clone(),
+        })
+    })
+    .await;
+
+    assert_eq!(results.len(), 1, "one source → one result");
+    let r = &results[0];
+    assert_eq!(
+        r.candidates.len(),
+        MAX_STUBS_PER_SOURCE,
+        "candidates must be capped at MAX_STUBS_PER_SOURCE"
+    );
+    assert_eq!(
+        r.health.status,
+        SourceStatus::Partial,
+        "truncated source must report Partial status"
+    );
+    assert_eq!(
+        enrich_calls.load(Ordering::SeqCst) as usize,
+        MAX_STUBS_PER_SOURCE,
+        "enrich must be invoked exactly MAX_STUBS_PER_SOURCE times (excess stubs dropped before enrichment)"
     );
 }
