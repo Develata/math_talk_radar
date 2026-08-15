@@ -231,26 +231,36 @@ fn urls_match_ignoring_mtr_eid(a: &Url, b: &Url) -> bool {
     strip(a) == strip(b)
 }
 
-/// ADAP-21: match a JSON-LD event node to a stub by name OR url/@id. Title
-/// alone is fragile — a detail page may use a slightly different name than the
-/// listing, but the url or @id is stable.
+/// ADAP-21: match a JSON-LD event node to a stub by url/@id OR name.
+/// H05: url/@id is checked FIRST — it is a stable identity signal. Title
+/// alone is fragile: a detail page listing multiple events with the same
+/// name (e.g. a series of "Seminar" talks) would let the first matching
+/// node claim every same-named stub, contaminating description/location
+/// enrichment across distinct events. Identity-based matching wins when
+/// available; name is the fallback.
 fn event_matches_stub(ev: &serde_json::Value, stub: &EventStub) -> bool {
-    if ev.get("name").and_then(|v| v.as_str()) == Some(&stub.title) {
+    let ev_url = ev
+        .get("url")
+        .and_then(|v| v.as_str())
+        .and_then(|s| Url::parse(s).ok());
+    if ev_url.as_ref().is_some_and(|u| u == &stub.url) {
         return true;
     }
-    if let Some(url_str) = ev.get("url").and_then(|v| v.as_str())
-        && let Ok(url) = Url::parse(url_str)
-        && url == stub.url
-    {
+    let ev_id = ev
+        .get("@id")
+        .and_then(|v| v.as_str())
+        .and_then(|s| Url::parse(s).ok());
+    if ev_id.as_ref().is_some_and(|u| u == &stub.url) {
         return true;
     }
-    if let Some(id_str) = ev.get("@id").and_then(|v| v.as_str())
-        && let Ok(id) = Url::parse(id_str)
-        && id == stub.url
-    {
-        return true;
+    // R9-H05: when the event carries a parseable url or @id that did NOT
+    // match the stub, falling back to name would cross-contaminate
+    // same-named events on the same page. Name fallback is safe only when
+    // the event has no parseable url/@id at all.
+    if ev_url.is_some() || ev_id.is_some() {
+        return false;
     }
-    false
+    ev.get("name").and_then(|v| v.as_str()) == Some(&stub.title)
 }
 
 /// Parse every `<script type="application/ld+json">` block in `html` into a
@@ -689,5 +699,45 @@ mod tests {
         assert!(candidate.event.description.is_none());
         assert!(candidate.event.location.is_none());
         assert_eq!(candidate.event.sources.len(), 1);
+    }
+
+    // R9-H05: two same-named events on one page must not cross-contaminate.
+    // Before the fix, event_matches_stub checked name first, so the first
+    // JSON-LD node matched every same-named stub — enriching stub B with
+    // node A's description. With url-first matching, each stub claims only
+    // its own node.
+    #[test]
+    fn enrich_same_name_events_matched_by_url_not_name() {
+        let html = r#"<script type="application/ld+json">
+        {"@type":"Event","name":"Seminar","url":"https://example.com/s1",
+         "description":"Seminar ONE description"}
+        </script>
+        <script type="application/ld+json">
+        {"@type":"Event","name":"Seminar","url":"https://example.com/s2",
+         "description":"Seminar TWO description"}
+        </script>"#;
+        let doc = make_doc(html);
+        let spec = make_spec();
+
+        let stub_s2 = EventStub {
+            title: "Seminar".to_string(),
+            url: Url::parse("https://example.com/s2").unwrap(),
+            date_hint: None,
+            source: SourceEvidence {
+                source_id: "test-jsonld".to_string(),
+                source_url: Url::parse("https://example.com/page").unwrap(),
+                evidence: None,
+                captured_at: None,
+                native_id: None,
+            },
+        };
+        let candidate = JsonLdAdapter
+            .enrich(stub_s2, std::slice::from_ref(&doc), &spec)
+            .unwrap();
+        assert_eq!(
+            candidate.event.description.as_deref(),
+            Some("Seminar TWO description"),
+            "stub for s2 must get s2's description, not s1's"
+        );
     }
 }
