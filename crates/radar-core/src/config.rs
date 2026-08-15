@@ -2,6 +2,24 @@
 use serde::{Deserialize, Serialize};
 use url::Url;
 
+/// R9-M02: semantic config validation error. `SourcesConfig::parse` only
+/// performs TOML deserialization — it cannot catch duplicate source IDs or
+/// an `HtmlConfig` source missing its required selector fields. Those are
+/// semantic invariants (source ID is the key for dedup / manifest / change
+/// detection; the HTML adapter's four required selectors are non-optional per
+/// `HtmlSelectors`'s contract) and were previously surfaced only as a late
+/// runtime failure inside the adapter mid-scan. `validate()` checks them at
+/// load time so a malformed config fails fast with a precise message.
+#[derive(Debug, thiserror::Error)]
+pub enum ConfigError {
+    #[error("duplicate source id '{0}'")]
+    DuplicateSourceId(String),
+    #[error("source '{0}': adapter = HtmlConfig requires a [selectors] table")]
+    MissingSelectors(String),
+    #[error("source '{0}': selectors.{1} must be a non-empty string")]
+    EmptySelector(String, &'static str),
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SourceTier {
@@ -148,6 +166,37 @@ impl SourcesConfig {
     pub fn enabled(&self) -> Vec<&SourceSpec> {
         self.sources.iter().filter(|s| s.enabled).collect()
     }
+
+    /// R9-M02: validate semantic invariants that TOML deserialization cannot
+    /// enforce. Call after `parse` (or `embedded`) to fail fast at load time
+    /// with a precise message instead of a late runtime failure mid-scan.
+    /// Checks: (1) source IDs are unique, (2) `HtmlConfig` sources carry a
+    /// `[selectors]` table with all four required fields non-empty.
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        let mut seen_ids = std::collections::HashSet::new();
+        for source in &self.sources {
+            if !seen_ids.insert(source.id.as_str()) {
+                return Err(ConfigError::DuplicateSourceId(source.id.clone()));
+            }
+            if source.adapter == AdapterKind::HtmlConfig {
+                let selectors = source
+                    .selectors
+                    .as_ref()
+                    .ok_or_else(|| ConfigError::MissingSelectors(source.id.clone()))?;
+                for (field, value) in [
+                    ("list", &selectors.list),
+                    ("list_link", &selectors.list_link),
+                    ("detail_title", &selectors.detail_title),
+                    ("detail_date", &selectors.detail_date),
+                ] {
+                    if value.trim().is_empty() {
+                        return Err(ConfigError::EmptySelector(source.id.clone(), field));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -274,5 +323,105 @@ enabled = false
         let enabled = config.enabled();
         assert_eq!(enabled.len(), 1);
         assert_eq!(enabled[0].id, "s1");
+    }
+
+    // R9-M02: validate() rejects duplicate source IDs.
+    #[test]
+    fn validate_rejects_duplicate_source_id() {
+        let toml = r#"
+[[sources]]
+id = "dup"
+name = "First"
+
+[[sources]]
+id = "dup"
+name = "Second"
+"#;
+        let config = super::SourcesConfig::parse(toml).expect("TOML parses");
+        let err = config.validate().expect_err("duplicate id must fail");
+        assert!(matches!(err, super::ConfigError::DuplicateSourceId(ref id) if id == "dup"));
+    }
+
+    // R9-M02: validate() rejects HtmlConfig source without a [selectors] table.
+    #[test]
+    fn validate_rejects_html_config_missing_selectors() {
+        let toml = r#"
+[[sources]]
+id = "no-sel"
+name = "No Selectors"
+adapter = "html_config"
+"#;
+        let config = super::SourcesConfig::parse(toml).expect("TOML parses");
+        let err = config.validate().expect_err("missing selectors must fail");
+        assert!(matches!(err, super::ConfigError::MissingSelectors(ref id) if id == "no-sel"));
+    }
+
+    // R9-M02: validate() rejects HtmlConfig source with an empty required
+    // selector field (whitespace-only counts as empty).
+    #[test]
+    fn validate_rejects_html_config_empty_required_selector() {
+        let toml = r#"
+[[sources]]
+id = "empty-sel"
+name = "Empty Selector"
+adapter = "html_config"
+
+[sources.selectors]
+list = "   "
+list_link = "a"
+detail_title = "h1"
+detail_date = "time"
+"#;
+        let config = super::SourcesConfig::parse(toml).expect("TOML parses");
+        let err = config.validate().expect_err("empty selector must fail");
+        assert!(
+            matches!(err, super::ConfigError::EmptySelector(ref id, field) if id == "empty-sel" && field == "list")
+        );
+    }
+
+    // R9-M02: validate() accepts a well-formed HtmlConfig source with all
+    // four required selectors non-empty and optional selectors absent.
+    #[test]
+    fn validate_accepts_well_formed_html_config() {
+        let toml = r#"
+[[sources]]
+id = "good"
+name = "Good"
+adapter = "html_config"
+
+[sources.selectors]
+list = ".event"
+list_link = "a"
+detail_title = "h1"
+detail_date = "time"
+"#;
+        let config = super::SourcesConfig::parse(toml).expect("TOML parses");
+        config.validate().expect("well-formed config must pass");
+    }
+
+    // R9-M02: validate() accepts non-HtmlConfig sources without selectors.
+    #[test]
+    fn validate_accepts_rss_source_without_selectors() {
+        let toml = r#"
+[[sources]]
+id = "feed"
+name = "RSS Feed"
+adapter = "rss"
+"#;
+        let config = super::SourcesConfig::parse(toml).expect("TOML parses");
+        config
+            .validate()
+            .expect("RSS source without selectors must pass");
+    }
+
+    // R9-M02: the embedded default config must pass semantic validation.
+    // If this fails, the shipped config is broken and every `scan` would
+    // fail at load time.
+    #[test]
+    fn cfg_embedded_default_passes_validation() {
+        let config = super::SourcesConfig::embedded().expect("embedded sources.toml parses");
+        config
+            .validate()
+            .expect("embedded sources.toml must pass semantic validation");
     }
 }

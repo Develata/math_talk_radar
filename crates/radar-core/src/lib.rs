@@ -23,7 +23,7 @@ pub mod ranking;
 pub mod topics;
 
 pub use adapter::{AdapterError, EventCandidate, EventStub, SourceAdapter};
-pub use config::{AdapterKind, SourceKind, SourceSpec, SourceTier, SourcesConfig};
+pub use config::{AdapterKind, ConfigError, SourceKind, SourceSpec, SourceTier, SourcesConfig};
 pub use date::{
     DateError, DatePrecision, DateTimeOrDate, DateTimeRange, EventDate, parse_timezone,
 };
