@@ -223,6 +223,12 @@ pub fn score_event(
 fn media_signal(media_type: &MediaType, access: PublicAccess) -> u8 {
     match (media_type, access) {
         (MediaType::Video, PublicAccess::Open) => 25,
+        // R9-M01: paywalled and institution-login videos are NOT publicly
+        // accessible — awarding 18 media points (the generic non-open video
+        // score) inflates their ranking. RegistrationRequired and Unknown
+        // keep 18: registration is still arguably accessible, and Unknown
+        // means we lack evidence either way.
+        (MediaType::Video, PublicAccess::Paywalled | PublicAccess::InstitutionLogin) => 0,
         (MediaType::Video, _) => 18,
         (MediaType::Audio, PublicAccess::Open) => 15,
         (MediaType::Audio, _) => 0,
@@ -431,6 +437,51 @@ mod tests {
         let (_, components, reasons) = score_event(&event, &tiers, None);
         assert_eq!(components.media, 0);
         assert!(!reasons.contains(&"public_recording_available".to_string()));
+    }
+
+    // R9-M01: paywalled and institution-login videos are not publicly
+    // accessible and must not receive the generic 18-point non-open video
+    // score. Both should score 0 on the media component.
+    #[test]
+    fn rank_002_paywalled_video_scores_zero() {
+        let mut event = empty_event();
+        event.media = vec![MediaResource {
+            id: MediaId("m1".into()),
+            media_type: MediaType::Video,
+            title: None,
+            url: Url::parse("https://example.com/v").unwrap(),
+            platform: None,
+            public_access: PublicAccess::Paywalled,
+            published_at: None,
+            source: empty_source_evidence(),
+        }];
+        let tiers: HashMap<String, SourceTier> = HashMap::new();
+        let (_, components, _) = score_event(&event, &tiers, None);
+        assert_eq!(
+            components.media, 0,
+            "paywalled video must not score media points"
+        );
+    }
+
+    #[test]
+    fn rank_002_institution_login_video_scores_zero() {
+        let mut event = empty_event();
+        event.media = vec![MediaResource {
+            id: MediaId("m1".into()),
+            media_type: MediaType::Video,
+            title: None,
+            url: Url::parse("https://example.com/v").unwrap(),
+            platform: None,
+            public_access: PublicAccess::InstitutionLogin,
+            published_at: None,
+            source: empty_source_evidence(),
+        }];
+        let tiers: HashMap<String, SourceTier> = HashMap::new();
+        let (_, components, _) = score_event(&event, &tiers, None);
+        assert_eq!(
+            components.media, 0,
+            "institution-login video must not score media points"
+        );
     }
 
     // RANK-003: title-only mention of an important scholar → no people boost.
