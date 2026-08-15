@@ -360,6 +360,7 @@ fn robots_url_for(url: &Url) -> Option<Url> {
     url.host_str()?;
     let mut robots = url.clone();
     robots.set_path("/robots.txt");
+    robots.set_query(None);
     robots.set_fragment(None);
     Some(robots)
 }
@@ -626,5 +627,22 @@ mod tests {
         };
         let policy = FetchPolicy::from(&spec);
         assert_eq!(policy.allowed_hosts, vec!["example.com".to_string()]);
+    }
+
+    // R9-B01: robots_url_for must strip the query string so a source
+    // entrypoint like /events?next=5 fetches /robots.txt (not /robots.txt?next=5).
+    #[test]
+    fn robots_url_for_strips_query() {
+        let url = Url::parse("https://example.org/events?next=5").unwrap();
+        let robots = robots_url_for(&url).unwrap();
+        assert_eq!(robots.as_str(), "https://example.org/robots.txt");
+        assert!(robots.query().is_none());
+    }
+
+    #[test]
+    fn robots_url_for_strips_fragment() {
+        let url = Url::parse("https://example.org/events#section").unwrap();
+        let robots = robots_url_for(&url).unwrap();
+        assert_eq!(robots.as_str(), "https://example.org/robots.txt");
     }
 }

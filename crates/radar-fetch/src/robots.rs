@@ -37,9 +37,14 @@ impl RobotsRules {
         }
     }
 
+    /// R9-B01: RFC 9309 §2.2.2 matching operates on the full request URI path
+    /// including the query string. A rule like `Disallow: /*?next=` can only
+    /// match when the query is part of the comparison target. The target is
+    /// percent-decoded per RFC 9309 §2.2.1 before pattern matching.
     pub fn is_allowed(&self, url: &Url) -> bool {
-        let decoded = percent_decode_path(url.path());
-        let path = decoded.as_str();
+        let target_raw = target_path_query(url);
+        let decoded = percent_decode_target(&target_raw);
+        let target = decoded.as_str();
         let mut best_match: Option<(usize, bool)> = None; // (length, is_allow)
         for rule in &self.rules {
             let (pattern, is_allow) = match rule {
@@ -49,7 +54,7 @@ impl RobotsRules {
             if pattern.is_empty() {
                 continue;
             }
-            if let Some(len) = matches_robots_pattern(pattern, path) {
+            if let Some(len) = matches_robots_pattern(pattern, target) {
                 match best_match {
                     None => best_match = Some((len, is_allow)),
                     Some((best_len, _)) if len > best_len => best_match = Some((len, is_allow)),
@@ -64,6 +69,16 @@ impl RobotsRules {
             None => true,
             Some((_, is_allow)) => is_allow,
         }
+    }
+}
+
+/// R9-B01: Build the RFC 9309 match target from the URL path and query. When
+/// the URL has a non-empty query, the target is `path?query`; otherwise just
+/// `path`. The fragment is never part of the match target.
+fn target_path_query(url: &Url) -> String {
+    match url.query() {
+        Some(q) if !q.is_empty() => format!("{}?{}", url.path(), q),
+        _ => url.path().to_string(),
     }
 }
 
@@ -145,11 +160,43 @@ fn glob_match(pat: &[char], tgt: &[char], anchored_end: bool) -> bool {
     if anchored_end { ti == tgt.len() } else { true }
 }
 
-/// Hand-rolled RFC 9309 parser. Only reads `User-agent: *` blocks.
+/// R9-B02: the crawler product token used for RFC 9309 §2.3.1 crawler-specific
+/// group matching. Matches the product name in the User-Agent string
+/// (`math_talk_radar/<version>`), so a site can publish a group like
+/// `User-agent: math_talk_radar\nDisallow: /` to target this crawler
+/// specifically. Sites that do not name this crawler fall back to the
+/// `User-agent: *` wildcard group.
+pub const CRAWLER_TOKEN: &str = "math_talk_radar";
+
+/// Parse robots.txt using the default crawler token ([`CRAWLER_TOKEN`]).
 pub fn parse_robots(txt: &str) -> RobotsRules {
-    let mut rules = Vec::new();
-    let mut group_has_wildcard = false;
-    let mut in_group = false;
+    parse_robots_for(txt, CRAWLER_TOKEN)
+}
+
+/// R9-B02: RFC 9309 §2.3.1 group-based parser. A robots.txt is a sequence of
+/// groups; each group begins with one or more `User-agent` lines and is
+/// followed by `Allow`/`Disallow` lines. A `User-agent` line after any rule
+/// starts a new group.
+///
+/// Group selection (RFC 9309 §2.3.1):
+/// 1. Collect all groups whose `User-agent` exactly matches `crawler_token`
+///    (case-insensitive). Merge their rules.
+/// 2. If no specific group matched, use groups with `User-agent: *`.
+/// 3. If neither matched, the result is allow-all (no rules).
+///
+/// Previously the parser only read `User-agent: *` groups, so a site that
+/// published `User-agent: math_talk_radar\nDisallow: /` followed by a
+/// wildcard allow-all group would see this crawler ignore its specific rules.
+pub fn parse_robots_for(txt: &str, crawler_token: &str) -> RobotsRules {
+    #[derive(Default)]
+    struct Group {
+        agents: Vec<String>,
+        rules: Vec<RobotsRule>,
+    }
+
+    let mut groups: Vec<Group> = Vec::new();
+    let mut current: Option<Group> = None;
+    let mut in_agents = true;
 
     for line in txt.lines() {
         let line = line.split('#').next().unwrap_or("").trim();
@@ -162,30 +209,58 @@ pub fn parse_robots(txt: &str) -> RobotsRules {
         };
         match field.as_str() {
             "user-agent" => {
-                if !in_group {
-                    group_has_wildcard = false;
-                    in_group = true;
+                if !in_agents {
+                    if let Some(g) = current.take() {
+                        groups.push(g);
+                    }
+                    current = Some(Group::default());
+                    in_agents = true;
                 }
-                if value == "*" {
-                    group_has_wildcard = true;
-                }
+                current
+                    .get_or_insert_with(Group::default)
+                    .agents
+                    .push(value.to_ascii_lowercase());
             }
             "allow" => {
-                in_group = false;
-                if group_has_wildcard && !value.is_empty() {
-                    rules.push(RobotsRule::Allow(value.to_string()));
+                in_agents = false;
+                if let Some(g) = current.as_mut()
+                    && !value.is_empty()
+                {
+                    g.rules.push(RobotsRule::Allow(value.to_string()));
                 }
             }
             "disallow" => {
-                in_group = false;
-                if group_has_wildcard {
-                    rules.push(RobotsRule::Disallow(value.to_string()));
+                in_agents = false;
+                if let Some(g) = current.as_mut() {
+                    g.rules.push(RobotsRule::Disallow(value.to_string()));
                 }
             }
             _ => {
-                in_group = false;
+                in_agents = false;
             }
         }
+    }
+    if let Some(g) = current.take() {
+        groups.push(g);
+    }
+
+    let token_lower = crawler_token.to_ascii_lowercase();
+    let selected: Vec<&Group> = groups
+        .iter()
+        .filter(|g| g.agents.iter().any(|a| a == &token_lower))
+        .collect();
+    let selected = if selected.is_empty() {
+        groups
+            .iter()
+            .filter(|g| g.agents.iter().any(|a| a == "*"))
+            .collect()
+    } else {
+        selected
+    };
+
+    let mut rules = Vec::new();
+    for g in selected {
+        rules.extend(g.rules.iter().cloned());
     }
     RobotsRules { rules }
 }
@@ -248,9 +323,10 @@ fn host_key(url: &Url) -> String {
 }
 
 /// RFC 9309 §2.2.1: robots path matching operates on the percent-decoded
-/// path. `Url::path()` returns the encoded form, so we decode `%XX` sequences
-/// (including multi-byte UTF-8) before matching against rule patterns.
-fn percent_decode_path(input: &str) -> String {
+/// target (path + query). `Url::path()` returns the encoded form, so we decode
+/// `%XX` sequences (including multi-byte UTF-8) before matching against rule
+/// patterns.
+fn percent_decode_target(input: &str) -> String {
     let bytes = input.as_bytes();
     let mut out = Vec::with_capacity(input.len());
     let mut i = 0;
@@ -377,5 +453,125 @@ mod robots_tests {
             !rules.is_allowed(&u),
             "percent-encoded path must match decoded rule"
         );
+    }
+
+    // R9-B01: a Disallow rule targeting the query must match when the request
+    // URL carries that query. `Disallow: /*?next=` blocks /events?next=5 but
+    // allows /events (no query).
+    #[test]
+    fn query_specific_disallow_rule_matches() {
+        let txt = "User-agent: *\nDisallow: /*?next=\n";
+        let rules = parse_robots(txt);
+        let blocked = Url::parse("https://example.com/events?next=5").unwrap();
+        assert!(
+            !rules.is_allowed(&blocked),
+            "Disallow: /*?next= must block URLs with ?next= query"
+        );
+        let allowed = Url::parse("https://example.com/events").unwrap();
+        assert!(
+            rules.is_allowed(&allowed),
+            "Disallow: /*?next= must not block URLs without a query"
+        );
+    }
+
+    // R9-B02: a crawler-specific group must be honored. A site publishing
+    // `User-agent: math_talk_radar\nDisallow: /` must block this crawler even
+    // if a wildcard allow-all group follows.
+    #[test]
+    fn crawler_specific_group_honored() {
+        let txt = "User-agent: math_talk_radar\nDisallow: /\nUser-agent: *\nAllow: /\n";
+        let rules = parse_robots(txt);
+        let u = Url::parse("https://example.com/any").unwrap();
+        assert!(
+            !rules.is_allowed(&u),
+            "crawler-specific Disallow: / must block this crawler"
+        );
+    }
+
+    // R9-B02: when no crawler-specific group exists, the wildcard group is used.
+    #[test]
+    fn wildcard_fallback_when_no_specific_group() {
+        let txt = "User-agent: *\nDisallow: /private\n";
+        let rules = parse_robots(txt);
+        let u = Url::parse("https://example.com/private").unwrap();
+        assert!(
+            !rules.is_allowed(&u),
+            "wildcard group must be used as fallback"
+        );
+    }
+
+    // R9-B02: when both a specific and wildcard group exist, only the specific
+    // group's rules apply (RFC 9309 §2.3.1: the crawler must not merge specific
+    // and wildcard groups).
+    #[test]
+    fn specific_group_takes_precedence_over_wildcard() {
+        let txt = "\
+User-agent: math_talk_radar
+Disallow: /specific
+
+User-agent: *
+Disallow: /wildcard
+";
+        let rules = parse_robots(txt);
+        let specific = Url::parse("https://example.com/specific").unwrap();
+        let wildcard = Url::parse("https://example.com/wildcard").unwrap();
+        assert!(
+            !rules.is_allowed(&specific),
+            "specific group rule must apply"
+        );
+        assert!(
+            rules.is_allowed(&wildcard),
+            "wildcard group rule must NOT apply when a specific group matched"
+        );
+    }
+
+    // R9-B02: multiple groups matching the same crawler token are merged.
+    #[test]
+    fn multiple_specific_groups_merged() {
+        let txt = "\
+User-agent: math_talk_radar
+Disallow: /a
+
+User-agent: math_talk_radar
+Disallow: /b
+";
+        let rules = parse_robots(txt);
+        assert!(!rules.is_allowed(&Url::parse("https://example.com/a").unwrap()));
+        assert!(!rules.is_allowed(&Url::parse("https://example.com/b").unwrap()));
+        assert!(rules.is_allowed(&Url::parse("https://example.com/c").unwrap()));
+    }
+
+    // R9-B02: case-insensitive product token matching per RFC 9309 §2.3.1.
+    #[test]
+    fn crawler_token_match_is_case_insensitive() {
+        let txt = "User-agent: Math_Talk_Radar\nDisallow: /\n";
+        let rules = parse_robots(txt);
+        let u = Url::parse("https://example.com/any").unwrap();
+        assert!(
+            !rules.is_allowed(&u),
+            "User-agent matching must be case-insensitive"
+        );
+    }
+
+    // R9-B02: consecutive User-agent lines share the same group's rules.
+    #[test]
+    fn consecutive_user_agents_share_group() {
+        let txt = "\
+User-agent: math_talk_radar
+User-agent: other_bot
+Disallow: /shared
+
+User-agent: *
+Allow: /
+";
+        let rules = parse_robots(txt);
+        let u = Url::parse("https://example.com/shared").unwrap();
+        assert!(
+            !rules.is_allowed(&u),
+            "both User-agent lines in a group must share the Disallow rule"
+        );
+        // other_bot is not our token; verify via parse_robots_for
+        let other_rules = parse_robots_for(txt, "other_bot");
+        assert!(!other_rules.is_allowed(&u));
     }
 }
