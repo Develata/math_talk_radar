@@ -338,13 +338,39 @@ fn union_media(a: Vec<MediaResource>, b: Vec<MediaResource>) -> Vec<MediaResourc
 
 fn union_talks(a: Vec<Talk>, b: Vec<Talk>) -> Vec<Talk> {
     let mut out = a;
-    let mut seen: HashSet<String> = out.iter().map(|t| t.id.0.clone()).collect();
+    let mut index: std::collections::HashMap<String, usize> = out
+        .iter()
+        .enumerate()
+        .map(|(i, t)| (t.id.0.clone(), i))
+        .collect();
     for t in b {
-        if seen.insert(t.id.0.clone()) {
+        if let Some(&pos) = index.get(&t.id.0) {
+            out[pos] = merge_talk(out[pos].clone(), t);
+        } else {
+            index.insert(t.id.0.clone(), out.len());
             out.push(t);
         }
     }
     out
+}
+
+/// Merge two talks sharing the same ID. The primary carries scalar fields;
+/// the secondary fills gaps and unions collection fields (speakers, media,
+/// topics). H07: previously `union_talks` dropped the secondary entirely on
+/// ID collision, losing its speakers/media/abstract when the primary lacked
+/// them.
+fn merge_talk(primary: Talk, secondary: Talk) -> Talk {
+    let mut keep = primary;
+    keep.speaker = union_people(keep.speaker, secondary.speaker);
+    keep.media = union_media(keep.media, secondary.media);
+    keep.topics = union_topics(keep.topics, secondary.topics);
+    if keep.date_time.is_none() {
+        keep.date_time = secondary.date_time;
+    }
+    if keep.abstract_text.is_none() {
+        keep.abstract_text = secondary.abstract_text;
+    }
+    keep
 }
 
 fn union_people(a: Vec<PersonHit>, b: Vec<PersonHit>) -> Vec<PersonHit> {
@@ -439,7 +465,7 @@ mod tests {
     use crate::date::{DatePrecision, EventDate};
     use crate::model::{
         AccessInfo, EventId, EventStatus, EventType, OnlineAvailability, PublicAccess,
-        SourceEvidence,
+        SourceEvidence, Talk, TalkId,
     };
     use url::Url;
 
@@ -851,6 +877,74 @@ mod tests {
         assert!(
             merged.location.is_some(),
             "location filled from secondary when primary lacks it"
+        );
+    }
+
+    // R9-H07: union_talks must merge same-ID talks, not drop the secondary.
+    // Before the fix, a talk present in both events (same TalkId) lost the
+    // secondary's speakers/media entirely — if the primary lacked speakers
+    // but the secondary had them, the merged event had a speakerless talk.
+    #[test]
+    fn merge_events_unions_same_id_talk_speakers() {
+        let talk_src_a = src("s1", "https://x.com/feed", None);
+        let talk_src_b = src("s2", "https://y.com/feed", None);
+        let talk_a = Talk {
+            id: TalkId("t1".into()),
+            title: "Algebraic Geometry".into(),
+            speaker: Vec::new(),
+            date_time: None,
+            abstract_text: None,
+            topics: Vec::new(),
+            media: Vec::new(),
+            source: talk_src_a,
+        };
+        let talk_b = Talk {
+            id: TalkId("t1".into()),
+            title: "Algebraic Geometry".into(),
+            speaker: vec![PersonHit {
+                canonical_name: "Alice".into(),
+                matched_text: "Alice".into(),
+                role: PersonRole::Speaker,
+                evidence: None,
+                confidence: 1.0,
+                scholar_tags: Vec::new(),
+            }],
+            date_time: None,
+            abstract_text: Some("Abstract from B".into()),
+            topics: Vec::new(),
+            media: Vec::new(),
+            source: talk_src_b,
+        };
+
+        let mut a = event(
+            "a",
+            "Talk",
+            Some("https://x.com/e1"),
+            Some(date(2026, 8, 9)),
+            vec![src("s1", "https://x.com/feed", None)],
+        );
+        a.score = 10.0;
+        a.talks = vec![talk_a];
+
+        let mut b = event(
+            "b",
+            "Talk",
+            Some("https://x.com/e1#sec"),
+            Some(date(2026, 8, 9)),
+            vec![src("s2", "https://y.com/feed", None)],
+        );
+        b.score = 5.0;
+        b.talks = vec![talk_b];
+
+        let merged = merge_events(a, b);
+        assert_eq!(merged.talks.len(), 1, "same-ID talks must merge into one");
+        let t = &merged.talks[0];
+        assert_eq!(t.speaker.len(), 1, "secondary speaker must be preserved");
+        assert_eq!(t.speaker[0].canonical_name, "Alice");
+        assert_eq!(
+            t.abstract_text.as_deref(),
+            Some("Abstract from B"),
+            "secondary abstract fills gap in primary"
         );
     }
 }
