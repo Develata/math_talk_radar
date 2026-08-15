@@ -578,6 +578,26 @@ pub fn classify_access(document: &Html) -> PublicAccess {
     ];
     const REGISTRATION: &[&str] = &["register", "registration required", "sign up", "rsvp"];
     const OPEN: &[&str] = &["free", "open access", "no registration", "public"];
+    // R9-M03: negation phrases that suppress the REGISTRATION match. Without
+    // this guard, "no registration required" matches REGISTRATION's
+    // "registration required" substring (multi-word phrases use plain
+    // `str::contains`) and is classified as RegistrationRequired instead of
+    // Open. The negation only suppresses REGISTRATION — PAYWALLED and LOGIN
+    // still win when present, since "no registration required, subscription
+    // needed" is still paywalled.
+    const REGISTRATION_NEGATIONS: &[&str] = &[
+        "no registration required",
+        "no registration needed",
+        "registration not required",
+        "registration not necessary",
+        "no sign up required",
+        "no sign up needed",
+        "sign up not required",
+    ];
+
+    let registration_negated = REGISTRATION_NEGATIONS
+        .iter()
+        .any(|m| contains_phrase(&text, m));
 
     if PAYWALLED.iter().any(|m| contains_phrase(&text, m)) {
         return PublicAccess::Paywalled;
@@ -585,10 +605,15 @@ pub fn classify_access(document: &Html) -> PublicAccess {
     if LOGIN.iter().any(|m| contains_phrase(&text, m)) {
         return PublicAccess::InstitutionLogin;
     }
-    if REGISTRATION.iter().any(|m| contains_phrase(&text, m)) {
+    if !registration_negated && REGISTRATION.iter().any(|m| contains_phrase(&text, m)) {
         return PublicAccess::RegistrationRequired;
     }
     if OPEN.iter().any(|m| contains_phrase(&text, m)) {
+        return PublicAccess::Open;
+    }
+    // A registration negation by itself explicitly signals open access even
+    // when no other OPEN keyword is present (e.g. "registration not required").
+    if registration_negated {
         return PublicAccess::Open;
     }
     PublicAccess::Unknown
@@ -991,6 +1016,35 @@ mod tests {
     #[test]
     fn access_login_over_registration() {
         let html = "<html><body>Please register. SSO login required.</body></html>";
+        assert_eq!(classify_access(&doc(html)), PublicAccess::InstitutionLogin);
+    }
+
+    // R9-M03: "no registration required" must NOT be classified as
+    // RegistrationRequired (it contains the substring "registration required"
+    // but the negation guard suppresses the REGISTRATION match).
+    #[test]
+    fn access_no_registration_required_is_open() {
+        let html = "<html><body>No registration required. All welcome.</body></html>";
+        assert_eq!(classify_access(&doc(html)), PublicAccess::Open);
+    }
+
+    #[test]
+    fn access_registration_not_required_is_open() {
+        let html = "<html><body>Registration not required for this event.</body></html>";
+        assert_eq!(classify_access(&doc(html)), PublicAccess::Open);
+    }
+
+    #[test]
+    fn access_no_registration_but_still_paywalled() {
+        let html =
+            "<html><body>No registration required, but subscription needed to view.</body></html>";
+        assert_eq!(classify_access(&doc(html)), PublicAccess::Paywalled);
+    }
+
+    #[test]
+    fn access_no_registration_but_still_login() {
+        let html =
+            "<html><body>No registration required, but SSO login required to access.</body></html>";
         assert_eq!(classify_access(&doc(html)), PublicAccess::InstitutionLogin);
     }
 
