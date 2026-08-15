@@ -202,6 +202,7 @@ pub async fn fetch_one(
     let mut current_url = url.clone();
     let mut last_host = url.host_str().map(|h| h.to_string());
     let mut last_port = url.port();
+    let mut last_scheme = url.scheme().to_string();
     let mut hops = 0;
     let max_hops = http_policy.redirect_limit;
     let mut retries_used: u32 = 0;
@@ -257,11 +258,17 @@ pub async fn fetch_one(
             if !matches!(new_url.scheme(), "http" | "https") {
                 return Err(FetchError::RedirectDisallowed);
             }
-            // H1: a redirect to a new host must re-check robots for that host
-            // before the next request leaves. Same-host redirects reuse the
-            // cached rules.
+            // H1: a redirect to a new origin (host, port, or scheme) must
+            // re-check robots for that origin before the next request leaves.
+            // Scheme matters because robots.txt is per-scheme (RFC 9309
+            // §2.3.1.1): http://example.org/robots.txt and
+            // https://example.org/robots.txt are separate documents. B03: a
+            // scheme-only upgrade http→https on the same host previously
+            // skipped re-check, allowing a site with strict https robots and
+            // lax http robots to bypass the https policy.
             let new_host = new_url.host_str().map(|h| h.to_string());
-            if new_host != last_host || new_url.port() != last_port {
+            let new_scheme = new_url.scheme().to_string();
+            if new_host != last_host || new_url.port() != last_port || new_scheme != last_scheme {
                 check_robots(
                     client,
                     &new_url,
@@ -273,6 +280,7 @@ pub async fn fetch_one(
                 .await?;
                 last_host = new_host;
                 last_port = new_url.port();
+                last_scheme = new_scheme;
             }
             current_url = new_url;
             continue;
