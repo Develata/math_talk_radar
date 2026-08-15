@@ -197,10 +197,18 @@ pub async fn run_scan(args: ScanArgs) -> Result<ScanOutput, CliError> {
                 // signals and corrupt the first_seen timeline.
                 Err(e) => return Err(CliError::state(format!("state store_scan failed: {e}"))),
             },
-            // Could not even open the DB (missing dir, permission denied,
-            // schema mismatch from a future version). Degrade to no-state
-            // with a warning — this is an environment issue, not a write
-            // failure, and the scan output is still useful.
+            // H02: when the user explicitly passed --state <path>, an open
+            // failure (permission denied, missing parent dir, schema mismatch)
+            // is a state-fatal error (§32 exit 5), not a silent degrade. The
+            // explicit path signals that state is required for this run.
+            // Only the default-derived path (no --state) degrades to no-state
+            // with a warning — there the user did not express a dependency.
+            Err(e) if args.state.is_some() => {
+                return Err(CliError::state(format!(
+                    "could not open state repository at {}: {e}",
+                    args.state.as_ref().unwrap().display()
+                )));
+            }
             Err(e) => {
                 eprintln!(
                     "warning: could not open state repository: {e}; continuing without state"
