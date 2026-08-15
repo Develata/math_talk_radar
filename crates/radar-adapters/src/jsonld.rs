@@ -123,7 +123,7 @@ impl SourceAdapter for JsonLdAdapter {
                         description = ev
                             .get("description")
                             .and_then(|v| v.as_str())
-                            .map(|s| s.to_string());
+                            .map(helpers::strip_html_to_text);
                     }
                     if location.is_none() {
                         location = ev.get("location").and_then(extract_location);
@@ -738,6 +738,35 @@ mod tests {
             candidate.event.description.as_deref(),
             Some("Seminar TWO description"),
             "stub for s2 must get s2's description, not s1's"
+        );
+    }
+
+    // R9-M04: JSON-LD description with raw HTML must be stripped to plain
+    // text so downstream JSON consumers do not render unintended markup.
+    #[test]
+    fn enrich_strips_html_from_jsonld_description() {
+        let html = r#"<script type="application/ld+json">
+        {"@type":"Event","name":"Conf H","url":"https://example.com/h",
+         "description":"<p>A <b>great</b> <a href=\"https://x.com\">conference</a> on algebra</p>"}
+        </script>"#;
+        let doc = make_doc(html);
+        let spec = make_spec();
+        let stubs = JsonLdAdapter.discover(&doc, &spec).unwrap();
+        let candidate = JsonLdAdapter
+            .enrich(
+                stubs.into_iter().next().unwrap(),
+                std::slice::from_ref(&doc),
+                &spec,
+            )
+            .unwrap();
+        let desc = candidate.event.description.as_deref().expect("description");
+        assert!(
+            !desc.contains('<'),
+            "description must not contain HTML tags, got: {desc}"
+        );
+        assert!(
+            desc.contains("great") && desc.contains("conference") && desc.contains("algebra"),
+            "description text must be preserved, got: {desc}"
         );
     }
 }

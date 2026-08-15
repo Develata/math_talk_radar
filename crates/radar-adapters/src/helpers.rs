@@ -204,6 +204,24 @@ pub(crate) fn clean_text(text: &str) -> String {
     result
 }
 
+/// M04: strip HTML tags from a string, returning plain text with normalized
+/// whitespace. JSON-LD `description` fields often contain raw HTML
+/// (`<p>...</p>`, `<a href=...>`, `<script>`) which must not be passed
+/// through to the JSON output verbatim — downstream consumers render the
+/// description as text, and raw HTML would either render unintentionally
+/// or inject markup. Parses with `scraper` and collects text nodes, then
+/// collapses whitespace via `clean_text`. Returns the input unchanged
+/// (after whitespace normalization) when it contains no `<` — the common
+/// case for plain-text descriptions — so the parse cost is avoided.
+pub fn strip_html_to_text(html: &str) -> String {
+    if !html.contains('<') {
+        return clean_text(html);
+    }
+    let fragment = Html::parse_fragment(html);
+    let text: String = fragment.root_element().text().collect();
+    clean_text(&text)
+}
+
 // ===========================================================================
 // detect_media
 // ===========================================================================
