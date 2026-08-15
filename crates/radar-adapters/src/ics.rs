@@ -6,9 +6,9 @@
 //! parser. The guard tracks actual BEGIN/END nesting depth (not flat component
 //! count) so legitimate calendars with many flat VEVENTs are not rejected.
 use radar_core::{
-    AccessInfo, AdapterError, Event, EventCandidate, EventDate, EventStatus, EventStub, FetchPlan,
-    FetchedDocument, Location, OnlineAvailability, PublicAccess, ScoreComponents, SourceAdapter,
-    SourceEvidence, SourceSpec, event_id,
+    AccessInfo, AdapterError, DateTimeOrDate, Event, EventCandidate, EventDate, EventStatus,
+    EventStub, FetchPlan, FetchedDocument, Location, OnlineAvailability, PublicAccess,
+    ScoreComponents, SourceAdapter, SourceEvidence, SourceSpec, event_id,
 };
 use url::Url;
 
@@ -29,7 +29,13 @@ impl SourceAdapter for IcsAdapter {
         document: &FetchedDocument,
         source: &SourceSpec,
     ) -> Result<Vec<EventStub>, AdapterError> {
-        let depth = max_nesting_depth(&document.body);
+        let text = crate::helpers::doc_body(&document.body);
+        // B04: unfold before the depth guard so a folded `BEGIN:\n VCALENDAR`
+        // is seen as `BEGIN:VCALENDAR`. The icalendar parser unfolds internally,
+        // so the guard must too — otherwise a folded deeply-nested payload
+        // bypasses the guard while the parser still recurses into it.
+        let unfolded = icalendar::parser::unfold(&text);
+        let depth = max_nesting_depth(&unfolded);
         if depth > MAX_NESTING_DEPTH {
             return Err(AdapterError::Parse {
                 source_id: source.id.clone(),
@@ -37,8 +43,6 @@ impl SourceAdapter for IcsAdapter {
             });
         }
 
-        let text = crate::helpers::doc_body(&document.body);
-        let unfolded = icalendar::parser::unfold(&text);
         let calendar =
             icalendar::parser::read_calendar(&unfolded).map_err(|e| AdapterError::Parse {
                 source_id: source.id.clone(),
@@ -59,6 +63,19 @@ impl SourceAdapter for IcsAdapter {
             let dtstart = component
                 .find_prop("DTSTART")
                 .map(|p| p.val.as_str().to_string());
+            // H06: UID is the RFC 5545 canonical stable identifier for a
+            // VEVENT. Propagate it as native_id so change detection can track
+            // the same event across title/URL edits without spurious
+            // cancel+add noise.
+            let uid = component
+                .find_prop("UID")
+                .map(|p| p.val.as_str().to_string());
+            let dtend = component
+                .find_prop("DTEND")
+                .map(|p| p.val.as_str().to_string());
+            let duration = component
+                .find_prop("DURATION")
+                .map(|p| p.val.as_str().to_string());
 
             let Some(title) = title else { continue };
             let Some(url_str) = url_str else { continue };
@@ -69,7 +86,8 @@ impl SourceAdapter for IcsAdapter {
                 continue;
             };
 
-            let date_hint = dtstart.as_deref().and_then(parse_ics_dtstart);
+            let date_hint =
+                parse_ics_date_range(dtstart.as_deref(), dtend.as_deref(), duration.as_deref());
 
             stubs.push(EventStub {
                 title,
@@ -80,7 +98,7 @@ impl SourceAdapter for IcsAdapter {
                     source_url: document.url.clone(),
                     evidence: Some("ics".into()),
                     captured_at: Some(document.fetched_at),
-                    native_id: None,
+                    native_id: uid,
                 },
             });
         }
@@ -164,8 +182,12 @@ impl SourceAdapter for IcsAdapter {
 /// Used by the §67 depth guard: flat calendars with many VEVENTs have depth 2
 /// (VCALENDAR > VEVENT), while a malicious deeply nested payload has depth
 /// proportional to the nesting.
-fn max_nesting_depth(body: &[u8]) -> usize {
-    let text = crate::helpers::doc_body(body);
+///
+/// B04: must operate on *unfolded* text. RFC 5545 line folding can split
+/// `BEGIN:VCALENDAR` across two lines (`BEGIN:\r\n VCALENDAR`), which the raw
+/// line scanner would miss — allowing a folded deeply-nested payload to bypass
+/// the guard while the parser (which unfolds first) still recurses into it.
+fn max_nesting_depth(text: &str) -> usize {
     let mut depth: usize = 0;
     let mut max_depth: usize = 0;
     for line in text.lines() {
@@ -209,6 +231,79 @@ fn parse_ics_dtstart(value: &str) -> Option<EventDate> {
     let mut ed = radar_core::date::parse_date(&iso).ok()?;
     ed.original_text = value.to_string();
     Some(ed)
+}
+
+/// H06: parse DTSTART plus optional DTEND or DURATION into a complete
+/// [`EventDate`] with both `start` and `end` populated. Multi-day conferences
+/// previously lost their end date because only DTSTART was read.
+///
+/// DTEND is preferred over DURATION per RFC 5545 §3.6.1 (they are mutually
+/// exclusive in a VEVENT). At date precision (this parser drops time/timezone),
+/// sub-day DURATION components (PT2H etc.) produce `end == start`.
+fn parse_ics_date_range(
+    dtstart: Option<&str>,
+    dtend: Option<&str>,
+    duration: Option<&str>,
+) -> Option<EventDate> {
+    let dtstart_val = dtstart?;
+    let mut ed = parse_ics_dtstart(dtstart_val)?;
+
+    if let Some(dtend_val) = dtend
+        && let Some(end_ed) = parse_ics_dtstart(dtend_val)
+    {
+        ed.end = end_ed.start;
+        ed.original_text = format!("{dtstart_val}/{dtend_val}");
+    } else if let Some(dur_val) = duration
+        && let Some(days) = parse_ics_duration_days(dur_val)
+        && let Some(start_date) = ed.start_date()
+    {
+        let end_date = start_date + chrono::Duration::days(days);
+        ed.end = Some(DateTimeOrDate::Date(end_date));
+        ed.original_text = format!("{dtstart_val}/{dur_val}");
+    }
+
+    Some(ed)
+}
+
+/// Parse the day-precision component of an RFC 5545 DURATION value
+/// (`PnWnDTnHnMnS`). Returns total days (weeks converted to days). Sub-day
+/// components (T...) produce 0 — the end date equals the start date at date
+/// precision. Returns `None` for unparseable values.
+fn parse_ics_duration_days(value: &str) -> Option<i64> {
+    let s = value.strip_prefix(['+', '-']).unwrap_or(value);
+    if !s.starts_with('P') {
+        return None;
+    }
+    let s = &s[1..];
+    let (date_part, has_time) = match s.split_once('T') {
+        Some((d, _)) => (d, true),
+        None => (s, false),
+    };
+
+    let mut days: i64 = 0;
+    let mut found_date_component = false;
+    let mut num = String::new();
+    for ch in date_part.chars() {
+        if ch.is_ascii_digit() {
+            num.push(ch);
+        } else if ch == 'W' {
+            days += num.parse::<i64>().ok()? * 7;
+            num.clear();
+            found_date_component = true;
+        } else if ch == 'D' {
+            days += num.parse::<i64>().ok()?;
+            num.clear();
+            found_date_component = true;
+        } else {
+            num.clear();
+        }
+    }
+
+    if found_date_component || has_time {
+        Some(days)
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]
@@ -492,23 +587,25 @@ END:VCALENDAR
 
     #[test]
     fn max_nesting_depth_cases() {
-        assert_eq!(max_nesting_depth(b"BEGIN:VCALENDAR\nEND:VCALENDAR\n"), 1);
+        assert_eq!(max_nesting_depth("BEGIN:VCALENDAR\nEND:VCALENDAR\n"), 1);
         assert_eq!(
-            max_nesting_depth(b"BEGIN:VCALENDAR\nBEGIN:VEVENT\nEND:VEVENT\nEND:VCALENDAR\n"),
+            max_nesting_depth("BEGIN:VCALENDAR\nBEGIN:VEVENT\nEND:VEVENT\nEND:VCALENDAR\n"),
             2
         );
         assert_eq!(
-            max_nesting_depth(b"BEGIN:VCALENDAR\nBEGIN:VEVENT\nBEGIN:VALARM\nEND:VALARM\nEND:VEVENT\nEND:VCALENDAR\n"),
+            max_nesting_depth(
+                "BEGIN:VCALENDAR\nBEGIN:VEVENT\nBEGIN:VALARM\nEND:VALARM\nEND:VEVENT\nEND:VCALENDAR\n"
+            ),
             3
         );
-        assert_eq!(max_nesting_depth(b"begin:vcalendar\n"), 1);
-        assert_eq!(max_nesting_depth(b"Begin:VCALENDAR\n"), 1);
-        assert_eq!(max_nesting_depth(b"X-FOO:bar\n"), 0);
-        assert_eq!(max_nesting_depth(b""), 0);
-        assert_eq!(max_nesting_depth(b" BEGIN:foo\n"), 0);
+        assert_eq!(max_nesting_depth("begin:vcalendar\n"), 1);
+        assert_eq!(max_nesting_depth("Begin:VCALENDAR\n"), 1);
+        assert_eq!(max_nesting_depth("X-FOO:bar\n"), 0);
+        assert_eq!(max_nesting_depth(""), 0);
+        assert_eq!(max_nesting_depth(" BEGIN:foo\n"), 0);
         // Many flat VEVENTs → depth 2, not 33.
         let flat =
-            b"BEGIN:VCALENDAR\nBEGIN:VEVENT\nEND:VEVENT\nBEGIN:VEVENT\nEND:VEVENT\nEND:VCALENDAR\n";
+            "BEGIN:VCALENDAR\nBEGIN:VEVENT\nEND:VEVENT\nBEGIN:VEVENT\nEND:VEVENT\nEND:VCALENDAR\n";
         assert_eq!(max_nesting_depth(flat), 2);
     }
 
@@ -519,5 +616,180 @@ END:VCALENDAR
         assert!(parse_ics_dtstart("20260808T120000").is_some());
         assert!(parse_ics_dtstart("short").is_none());
         assert!(parse_ics_dtstart("XXXXXXXX").is_none());
+    }
+
+    // R9-B04: a folded `BEGIN:\n VCALENDAR` must be seen as
+    // `BEGIN:VCALENDAR` by the depth guard after unfold. Without the fix the
+    // raw line scanner misses the folded BEGIN and the guard undercounts
+    // depth, letting a deeply-nested folded payload through.
+    #[test]
+    fn max_nesting_depth_counts_folded_begin_after_unfold() {
+        // RFC 5545 fold: CRLF + space + continuation. icalendar::unfold joins
+        // `BEGIN:` + ` VCALENDAR` → `BEGIN:VCALENDAR`.
+        let folded_one = "BEGIN:\r\n VCALENDAR\r\nEND:VCALENDAR\r\n";
+        let unfolded = icalendar::parser::unfold(folded_one);
+        assert_eq!(max_nesting_depth(&unfolded), 1);
+    }
+
+    // R9-B04: a folded deeply-nested payload must be rejected by the depth
+    // guard, not silently accepted because the raw lines did not match
+    // `BEGIN:`.
+    #[test]
+    fn discover_depth_guard_rejects_folded_deep_nesting() {
+        let mut body = String::new();
+        for _ in 0..33 {
+            body.push_str("BEGIN:\r\n VCALENDAR\r\n");
+        }
+        for _ in 0..33 {
+            body.push_str("END:VCALENDAR\r\n");
+        }
+        let doc = make_doc(body.as_bytes());
+        let source = make_source();
+        let result = IcsAdapter.discover(&doc, &source);
+        assert!(
+            matches!(result, Err(AdapterError::Parse { .. })),
+            "folded deep nesting must be rejected after unfold"
+        );
+    }
+
+    // R9-H06: UID must propagate as native_id so change detection tracks the
+    // same event across title/URL edits.
+    #[test]
+    fn discover_propagates_uid_as_native_id() {
+        let ics = "\
+BEGIN:VCALENDAR
+VERSION:2.0
+BEGIN:VEVENT
+UID:abc-123@calendar.example
+SUMMARY:Conference on Algebra
+URL:https://example.com/event1
+DTSTART:20260808
+END:VEVENT
+END:VCALENDAR
+";
+        let doc = make_doc(ics.as_bytes());
+        let source = make_source();
+        let stubs = IcsAdapter.discover(&doc, &source).expect("parse ok");
+        assert_eq!(stubs.len(), 1);
+        assert_eq!(
+            stubs[0].source.native_id.as_deref(),
+            Some("abc-123@calendar.example")
+        );
+    }
+
+    // R9-H06: an event without UID must leave native_id None (graceful
+    // degradation, not a hard error).
+    #[test]
+    fn discover_without_uid_has_none_native_id() {
+        let ics = "\
+BEGIN:VCALENDAR
+VERSION:2.0
+BEGIN:VEVENT
+SUMMARY:No UID Event
+URL:https://example.com/event1
+DTSTART:20260808
+END:VEVENT
+END:VCALENDAR
+";
+        let doc = make_doc(ics.as_bytes());
+        let source = make_source();
+        let stubs = IcsAdapter.discover(&doc, &source).expect("parse ok");
+        assert_eq!(stubs.len(), 1);
+        assert!(stubs[0].source.native_id.is_none());
+    }
+
+    // R9-H06: DTEND must populate the end date for multi-day conferences.
+    #[test]
+    fn discover_dtend_populates_end_date() {
+        let ics = "\
+BEGIN:VCALENDAR
+VERSION:2.0
+BEGIN:VEVENT
+UID:conf-1
+SUMMARY:Multi-day Conference
+URL:https://example.com/conf1
+DTSTART:20260808
+DTEND:20260812
+END:VEVENT
+END:VCALENDAR
+";
+        let doc = make_doc(ics.as_bytes());
+        let source = make_source();
+        let stubs = IcsAdapter.discover(&doc, &source).expect("parse ok");
+        assert_eq!(stubs.len(), 1);
+        let dh = stubs[0].date_hint.as_ref().expect("date hint present");
+        assert!(dh.start.is_some());
+        assert!(dh.end.is_some(), "DTEND must populate end date");
+    }
+
+    // R9-H06: DURATION must populate the end date when DTEND is absent.
+    #[test]
+    fn discover_duration_populates_end_date() {
+        let ics = "\
+BEGIN:VCALENDAR
+VERSION:2.0
+BEGIN:VEVENT
+UID:conf-2
+SUMMARY:Three-day Workshop
+URL:https://example.com/conf2
+DTSTART:20260810
+DURATION:P3D
+END:VEVENT
+END:VCALENDAR
+";
+        let doc = make_doc(ics.as_bytes());
+        let source = make_source();
+        let stubs = IcsAdapter.discover(&doc, &source).expect("parse ok");
+        assert_eq!(stubs.len(), 1);
+        let dh = stubs[0].date_hint.as_ref().expect("date hint present");
+        assert!(dh.end.is_some(), "DURATION must populate end date");
+    }
+
+    // R9-H06: DTEND takes precedence over DURATION per RFC 5545 §3.6.1.
+    #[test]
+    fn discover_dtend_preferred_over_duration() {
+        let ics = "\
+BEGIN:VCALENDAR
+VERSION:2.0
+BEGIN:VEVENT
+UID:conf-3
+SUMMARY:Precedence Test
+URL:https://example.com/conf3
+DTSTART:20260808
+DTEND:20260809
+DURATION:P5D
+END:VEVENT
+END:VCALENDAR
+";
+        let doc = make_doc(ics.as_bytes());
+        let source = make_source();
+        let stubs = IcsAdapter.discover(&doc, &source).expect("parse ok");
+        let dh = stubs[0].date_hint.as_ref().expect("date hint present");
+        // DTEND (2026-08-09) wins; end is 1 day after start, not 5.
+        let start = dh.start_date().expect("start present");
+        let end = dh
+            .end
+            .as_ref()
+            .and_then(|e| match e {
+                DateTimeOrDate::Date(d) => Some(*d),
+                DateTimeOrDate::DateTime(_) => None,
+            })
+            .expect("end present as Date");
+        assert_eq!(end, start + chrono::Duration::days(1));
+    }
+
+    #[test]
+    fn parse_ics_duration_days_variants() {
+        assert_eq!(parse_ics_duration_days("P1D"), Some(1));
+        assert_eq!(parse_ics_duration_days("P3D"), Some(3));
+        assert_eq!(parse_ics_duration_days("P1W"), Some(7));
+        assert_eq!(parse_ics_duration_days("P2W"), Some(14));
+        assert_eq!(parse_ics_duration_days("P1W2D"), Some(9));
+        assert_eq!(parse_ics_duration_days("PT2H"), Some(0));
+        assert_eq!(parse_ics_duration_days("P1DT2H"), Some(1));
+        assert_eq!(parse_ics_duration_days("P"), None);
+        assert_eq!(parse_ics_duration_days("X1D"), None);
+        assert_eq!(parse_ics_duration_days("+P1D"), Some(1));
+        assert_eq!(parse_ics_duration_days("-P1D"), Some(1));
     }
 }
