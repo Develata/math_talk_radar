@@ -52,12 +52,23 @@ async fn fetch_robots_txt(
     http_policy: &HttpPolicy,
     allowed_hosts: &[String],
     deadline: Option<Instant>,
+    budget: &mut RequestBudget,
 ) -> Result<RobotsRules, FetchError> {
     if past_deadline(deadline) {
         return Err(FetchError::Timeout);
     }
     let mut current = start_url;
     for _ in 0..=http_policy.redirect_limit {
+        if past_deadline(deadline) {
+            return Err(FetchError::Timeout);
+        }
+        // H01: robots.txt fetches must consume budget and acquire the
+        // per-host permit like any other request — otherwise the request
+        // count is unbounded and per-host concurrency is not respected.
+        if !budget.try_consume() {
+            return Err(FetchError::BudgetExhausted);
+        }
+        let _host_permit = client.acquire_host_permit(&current).await;
         let timeout = remaining_time(deadline, http_policy.request_timeout);
         if timeout.is_zero() {
             return Err(FetchError::Timeout);
@@ -136,6 +147,7 @@ async fn check_robots(
     allowed_hosts: &[String],
     robots: &RobotsCache,
     deadline: Option<Instant>,
+    budget: &mut RequestBudget,
 ) -> Result<(), FetchError> {
     let owned_url = url.clone();
     let client_clone = client.clone();
@@ -150,7 +162,7 @@ async fn check_robots(
     let rules = robots
         .get_or_init(url, &allowlist_key, move || async move {
             match robots_url_for(&owned_url) {
-                Some(ru) => fetch_robots_txt(&client_clone, ru, &hp, &ah, deadline).await,
+                Some(ru) => fetch_robots_txt(&client_clone, ru, &hp, &ah, deadline, budget).await,
                 None => Ok(RobotsRules::default()),
             }
         })
@@ -174,9 +186,6 @@ pub async fn fetch_one(
     if past_deadline(deadline) {
         return Err(FetchError::Timeout);
     }
-    if !budget.try_consume() {
-        return Err(FetchError::BudgetExhausted);
-    }
 
     // §16: verify the initial URL host before any request leaves.
     if !policy.is_host_allowed(url) {
@@ -192,6 +201,7 @@ pub async fn fetch_one(
         &policy.allowed_hosts,
         robots,
         deadline,
+        budget,
     )
     .await?;
 
@@ -213,6 +223,12 @@ pub async fn fetch_one(
         // the await ensures the send uses a fresh timeout.
         if past_deadline(deadline) {
             return Err(FetchError::Timeout);
+        }
+        // H01: every HTTP request — initial, redirect hop, and retry —
+        // consumes budget. Without this, redirect/retry chains exceed the
+        // configured request_budget.
+        if !budget.try_consume() {
+            return Err(FetchError::BudgetExhausted);
         }
         let _host_permit = client.acquire_host_permit(&current_url).await;
         let timeout = remaining_time(deadline, http_policy.request_timeout);
@@ -276,6 +292,7 @@ pub async fn fetch_one(
                     &policy.allowed_hosts,
                     robots,
                     deadline,
+                    budget,
                 )
                 .await?;
                 last_host = new_host;
