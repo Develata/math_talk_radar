@@ -120,6 +120,63 @@ pub fn temp_dir_for_binary(binary: &Path) -> PathBuf {
     parent.join(name)
 }
 
+/// R9-B07: reject any path that contains a symlink in its components. The
+/// previous `safe_canonicalize` validated the canonical target but then
+/// deleted it — if the app dir was a symlink to an unprotected dir, the
+/// canonical target was deleted. This walker checks every component of the
+/// *un-resolved* path using `symlink_metadata` (which does not follow the
+/// final symlink), so a symlink anywhere in the path is detected before
+/// canonicalization. Only absolute paths are supported; relative paths are
+/// rejected (deletion should only ever target resolved absolute paths).
+///
+/// The walk stops at `/` (or the first component that does not exist,
+/// which is safe — a non-existent path cannot be a symlink). Each existing
+/// component is checked with `symlink_metadata`; if `is_symlink()` is true,
+/// the path is rejected.
+pub fn reject_symlink_in_components(path: &Path) -> Result<(), String> {
+    if !path.is_absolute() {
+        return Err(format!(
+            "refusing to operate on relative path (require absolute): {}",
+            path.display()
+        ));
+    }
+    let mut current = PathBuf::new();
+    for component in path.components() {
+        use std::path::Component;
+        match component {
+            Component::RootDir => {
+                current.push("/");
+                continue;
+            }
+            Component::Normal(part) => {
+                current.push(part);
+            }
+            Component::CurDir | Component::ParentDir => {
+                return Err(format!(
+                    "refusing to operate on path with . or .. components: {}",
+                    path.display()
+                ));
+            }
+            Component::Prefix(_) => {
+                return Err(format!(
+                    "refusing to operate on Windows-style path: {}",
+                    path.display()
+                ));
+            }
+        }
+        if let Ok(meta) = std::fs::symlink_metadata(&current)
+            && meta.is_symlink()
+        {
+            return Err(format!(
+                "refusing to operate on path with symlink component: {} -> (symlink at {})",
+                path.display(),
+                current.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Canonicalize and validate a path is safe to delete. Rejects empty, `/`,
 /// the user's home directory, and paths inside protected system/user
 /// directories (§35 "deletes only known app-owned paths"). The protected
@@ -403,5 +460,76 @@ mod tests {
             .is_ok(),
             "nonexistent dirs are skipped, not treated as overlapping"
         );
+    }
+
+    // R9-B07: a relative path must be rejected outright.
+    #[test]
+    fn reject_symlink_in_components_rejects_relative() {
+        let err = reject_symlink_in_components(Path::new("relative/path/file"));
+        assert!(err.is_err());
+        assert!(err.unwrap_err().contains("relative"));
+    }
+
+    // R9-B07: a path with `..` components must be rejected (would escape the
+    // caller's intended directory).
+    #[test]
+    fn reject_symlink_in_components_rejects_parent_dir() {
+        let err = reject_symlink_in_components(Path::new("/a/../b/c"));
+        assert!(err.is_err());
+        assert!(err.unwrap_err().contains(".."));
+    }
+
+    // R9-B07: a leaf symlink must be rejected. The caller must operate on the
+    // real file, not whatever the symlink points at.
+    #[cfg(unix)]
+    #[test]
+    fn reject_symlink_in_components_rejects_leaf_symlink() {
+        use std::os::unix::fs::symlink;
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let target = tmp.path().join("target");
+        std::fs::write(&target, b"body").expect("write target");
+        let link = tmp.path().join("link");
+        symlink(&target, &link).expect("symlink");
+        let err = reject_symlink_in_components(&link);
+        assert!(err.is_err(), "leaf symlink must be rejected");
+        let msg = err.unwrap_err();
+        assert!(msg.contains("symlink"), "msg: {msg}");
+    }
+
+    // R9-B07: a mid-path symlink (a symlink in a non-leaf component) must be
+    // rejected. Without this check, an attacker could plant a symlink on a
+    // parent directory component to redirect the resolved path.
+    #[cfg(unix)]
+    #[test]
+    fn reject_symlink_in_components_rejects_midpath_symlink() {
+        use std::os::unix::fs::symlink;
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let real_dir = tmp.path().join("real");
+        std::fs::create_dir_all(&real_dir).expect("mkdir real");
+        let link_dir = tmp.path().join("linkdir");
+        symlink(&real_dir, &link_dir).expect("symlink midpath");
+        let target = link_dir.join("file");
+        let err = reject_symlink_in_components(&target);
+        assert!(err.is_err(), "midpath symlink must be rejected");
+        assert!(err.unwrap_err().contains("symlink"));
+    }
+
+    // R9-B07: a clean path with no symlinks anywhere in its components must
+    // pass.
+    #[cfg(unix)]
+    #[test]
+    fn reject_symlink_in_components_accepts_clean_path() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let real = tmp.path().join("a/b/c");
+        std::fs::create_dir_all(&real).expect("mkdir");
+        assert!(reject_symlink_in_components(&real).is_ok());
+    }
+
+    // R9-B07: a path that doesn't exist yet (some components missing) must
+    // pass — missing components cannot be symlinks.
+    #[test]
+    fn reject_symlink_in_components_accepts_nonexistent_leaf() {
+        let p = Path::new("/tmp/definitely/not/here/zzz_not_existing_12345");
+        assert!(reject_symlink_in_components(p).is_ok());
     }
 }

@@ -87,6 +87,17 @@ pub async fn run(args: UninstallArgs) -> Result<String, CliError> {
             if name.starts_with(".math_talk_radar.update.")
                 || name.starts_with(".math_talk_radar.rollback")
             {
+                // R9-H12: skip symlink siblings. A symlink named
+                // .math_talk_radar.rollback → /etc would otherwise be
+                // canonicalized+deleted by delete_path. reject_symlink_in_components
+                // in delete_path also guards this, but skipping here keeps
+                // the dry-run plan honest (it won't list a symlink sibling
+                // as a deletion target).
+                if let Ok(meta) = std::fs::symlink_metadata(entry.path())
+                    && meta.is_symlink()
+                {
+                    continue;
+                }
                 to_delete.push((entry.path(), false));
             }
         }
@@ -133,7 +144,14 @@ pub async fn run(args: UninstallArgs) -> Result<String, CliError> {
 /// location. The `is_binary`/`is_dir` checks use `symlink_metadata` on the
 /// canonical path (which never follows symlinks) so the file-type decision
 /// matches the path being deleted.
+///
+/// R9-B07: before canonicalizing, reject any symlink in the path's
+/// components. Without this, if the app dir itself was a symlink to an
+/// unprotected dir, canonicalize would resolve to the target and
+/// remove_dir_all would delete it. The component walker catches symlinks
+/// before resolution.
 fn delete_path(path: &Path, is_binary: bool) -> Result<(), CliError> {
+    paths::reject_symlink_in_components(path).map_err(CliError::uninstall)?;
     let canonical = paths::safe_canonicalize(path).map_err(CliError::uninstall)?;
     let meta = std::fs::symlink_metadata(&canonical)
         .map_err(|e| CliError::uninstall(format!("stat {}: {e}", canonical.display())))?;

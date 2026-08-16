@@ -568,3 +568,55 @@ fn r9_h12_uninstall_refuses_while_update_lock_held() {
         "config dir must NOT be deleted while lock is held"
     );
 }
+
+// R9-B07 / R9-H12: uninstall must NOT follow a symlink sibling planted
+// alongside the binary. The prefix-based sibling-deletion loop scans the
+// binary's parent for `.math_talk_radar.update.*` and `.math_talk_radar.rollback*`
+// names; a symlink with that name pointing outside the directory must be
+// skipped (not canonicalized-and-deleted). The sentinel the symlink targets
+// must remain untouched.
+#[cfg(unix)]
+#[test]
+fn r9_b07_uninstall_skips_symlink_sibling() {
+    use std::os::unix::fs::symlink;
+    let sandbox = Sandbox::new();
+    let binary = sandbox.setup_full(VALID_SCRIPT);
+
+    // Plant a symlink sibling named like a retained rollback (M07 retention
+    // leaves `.math_talk_radar.rollback` after a prior update). Point it at
+    // a sentinel file outside the binary's parent dir.
+    let sentinel_dir = tempfile::tempdir().expect("sentinel dir");
+    let sentinel = sentinel_dir.path().join("sentinel.txt");
+    std::fs::write(&sentinel, b"SENTINEL-UNINSTALL").expect("write sentinel");
+    let rollback_link = binary
+        .parent()
+        .expect("binary has parent")
+        .join(".math_talk_radar.rollback");
+    symlink(&sentinel, &rollback_link).expect("plant symlink sibling");
+
+    let mut cmd = bin();
+    sandbox.set_env(&mut cmd);
+    cmd.args(["uninstall", "--purge", "--yes"])
+        .assert()
+        .success();
+
+    // The symlink sibling must NOT be deleted (it was skipped, not followed).
+    let meta = std::fs::symlink_metadata(&rollback_link);
+    assert!(
+        meta.is_ok(),
+        "symlink sibling must NOT be deleted by uninstall: {:?}",
+        meta.err()
+    );
+    assert!(
+        meta.unwrap().is_symlink(),
+        "sibling must still be a symlink (not its target)"
+    );
+    // The sentinel must be untouched.
+    let sentinel_after = std::fs::read(&sentinel).expect("read sentinel");
+    assert_eq!(
+        sentinel_after, b"SENTINEL-UNINSTALL",
+        "symlink target must NOT be followed/deleted by uninstall"
+    );
+    // The binary itself must be deleted (uninstall proceeded past the symlink).
+    assert!(!binary.exists(), "binary must still be deleted");
+}
