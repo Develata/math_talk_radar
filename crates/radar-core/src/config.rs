@@ -18,6 +18,18 @@ pub enum ConfigError {
     MissingSelectors(String),
     #[error("source '{0}': selectors.{1} must be a non-empty string")]
     EmptySelector(String, &'static str),
+    #[error("source '{0}': {1} must be a non-empty string")]
+    EmptyField(String, &'static str),
+    #[error("source '{0}': enabled source requires an entrypoint URL")]
+    MissingEntrypoint(String),
+    #[error("source '{0}': entrypoint must be http or https, got '{1}'")]
+    InvalidEntrypointScheme(String, String),
+    #[error("source '{0}': allowed_hosts contains an empty string")]
+    EmptyAllowedHost(String),
+    #[error("source '{0}': max_depth must be >= 1, got {1}")]
+    InvalidMaxDepth(String, u8),
+    #[error("source '{0}': request_budget must be >= 1, got {1}")]
+    InvalidRequestBudget(String, u32),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
@@ -70,6 +82,7 @@ pub enum AdapterKind {
 /// back to the link's own text — preserving the original contract. Per §7 /
 /// §64, adding optional fields is schema-compatible in v0.x.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct HtmlSelectors {
     pub list: String,
     pub list_link: String,
@@ -97,6 +110,7 @@ pub struct HtmlSelectors {
 /// A source entry loaded from `config/sources.toml` (§17). Adapters and the
 /// fetch coordinator consume this; it is the source registry's runtime shape.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SourceSpec {
     pub id: String,
     pub name: String,
@@ -171,12 +185,49 @@ impl SourcesConfig {
     /// enforce. Call after `parse` (or `embedded`) to fail fast at load time
     /// with a precise message instead of a late runtime failure mid-scan.
     /// Checks: (1) source IDs are unique, (2) `HtmlConfig` sources carry a
-    /// `[selectors]` table with all four required fields non-empty.
+    /// `[selectors]` table with all four required fields non-empty, (3) id
+    /// and name are non-empty, (4) enabled sources have an http/https
+    /// entrypoint, (5) allowed_hosts has no empty entries, (6) max_depth and
+    /// request_budget are >= 1.
     pub fn validate(&self) -> Result<(), ConfigError> {
         let mut seen_ids = std::collections::HashSet::new();
         for source in &self.sources {
             if !seen_ids.insert(source.id.as_str()) {
                 return Err(ConfigError::DuplicateSourceId(source.id.clone()));
+            }
+            if source.id.trim().is_empty() {
+                return Err(ConfigError::EmptyField(source.id.clone(), "id"));
+            }
+            if source.name.trim().is_empty() {
+                return Err(ConfigError::EmptyField(source.id.clone(), "name"));
+            }
+            if source.enabled {
+                let entrypoint = source
+                    .entrypoint
+                    .as_ref()
+                    .ok_or_else(|| ConfigError::MissingEntrypoint(source.id.clone()))?;
+                let scheme = entrypoint.scheme();
+                if scheme != "http" && scheme != "https" {
+                    return Err(ConfigError::InvalidEntrypointScheme(
+                        source.id.clone(),
+                        scheme.to_string(),
+                    ));
+                }
+            }
+            if source.allowed_hosts.iter().any(|h| h.trim().is_empty()) {
+                return Err(ConfigError::EmptyAllowedHost(source.id.clone()));
+            }
+            if source.max_depth < 1 {
+                return Err(ConfigError::InvalidMaxDepth(
+                    source.id.clone(),
+                    source.max_depth,
+                ));
+            }
+            if source.request_budget < 1 {
+                return Err(ConfigError::InvalidRequestBudget(
+                    source.id.clone(),
+                    source.request_budget,
+                ));
             }
             if source.adapter == AdapterKind::HtmlConfig {
                 let selectors = source
@@ -423,5 +474,204 @@ adapter = "rss"
         config
             .validate()
             .expect("embedded sources.toml must pass semantic validation");
+    }
+
+    // R9-M02: validate() rejects an empty id.
+    #[test]
+    fn validate_rejects_empty_id() {
+        let toml = r#"
+[[sources]]
+id = ""
+name = "Has Name"
+"#;
+        let config = super::SourcesConfig::parse(toml).expect("TOML parses");
+        let err = config.validate().expect_err("empty id must fail");
+        assert!(
+            matches!(err, super::ConfigError::EmptyField(ref id, f) if id.is_empty() && f == "id")
+        );
+    }
+
+    // R9-M02: validate() rejects a whitespace-only id (trim before check).
+    #[test]
+    fn validate_rejects_whitespace_id() {
+        let toml = r#"
+[[sources]]
+id = "   "
+name = "Has Name"
+"#;
+        let config = super::SourcesConfig::parse(toml).expect("TOML parses");
+        let err = config.validate().expect_err("whitespace id must fail");
+        assert!(matches!(err, super::ConfigError::EmptyField(_, f) if f == "id"));
+    }
+
+    // R9-M02: validate() rejects an empty name.
+    #[test]
+    fn validate_rejects_empty_name() {
+        let toml = r#"
+[[sources]]
+id = "no-name"
+name = ""
+"#;
+        let config = super::SourcesConfig::parse(toml).expect("TOML parses");
+        let err = config.validate().expect_err("empty name must fail");
+        assert!(
+            matches!(err, super::ConfigError::EmptyField(ref id, f) if id == "no-name" && f == "name")
+        );
+    }
+
+    // R9-M02: validate() rejects an enabled source without an entrypoint.
+    #[test]
+    fn validate_rejects_enabled_without_entrypoint() {
+        let toml = r#"
+[[sources]]
+id = "no-ep"
+name = "No Entrypoint"
+enabled = true
+"#;
+        let config = super::SourcesConfig::parse(toml).expect("TOML parses");
+        let err = config
+            .validate()
+            .expect_err("enabled without entrypoint must fail");
+        assert!(matches!(err, super::ConfigError::MissingEntrypoint(ref id) if id == "no-ep"));
+    }
+
+    // R9-M02: validate() accepts a disabled source without an entrypoint.
+    #[test]
+    fn validate_accepts_disabled_without_entrypoint() {
+        let toml = r#"
+[[sources]]
+id = "no-ep-disabled"
+name = "Disabled No EP"
+enabled = false
+"#;
+        let config = super::SourcesConfig::parse(toml).expect("TOML parses");
+        config
+            .validate()
+            .expect("disabled source without entrypoint must pass");
+    }
+
+    // R9-M02: validate() rejects an enabled source with a non-http(s) scheme.
+    #[test]
+    fn validate_rejects_invalid_entrypoint_scheme() {
+        let toml = r#"
+[[sources]]
+id = "ftp-src"
+name = "FTP Source"
+enabled = true
+entrypoint = "ftp://example.com/"
+"#;
+        let config = super::SourcesConfig::parse(toml).expect("TOML parses");
+        let err = config.validate().expect_err("ftp scheme must fail");
+        assert!(
+            matches!(err, super::ConfigError::InvalidEntrypointScheme(ref id, ref s) if id == "ftp-src" && s == "ftp")
+        );
+    }
+
+    // R9-M02: validate() rejects allowed_hosts containing an empty string.
+    #[test]
+    fn validate_rejects_empty_allowed_host() {
+        let toml = r#"
+[[sources]]
+id = "bad-hosts"
+name = "Bad Hosts"
+entrypoint = "https://example.com/"
+allowed_hosts = ["example.com", ""]
+"#;
+        let config = super::SourcesConfig::parse(toml).expect("TOML parses");
+        let err = config.validate().expect_err("empty allowed_host must fail");
+        assert!(matches!(err, super::ConfigError::EmptyAllowedHost(ref id) if id == "bad-hosts"));
+    }
+
+    // R9-M02: validate() rejects max_depth = 0.
+    #[test]
+    fn validate_rejects_zero_max_depth() {
+        let toml = r#"
+[[sources]]
+id = "zero-depth"
+name = "Zero Depth"
+entrypoint = "https://example.com/"
+max_depth = 0
+"#;
+        let config = super::SourcesConfig::parse(toml).expect("TOML parses");
+        let err = config.validate().expect_err("max_depth=0 must fail");
+        assert!(
+            matches!(err, super::ConfigError::InvalidMaxDepth(ref id, d) if id == "zero-depth" && d == 0)
+        );
+    }
+
+    // R9-M02: validate() rejects request_budget = 0.
+    #[test]
+    fn validate_rejects_zero_request_budget() {
+        let toml = r#"
+[[sources]]
+id = "zero-budget"
+name = "Zero Budget"
+entrypoint = "https://example.com/"
+request_budget = 0
+"#;
+        let config = super::SourcesConfig::parse(toml).expect("TOML parses");
+        let err = config.validate().expect_err("request_budget=0 must fail");
+        assert!(
+            matches!(err, super::ConfigError::InvalidRequestBudget(ref id, b) if id == "zero-budget" && b == 0)
+        );
+    }
+
+    // R9-M02: deny_unknown_fields rejects an unknown key in a source.
+    #[test]
+    fn deny_unknown_fields_rejects_unknown_source_key() {
+        let toml = r#"
+[[sources]]
+id = "bad"
+name = "Bad"
+typo_field = "oops"
+"#;
+        let result = super::SourcesConfig::parse(toml);
+        assert!(
+            result.is_err(),
+            "unknown field must fail at parse time, not silently ignored"
+        );
+    }
+
+    // R9-M02: deny_unknown_fields rejects an unknown key in [selectors].
+    #[test]
+    fn deny_unknown_fields_rejects_unknown_selector_key() {
+        let toml = r#"
+[[sources]]
+id = "bad-sel"
+name = "Bad Selectors"
+adapter = "html_config"
+
+[sources.selectors]
+list = ".e"
+list_link = "a"
+detail_title = "h1"
+detail_date = "time"
+bogus_selector = "x"
+"#;
+        let result = super::SourcesConfig::parse(toml);
+        assert!(
+            result.is_err(),
+            "unknown selector field must fail at parse time"
+        );
+    }
+
+    // R9-M02: a fully well-formed enabled source passes all checks.
+    #[test]
+    fn validate_accepts_complete_enabled_source() {
+        let toml = r#"
+[[sources]]
+id = "good-enabled"
+name = "Good Enabled"
+adapter = "rss"
+entrypoint = "https://example.com/feed"
+allowed_hosts = ["example.com"]
+max_depth = 3
+request_budget = 30
+enabled = true
+"#;
+        let config = super::SourcesConfig::parse(toml).expect("TOML parses");
+        config
+            .validate()
+            .expect("complete enabled source must pass");
     }
 }
