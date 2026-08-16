@@ -115,14 +115,26 @@ pub fn score_event(
     //    open video=25, reg-required video=18, open audio=15,
     //    slides/lecture_notes=10, else 0.
     let mut media_score: u8 = 0;
+    let mut has_open_recording = false;
     for media in &event.media {
         let s = media_signal(&media.media_type, media.public_access);
         if s > media_score {
             media_score = s;
         }
+        // R9-M01: the "public_recording_available" reason signals a genuinely
+        // public recording. Only Open-access media qualify — reg-required,
+        // paywalled, login, in-person-only, and unknown are not public.
+        if media.public_access == PublicAccess::Open
+            && matches!(
+                media.media_type,
+                MediaType::Video | MediaType::Audio | MediaType::Slides | MediaType::LectureNotes
+            )
+        {
+            has_open_recording = true;
+        }
     }
     let media = media_score.min(MAX_MEDIA);
-    if media > 0 {
+    if has_open_recording {
         rank_reasons.push("public_recording_available".to_string());
     }
 
@@ -223,13 +235,18 @@ pub fn score_event(
 fn media_signal(media_type: &MediaType, access: PublicAccess) -> u8 {
     match (media_type, access) {
         (MediaType::Video, PublicAccess::Open) => 25,
-        // R9-M01: paywalled and institution-login videos are NOT publicly
-        // accessible — awarding 18 media points (the generic non-open video
-        // score) inflates their ranking. RegistrationRequired and Unknown
-        // keep 18: registration is still arguably accessible, and Unknown
-        // means we lack evidence either way.
-        (MediaType::Video, PublicAccess::Paywalled | PublicAccess::InstitutionLogin) => 0,
-        (MediaType::Video, _) => 18,
+        // R9-M01: only Open and RegistrationRequired videos score positively.
+        // Paywalled, InstitutionLogin, InPersonOnly, and Unknown are not
+        // confirmed publicly accessible → 0 (per the docstring contract:
+        // "open video=25, reg-required video=18, ... else 0").
+        (MediaType::Video, PublicAccess::RegistrationRequired) => 18,
+        (
+            MediaType::Video,
+            PublicAccess::Paywalled
+            | PublicAccess::InstitutionLogin
+            | PublicAccess::InPersonOnly
+            | PublicAccess::Unknown,
+        ) => 0,
         (MediaType::Audio, PublicAccess::Open) => 15,
         (MediaType::Audio, _) => 0,
         (MediaType::Slides, _) => 10,
@@ -481,6 +498,92 @@ mod tests {
         assert_eq!(
             components.media, 0,
             "institution-login video must not score media points"
+        );
+    }
+
+    // R9-M01 (completed): RegistrationRequired video scores 18 (registration
+    // is still arguably accessible), but must NOT emit public_recording_available
+    // (it is not a genuinely public recording).
+    #[test]
+    fn rank_002_registration_required_video_scores_18_no_public_reason() {
+        let mut event = empty_event();
+        event.media = vec![MediaResource {
+            id: MediaId("m1".into()),
+            media_type: MediaType::Video,
+            title: None,
+            url: Url::parse("https://example.com/v").unwrap(),
+            platform: None,
+            public_access: PublicAccess::RegistrationRequired,
+            published_at: None,
+            source: empty_source_evidence(),
+        }];
+        let tiers: HashMap<String, SourceTier> = HashMap::new();
+        let (_, components, reasons) = score_event(&event, &tiers, None);
+        assert_eq!(components.media, 18);
+        assert!(
+            !reasons.contains(&"public_recording_available".to_string()),
+            "registration-required video is not public; got reasons {reasons:?}"
+        );
+    }
+
+    #[test]
+    fn rank_002_in_person_only_video_scores_zero() {
+        let mut event = empty_event();
+        event.media = vec![MediaResource {
+            id: MediaId("m1".into()),
+            media_type: MediaType::Video,
+            title: None,
+            url: Url::parse("https://example.com/v").unwrap(),
+            platform: None,
+            public_access: PublicAccess::InPersonOnly,
+            published_at: None,
+            source: empty_source_evidence(),
+        }];
+        let tiers: HashMap<String, SourceTier> = HashMap::new();
+        let (_, components, reasons) = score_event(&event, &tiers, None);
+        assert_eq!(components.media, 0, "in-person-only video must score 0");
+        assert!(!reasons.contains(&"public_recording_available".to_string()));
+    }
+
+    #[test]
+    fn rank_002_unknown_access_video_scores_zero() {
+        let mut event = empty_event();
+        event.media = vec![MediaResource {
+            id: MediaId("m1".into()),
+            media_type: MediaType::Video,
+            title: None,
+            url: Url::parse("https://example.com/v").unwrap(),
+            platform: None,
+            public_access: PublicAccess::Unknown,
+            published_at: None,
+            source: empty_source_evidence(),
+        }];
+        let tiers: HashMap<String, SourceTier> = HashMap::new();
+        let (_, components, reasons) = score_event(&event, &tiers, None);
+        assert_eq!(components.media, 0, "unknown-access video must score 0");
+        assert!(!reasons.contains(&"public_recording_available".to_string()));
+    }
+
+    // R9-M01 (completed): paywalled/institution-login must NOT emit the
+    // public_recording_available reason (they score 0 and are not public).
+    #[test]
+    fn rank_002_paywalled_video_no_public_reason() {
+        let mut event = empty_event();
+        event.media = vec![MediaResource {
+            id: MediaId("m1".into()),
+            media_type: MediaType::Video,
+            title: None,
+            url: Url::parse("https://example.com/v").unwrap(),
+            platform: None,
+            public_access: PublicAccess::Paywalled,
+            published_at: None,
+            source: empty_source_evidence(),
+        }];
+        let tiers: HashMap<String, SourceTier> = HashMap::new();
+        let (_, _, reasons) = score_event(&event, &tiers, None);
+        assert!(
+            !reasons.contains(&"public_recording_available".to_string()),
+            "paywalled video must not emit public_recording_available; got {reasons:?}"
         );
     }
 
