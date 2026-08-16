@@ -278,6 +278,125 @@ async fn r9_h11_oversized_checksum_rejected() {
     );
 }
 
+// R9-H11: a redirect from a whitelisted download host to an off-whitelist
+// host must be rejected rather than followed. /download/binary returns 302
+// to https://evil.example.com/binary; send_validated re-validates the
+// Location host against DOWNLOAD_HOSTS and rejects it before any request to
+// evil.example.com. Update fails with exit 10 and the working binary is
+// unchanged.
+#[tokio::test]
+async fn r9_h11_redirect_to_off_whitelist_host_rejected() {
+    let server = MockServer::start().await;
+    let binary_url = format!("{}/download/binary", server.uri());
+    let checksum_url = format!("{}/download/checksum", server.uri());
+
+    let release_json = serde_json::json!({
+        "tag_name": "v99.0.0",
+        "assets": [
+            {"name": BINARY_ASSET_NAME, "browser_download_url": binary_url},
+            {"name": CHECKSUM_ASSET_NAME, "browser_download_url": checksum_url},
+        ]
+    });
+    Mock::given(method("GET"))
+        .and(path("/releases/latest"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(release_json))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/download/checksum"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(sha256_hex(VALID_SCRIPT)))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/download/binary"))
+        .respond_with(
+            ResponseTemplate::new(302).insert_header("Location", "https://evil.example.com/binary"),
+        )
+        .mount(&server)
+        .await;
+
+    let sandbox = Sandbox::new();
+    let binary = sandbox.setup_full(VALID_SCRIPT);
+    let content_before = std::fs::read(&binary).expect("read binary before");
+
+    let mut cmd = bin();
+    sandbox.set_env(&mut cmd);
+    cmd.env("MATH_TALK_RADAR_RELEASE_API", server.uri())
+        .args(["update"])
+        .assert()
+        .failure()
+        .code(10);
+
+    let content_after = std::fs::read(&binary).expect("read binary after");
+    assert_eq!(
+        content_before, content_after,
+        "binary must be unchanged when redirect targets an off-whitelist host"
+    );
+}
+
+// R9-H11: a relative redirect within the same (whitelisted) host must be
+// followed. /download/binary returns 302 to /download/binary-actual, which
+// serves the real binary. The updater resolves the relative Location, re-
+// validates the host, follows, and completes the update normally.
+#[tokio::test]
+async fn r9_h11_relative_redirect_within_whitelist_followed() {
+    let server = MockServer::start().await;
+    let binary_url = format!("{}/download/binary", server.uri());
+    let checksum_url = format!("{}/download/checksum", server.uri());
+
+    let release_json = serde_json::json!({
+        "tag_name": "v99.0.0",
+        "assets": [
+            {"name": BINARY_ASSET_NAME, "browser_download_url": binary_url},
+            {"name": CHECKSUM_ASSET_NAME, "browser_download_url": checksum_url},
+        ]
+    });
+    Mock::given(method("GET"))
+        .and(path("/releases/latest"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(release_json))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/download/checksum"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(sha256_hex(VALID_SCRIPT)))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/download/binary"))
+        .respond_with(
+            ResponseTemplate::new(302).insert_header("Location", "/download/binary-actual"),
+        )
+        .mount(&server)
+        .await;
+
+    let binary_str = std::str::from_utf8(VALID_SCRIPT).expect("script is UTF-8");
+    Mock::given(method("GET"))
+        .and(path("/download/binary-actual"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(binary_str))
+        .mount(&server)
+        .await;
+
+    let sandbox = Sandbox::new();
+    let binary = sandbox.setup_full(b"#!/bin/sh\necho old\nexit 0\n");
+
+    let mut cmd = bin();
+    sandbox.set_env(&mut cmd);
+    cmd.env("MATH_TALK_RADAR_RELEASE_API", server.uri())
+        .args(["update"])
+        .assert()
+        .success();
+
+    let content_after = std::fs::read(&binary).expect("read binary after");
+    assert_eq!(
+        content_after, VALID_SCRIPT,
+        "binary must be replaced after following a whitelisted redirect"
+    );
+}
+
 // UNS-001: dry-run mutates nothing.
 #[test]
 fn uns_001_dry_run_zero_mutation() {

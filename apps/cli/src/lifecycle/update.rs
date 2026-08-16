@@ -27,6 +27,23 @@ const DOWNLOAD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120
 const MAX_BINARY_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_CHECKSUM_BYTES: u64 = 1024;
 
+/// R9-H11: cap on manual redirect following. GitHub's CDN typically does
+/// 1–2 hops (github.com → objects.githubusercontent.com); 5 is a safe upper
+/// bound that absorbs rare extra hops without allowing infinite loops.
+const MAX_REDIRECTS: u8 = 5;
+
+/// R9-H11: host whitelists for update URLs. The release API is on
+/// `api.github.com`; release assets are on `github.com`,
+/// `objects.githubusercontent.com`, and `codeload.github.com`. Every
+/// redirect hop is re-validated against the relevant list so a compromised
+/// or misbehaving CDN cannot redirect the updater to an arbitrary host.
+const API_HOSTS: &[&str] = &["api.github.com"];
+const DOWNLOAD_HOSTS: &[&str] = &[
+    "github.com",
+    "objects.githubusercontent.com",
+    "codeload.github.com",
+];
+
 /// H7: independent update lock (§34.3). Without this, two concurrent
 /// `math_talk_radar update` invocations would race on the same binary:
 /// both download, both verify, both try atomic-replace — one wins, the
@@ -240,37 +257,44 @@ struct Release {
     assets: Vec<ReleaseAsset>,
 }
 
-/// B3-residual: validate that a download URL from the GitHub release API
-/// points to the expected origin. In release builds: HTTPS only, host must
-/// be `github.com` or `objects.githubusercontent.com` (GitHub's release
-/// asset CDN). In debug builds: allow `http://` + `127.0.0.1`/`localhost`
-/// so integration tests can point at a local wiremock server.
-fn validate_download_url(url: &str) -> Result<(), CliError> {
-    let parsed = url::Url::parse(url)
-        .map_err(|e| CliError::update(format!("invalid download URL '{url}': {e}")))?;
+/// B3-residual + R9-H11: validate a URL's scheme and host against a whitelist.
+/// `allowed_hosts` is `API_HOSTS` for release-API calls or `DOWNLOAD_HOSTS`
+/// for asset downloads. In debug builds, `http://127.0.0.1`/`localhost` is
+/// allowed so integration tests can point at a local wiremock server.
+///
+/// Used both for the initial URL and for every redirect hop — a redirect to
+/// an off-whitelist host is rejected rather than followed.
+fn validate_url_host(url: &url::Url, allowed_hosts: &[&str]) -> Result<(), CliError> {
     if cfg!(debug_assertions)
-        && let Some(host) = parsed.host_str()
-        && (parsed.scheme() == "http" || parsed.scheme() == "https")
+        && let Some(host) = url.host_str()
+        && (url.scheme() == "http" || url.scheme() == "https")
         && (host == "127.0.0.1" || host == "localhost")
     {
         return Ok(());
     }
-    if parsed.scheme() != "https" {
+    if url.scheme() != "https" {
         return Err(CliError::update(format!(
-            "download URL must be HTTPS, got '{}': {url}",
-            parsed.scheme()
+            "update URL must be HTTPS, got '{}': {url}",
+            url.scheme()
         )));
     }
-    let host = parsed.host_str().unwrap_or("");
-    if host != "github.com"
-        && host != "objects.githubusercontent.com"
-        && host != "codeload.github.com"
-    {
+    let host = url.host_str().unwrap_or("");
+    if !allowed_hosts.contains(&host) {
         return Err(CliError::update(format!(
-            "download URL host must be github.com or objects.githubusercontent.com, got '{host}'"
+            "update URL host '{host}' not in allowed list {:?}",
+            allowed_hosts
         )));
     }
     Ok(())
+}
+
+/// B3-residual: validate that a download URL from the GitHub release API
+/// points to the expected origin. Wrapper around `validate_url_host` for the
+/// initial (pre-redirect) download URL string.
+fn validate_download_url(url: &str) -> Result<(), CliError> {
+    let parsed = url::Url::parse(url)
+        .map_err(|e| CliError::update(format!("invalid download URL '{url}': {e}")))?;
+    validate_url_host(&parsed, DOWNLOAD_HOSTS)
 }
 
 fn http_client() -> Result<reqwest::Client, CliError> {
@@ -278,20 +302,77 @@ fn http_client() -> Result<reqwest::Client, CliError> {
         .user_agent(RELEASE_USER_AGENT)
         .timeout(DOWNLOAD_TIMEOUT)
         .connect_timeout(std::time::Duration::from_secs(15))
+        // R9-H11: disable auto-redirect. reqwest's Policy follows redirects
+        // to any host without re-validating against our whitelist, so a
+        // compromised or misbehaving CDN could redirect the updater to an
+        // arbitrary host. We follow redirects manually with per-hop
+        // validation in `send_validated`.
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|e| CliError::update(format!("http client build failed: {e}")))
+}
+
+/// R9-H11: send a GET request and follow redirects manually, validating the
+/// scheme and host of every hop URL against `allowed_hosts`. Caps the redirect
+/// chain at `MAX_REDIRECTS` to prevent loops. Returns the final response
+/// (already a 2xx, or a non-3xx status the caller handles). A 3xx with no
+/// `Location` header or a chain exceeding `MAX_REDIRECTS` is an error.
+async fn send_validated(
+    client: &reqwest::Client,
+    url: &str,
+    allowed_hosts: &[&str],
+    extra_headers: Option<(&str, &str)>,
+) -> Result<reqwest::Response, CliError> {
+    let mut current =
+        url::Url::parse(url).map_err(|e| CliError::update(format!("invalid URL '{url}': {e}")))?;
+    validate_url_host(&current, allowed_hosts)?;
+    let mut hops: u8 = 0;
+    loop {
+        let mut req = client.get(current.as_str());
+        if let Some((name, value)) = extra_headers {
+            req = req.header(name, value);
+        }
+        let resp = req
+            .send()
+            .await
+            .map_err(|e| CliError::update(format!("request to {current} failed: {e}")))?;
+        if !resp.status().is_redirection() {
+            return Ok(resp);
+        }
+        hops += 1;
+        if hops > MAX_REDIRECTS {
+            return Err(CliError::update(format!(
+                "redirect chain from {url} exceeded {MAX_REDIRECTS} hops"
+            )));
+        }
+        let location = resp
+            .headers()
+            .get(reqwest::header::LOCATION)
+            .and_then(|v| v.to_str().ok())
+            .ok_or_else(|| {
+                CliError::update(format!("redirect from {current} missing Location header"))
+            })?;
+        // Resolve relative redirects against the current URL.
+        let next = current
+            .join(location)
+            .map_err(|e| CliError::update(format!("invalid redirect '{location}': {e}")))?;
+        // R9-H11: re-validate every hop — the host can change on redirect.
+        validate_url_host(&next, allowed_hosts)?;
+        current = next;
+    }
 }
 
 async fn fetch_latest_release() -> Result<Release, CliError> {
     let api = paths::release_api();
     let url = format!("{api}/releases/latest");
     let client = http_client()?;
-    let resp = client
-        .get(&url)
-        .header("Accept", "application/vnd.github+json")
-        .send()
-        .await
-        .map_err(|e| CliError::update(format!("release fetch failed: {e}")))?;
+    let resp = send_validated(
+        &client,
+        &url,
+        API_HOSTS,
+        Some(("Accept", "application/vnd.github+json")),
+    )
+    .await?;
     if !resp.status().is_success() {
         return Err(CliError::update(format!(
             "release API returned {}",
@@ -350,11 +431,7 @@ fn find_assets(release: &Release) -> Result<(&ReleaseAsset, &ReleaseAsset), CliE
 /// file (small). The binary uses the streaming path instead.
 async fn download_bytes(url: &str, max_bytes: u64) -> Result<Vec<u8>, CliError> {
     let client = http_client()?;
-    let resp = client
-        .get(url)
-        .send()
-        .await
-        .map_err(|e| CliError::update(format!("download failed: {e}")))?;
+    let resp = send_validated(&client, url, DOWNLOAD_HOSTS, None).await?;
     if !resp.status().is_success() {
         return Err(CliError::update(format!(
             "download returned {}",
@@ -386,11 +463,7 @@ async fn download_bytes(url: &str, max_bytes: u64) -> Result<Vec<u8>, CliError> 
 /// buffering the entire binary in RAM.
 async fn download_to_file_with_hash(url: &str, dest: &Path) -> Result<String, CliError> {
     let client = http_client()?;
-    let resp = client
-        .get(url)
-        .send()
-        .await
-        .map_err(|e| CliError::update(format!("download failed: {e}")))?;
+    let resp = send_validated(&client, url, DOWNLOAD_HOSTS, None).await?;
     if !resp.status().is_success() {
         return Err(CliError::update(format!(
             "download returned {}",
