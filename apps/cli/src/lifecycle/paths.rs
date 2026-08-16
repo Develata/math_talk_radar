@@ -177,21 +177,70 @@ pub fn is_unmanaged_binary(binary: &Path) -> bool {
 }
 
 fn xdg_dir(env_var: &str, default_sub: &str) -> PathBuf {
-    if let Some(xdg) = std::env::var_os(env_var) {
-        let p = PathBuf::from(&xdg);
-        // B08: reject empty or relative XDG values. An empty value yields a
-        // relative `math_talk_radar` path anchored at the CWD — uninstall's
-        // safe_canonicalize would resolve it to the CWD and (if the CWD is
-        // not protected) delete files there. A relative value like `./foo`
-        // has the same hazard. Fall through to the default instead.
-        if !xdg.is_empty() && p.is_absolute() {
+    resolve_xdg_dir(
+        std::env::var_os(env_var).as_deref(),
+        std::env::var_os("HOME").as_deref(),
+        default_sub,
+    )
+}
+
+/// Pure core of `xdg_dir` for testability. B08: validates both the XDG
+/// override and the HOME fallback for nonempty + absolute. A relative or
+/// empty value resolves against the CWD; `safe_canonicalize` would then
+/// resolve it to the CWD and (if the CWD is not protected) `remove_dir_all`
+/// would delete files in the working directory. An invalid HOME must fall
+/// through to the relative default rather than producing a CWD-anchored path.
+fn resolve_xdg_dir(
+    xdg_var: Option<&std::ffi::OsStr>,
+    home: Option<&std::ffi::OsStr>,
+    default_sub: &str,
+) -> PathBuf {
+    if let Some(xdg) = xdg_var
+        && !xdg.is_empty()
+    {
+        let p = PathBuf::from(xdg);
+        if p.is_absolute() {
             return p.join(APP_SLUG);
         }
     }
-    if let Some(home) = std::env::var_os("HOME") {
-        return PathBuf::from(home).join(default_sub).join(APP_SLUG);
+    if let Some(home) = home
+        && !home.is_empty()
+    {
+        let p = PathBuf::from(home);
+        if p.is_absolute() {
+            return p.join(default_sub).join(APP_SLUG);
+        }
     }
     PathBuf::from(default_sub).join(APP_SLUG)
+}
+
+/// B08: detect whether any two of the config/cache/data dirs canonicalize to
+/// the same path. Such overlap (from a misconfigured XDG setup) is dangerous
+/// for uninstall: `--keep-data` deletes config+cache but preserves data, so
+/// if config == data, data would be deleted despite --keep-data. Refuse
+/// rather than risk data loss. Dirs that do not exist (cannot canonicalize)
+/// are skipped — they would be skipped at delete time too.
+pub fn detect_dir_overlap(config: &Path, cache: &Path, data: &Path) -> Result<(), String> {
+    let mut canonicals: Vec<(&str, PathBuf)> = Vec::new();
+    for (name, path) in [("config", config), ("cache", cache), ("data", data)] {
+        if let Ok(c) = path.canonicalize() {
+            canonicals.push((name, c));
+        }
+    }
+    for i in 0..canonicals.len() {
+        for j in (i + 1)..canonicals.len() {
+            if canonicals[i].1 == canonicals[j].1 {
+                return Err(format!(
+                    "directory overlap detected: {} and {} resolve to the same path ({}); \
+                     refusing to proceed to avoid data loss",
+                    canonicals[i].0,
+                    canonicals[j].0,
+                    canonicals[i].1.display()
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -227,5 +276,132 @@ mod tests {
         let bin = Path::new("/usr/local/bin/math_talk_radar");
         let p = temp_dir_for_binary(bin);
         assert_eq!(p.parent(), bin.parent());
+    }
+
+    // R9-B08: a valid absolute HOME produces the default XDG path under HOME.
+    #[test]
+    fn resolve_xdg_dir_uses_absolute_home() {
+        let home = std::ffi::OsStr::new("/home/deve");
+        let p = resolve_xdg_dir(None, Some(home), ".config");
+        assert_eq!(p, PathBuf::from("/home/deve/.config/math_talk_radar"));
+    }
+
+    // R9-B08: an absolute XDG override wins over HOME.
+    #[test]
+    fn resolve_xdg_dir_xdg_override_wins() {
+        let xdg = std::ffi::OsStr::new("/custom/cfg");
+        let home = std::ffi::OsStr::new("/home/deve");
+        let p = resolve_xdg_dir(Some(xdg), Some(home), ".config");
+        assert_eq!(p, PathBuf::from("/custom/cfg/math_talk_radar"));
+    }
+
+    // R9-B08: an empty HOME must NOT produce a CWD-anchored path; fall through
+    // to the relative default instead.
+    #[test]
+    fn resolve_xdg_dir_empty_home_falls_through() {
+        let empty = std::ffi::OsStr::new("");
+        let p = resolve_xdg_dir(None, Some(empty), ".config");
+        assert_eq!(p, PathBuf::from(".config/math_talk_radar"));
+    }
+
+    // R9-B08: a relative HOME must NOT be used; fall through to the relative
+    // default instead (a relative HOME would anchor at CWD).
+    #[test]
+    fn resolve_xdg_dir_relative_home_falls_through() {
+        let rel = std::ffi::OsStr::new("relative/home");
+        let p = resolve_xdg_dir(None, Some(rel), ".local/share");
+        assert_eq!(p, PathBuf::from(".local/share/math_talk_radar"));
+    }
+
+    // R9-B08: a relative XDG override must NOT be used; fall through to HOME.
+    #[test]
+    fn resolve_xdg_dir_relative_xdg_falls_to_home() {
+        let rel_xdg = std::ffi::OsStr::new("relative/cfg");
+        let home = std::ffi::OsStr::new("/home/deve");
+        let p = resolve_xdg_dir(Some(rel_xdg), Some(home), ".config");
+        assert_eq!(p, PathBuf::from("/home/deve/.config/math_talk_radar"));
+    }
+
+    // R9-B08: an empty XDG override must NOT be used; fall through to HOME.
+    #[test]
+    fn resolve_xdg_dir_empty_xdg_falls_to_home() {
+        let empty = std::ffi::OsStr::new("");
+        let home = std::ffi::OsStr::new("/home/deve");
+        let p = resolve_xdg_dir(Some(empty), Some(home), ".cache");
+        assert_eq!(p, PathBuf::from("/home/deve/.cache/math_talk_radar"));
+    }
+
+    // R9-B08: no XDG and no HOME → relative default (last resort).
+    #[test]
+    fn resolve_xdg_dir_no_env_falls_to_relative_default() {
+        let p = resolve_xdg_dir(None, None, ".config");
+        assert_eq!(p, PathBuf::from(".config/math_talk_radar"));
+    }
+
+    // R9-B08: detect_dir_overlap must reject when config and data canonicalize
+    // to the same path (e.g. misconfigured XDG_CONFIG_HOME == XDG_DATA_HOME).
+    #[test]
+    fn detect_dir_overlap_rejects_config_data_collision() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let same = tmp.path();
+        let other = tmp.path().join("other");
+        std::fs::create_dir_all(&other).expect("mkdir other");
+        let err = detect_dir_overlap(same, &other, same);
+        assert!(err.is_err(), "config==data overlap must be rejected");
+        let msg = err.unwrap_err();
+        assert!(msg.contains("config") && msg.contains("data"), "msg: {msg}");
+    }
+
+    // R9-B08: detect_dir_overlap must reject when cache and data collide.
+    #[test]
+    fn detect_dir_overlap_rejects_cache_data_collision() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let same = tmp.path();
+        let other = tmp.path().join("other");
+        std::fs::create_dir_all(&other).expect("mkdir other");
+        let err = detect_dir_overlap(&other, same, same);
+        assert!(err.is_err(), "cache==data overlap must be rejected");
+        assert!(err.unwrap_err().contains("cache"));
+    }
+
+    // R9-B08: detect_dir_overlap must reject when config and cache collide.
+    #[test]
+    fn detect_dir_overlap_rejects_config_cache_collision() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let same = tmp.path();
+        let other = tmp.path().join("other");
+        std::fs::create_dir_all(&other).expect("mkdir other");
+        let err = detect_dir_overlap(same, same, &other);
+        assert!(err.is_err(), "config==cache overlap must be rejected");
+        assert!(err.unwrap_err().contains("config"));
+    }
+
+    // R9-B08: detect_dir_overlap passes when all three dirs are distinct.
+    #[test]
+    fn detect_dir_overlap_ok_when_distinct() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let root = tmp.path();
+        let cfg = root.join("cfg");
+        let cache = root.join("cache");
+        let data = root.join("data");
+        for d in [&cfg, &cache, &data] {
+            std::fs::create_dir_all(d).expect("mkdir");
+        }
+        assert!(detect_dir_overlap(&cfg, &cache, &data).is_ok());
+    }
+
+    // R9-B08: detect_dir_overlap passes when dirs don't exist yet (skip those
+    // that can't canonicalize — they'd be skipped at delete time too).
+    #[test]
+    fn detect_dir_overlap_skips_nonexistent() {
+        assert!(
+            detect_dir_overlap(
+                Path::new("/nonexistent/cfg/zzz"),
+                Path::new("/nonexistent/cache/zzz"),
+                Path::new("/nonexistent/data/zzz"),
+            )
+            .is_ok(),
+            "nonexistent dirs are skipped, not treated as overlapping"
+        );
     }
 }

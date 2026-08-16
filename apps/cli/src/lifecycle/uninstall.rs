@@ -37,6 +37,13 @@ pub async fn run(args: UninstallArgs) -> Result<String, CliError> {
     let data_dir = paths::data_dir();
     let config_dir = paths::config_dir();
     let cache_dir = paths::cache_dir();
+
+    // B08: refuse if any two of config/cache/data canonicalize to the same
+    // path. A misconfigured XDG setup (e.g. XDG_CONFIG_HOME == XDG_DATA_HOME)
+    // would make --keep-data delete the data dir via the config-deletion
+    // branch, or make --purge delete the same dir twice.
+    paths::detect_dir_overlap(&config_dir, &cache_dir, &data_dir).map_err(CliError::uninstall)?;
+
     let binary = paths::binary_path(&data_dir)
         .ok_or_else(|| CliError::uninstall("cannot resolve binary path"))?;
 
