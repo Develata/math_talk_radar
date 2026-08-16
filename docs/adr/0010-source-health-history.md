@@ -48,14 +48,22 @@ pub struct SourceHealth {
     pub duration_ms: u64,
     pub requests: u32,
     pub events: u32,
-    pub recorded_at: DateTime<Utc>,   // NEW
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recorded_at: Option<DateTime<Utc>>,   // NEW
 }
 ```
 
 `recorded_at` is the scan timestamp at which the observation was taken. The
-scan path already has `now: DateTime<Utc>` (used for `store_scan`); the same
-value is stamped here so a health record and the events from the same scan
-share a timestamp.
+scan path always sets it to `Some(now)` (the same `now` used for `store_scan`).
+It is `Option` + `#[serde(default, skip_serializing_if = "Option::is_none")]`
+so the generated JSON schema (via `schemars`) lists it as **optional, not
+required** — keeping `schema_version = "1.0"` compatible per §64. Existing
+consumers that ignore unknown fields are unaffected; the field is simply
+absent if an older code path produces a `SourceHealth` without it.
+
+The persisted form is always `Some` (the scan path stamps it); the `Option`
+exists only for schema-compatibility of the public JSON shape, not because
+the value is ever genuinely absent in practice.
 
 ### 2. Change `SOURCE_HEALTH` key scheme to composite `"{source}\x00{recorded_at}"`
 
@@ -99,22 +107,40 @@ scan path never wrote this table, so legacy records are a purely defensive
 case; stamping preserves them losslessly rather than dropping. Override at
 sign-off if dropping is preferred (near-zero risk either way).
 
-### 5. Wire the scan path to persist health
+### 5. Wire the scan path via a single transactional `store_scan_bundle`
 
-In `scan_engine.rs`, after computing `source_health` and before building
-`ScanOutput`, call `repo.store_source_health(&health)` for each source's
-health record (inside the same `now` timestamp used for `store_scan`). The
-`--no-state` path skips persistence (consistent with `store_scan`). A
-`store_source_health` failure is a state-fatal error (exit 5), not
-best-effort — consistent with the `store_scan` failure policy (CLI-21).
+The scan path must persist events AND source health AND purge expired
+tombstones/health-history in ONE redb transaction. Separate
+`store_source_health` calls cannot share a transaction with `store_scan`, so
+introduce a bundle API:
+
+```rust
+pub fn store_scan_bundle(
+    &self,
+    events: &[Event],
+    source_health: &[SourceHealth],
+    now: DateTime<Utc>,
+) -> Result<(Vec<Event>, Vec<ChangeRecord>), StateError>
+```
+
+This method atomically: (a) compares/stores event observations (current
+`store_scan` logic), (b) appends each `source_health` record under its
+composite key, (c) purges expired tombstones (ST-16) and expired health
+records (>90 days). The `--no-state` path skips persistence (consistent with
+current `store_scan`). A bundle failure is a state-fatal error (exit 5),
+consistent with the current `store_scan` failure policy (CLI-21).
+
+This bundle API also creates the correct integration point for B06 (source-
+scoped observation/cancellation semantics), so the state-v3 design can absorb
+B06 without a further API change.
 
 ### 6. Bounded retention (prevent unbounded growth)
 
 Without retention, `SOURCE_HEALTH` grows by one record per source per scan,
 forever. Adopt a **time-windowed retention** of 90 days, matching
 `TOMBSTONE_RETENTION_DAYS` (`repository.rs:28`, ST-16). Records older than 90
-days are purged during `store_scan` (same transaction that writes new records).
-This bounds the table to ≈ `num_sources × (90 / scan_interval_days)` records
+days are purged during `store_scan_bundle` (same transaction that writes new
+records). This bounds the table to ≈ `num_sources × (90 / scan_interval_days)` records
 and keeps a single retention constant governing both tombstones and health
 history.
 
@@ -158,15 +184,22 @@ removed). Override at sign-off if a required-field bump is preferred.
   (forward-only, per `run_migrations` backward refusal).
 - `SOURCE_HEALTH` table grows to a bounded steady state (≈ 90 days × scan
   frequency × source count).
-- The public `scan` JSON gains `recorded_at` in each `source_health` entry.
-  `schema_version` stays `"1.0"` (optional field addition, §64).
+- The public `scan` JSON gains `recorded_at` (optional, `Option` + `skip_serializing_if`)
+  in each `source_health` entry. `schema_version` stays `"1.0"` (optional field
+  addition, §64).
 - A future `doctor` / `health history` command can read the history without a
   further schema change.
-- Implementing this ADR requires: (1) `SourceHealth` struct change, (2) key
-  scheme + `store_source_health` rewrite + a `list_source_health(source)` read
-  API, (3) v2→v3 migration, (4) scan-path wiring, (5) retention purge in
-  `store_scan`, (6) tests (migration, retention, read-back, `--no-state`
-  skip). This is a self-contained milestone, one atomic commit.
+- Implementing this ADR requires: (1) `SourceHealth` struct change
+  (`Option<DateTime<Utc>>` + serde attrs), (2) key scheme + `store_scan_bundle`
+  transactional API (replaces separate `store_scan` + `store_source_health`) +
+  a `list_source_health(source)` read API, (3) v2→v3 migration, (4) scan-path
+  wiring to `store_scan_bundle`, (5) retention purge inside `store_scan_bundle`,
+  (6) tests (migration, retention, read-back, `--no-state` skip).
+- **State-v3 coordination (GPT-Pro R9 re-review):** B06, H08, H09, and M06 all
+  affect persisted observations or change detection. This ADR should NOT be
+  implemented in isolation. The four should be designed together before
+  assigning `STATE_SCHEMA_VERSION = 3`, to avoid an immediate v4 bump if H08
+  or B06 changes the storage model after M06 has already claimed v3.
 
 ## Sign-off request
 
