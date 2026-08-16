@@ -140,6 +140,19 @@ pub async fn run_scan(args: ScanArgs) -> Result<ScanOutput, CliError> {
         .flat_map(|r| r.candidates.iter().map(|c| c.event.clone()))
         .collect();
 
+    // R9-H10 (completed): global candidate cap. The per-source cap
+    // (MAX_STUBS_PER_SOURCE = 2000) bounds each source, but with N enabled
+    // sources the total can still reach N×2000 before any output cap fires.
+    // That drives unbounded enrich/dedup/score work. Cap the total here,
+    // before the expensive pipeline, so worst-case resource use is bounded
+    // regardless of how many sources are enabled. The limit is generous for
+    // legitimate scans (15 sources × ~600 real events ≈ 9000) while
+    // preventing pathological accumulation.
+    const MAX_GLOBAL_CANDIDATES: usize = 10_000;
+    if events.len() > MAX_GLOBAL_CANDIDATES {
+        events.truncate(MAX_GLOBAL_CANDIDATES);
+    }
+
     // CORE-11/CORE-12: enrich each event before the first scoring pass so the
     // topic (30pt) and people (10pt) components reflect real matches and
     // influence dedup primary selection. Topic matching populates event.topics
