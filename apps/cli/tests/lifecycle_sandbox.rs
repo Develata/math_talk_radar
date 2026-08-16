@@ -224,6 +224,50 @@ async fn upd_003_valid_update_replaces_binary() {
     );
 }
 
+// R9-M07: a successful update must RETAIN the rollback copy (Disposition A).
+// The previous binary stays at `.<stem>.rollback` alongside the current
+// binary, overwritten by the next successful update. This guarantees a
+// manual-recovery path to the last-known-good version if the new binary
+// fails at runtime (a defect the self-test cannot catch).
+#[tokio::test]
+async fn r9_m07_rollback_retained_after_successful_update() {
+    let server = MockServer::start().await;
+    let original = b"#!/bin/sh\necho old\nexit 0\n";
+    mount_release(&server, "v99.0.0", VALID_SCRIPT, None).await;
+
+    let sandbox = Sandbox::new();
+    let binary = sandbox.setup_full(original);
+
+    let mut cmd = bin();
+    sandbox.set_env(&mut cmd);
+    cmd.env("MATH_TALK_RADAR_RELEASE_API", server.uri())
+        .args(["update"])
+        .assert()
+        .success();
+
+    // The rollback file must exist alongside the binary.
+    let rollback = binary
+        .parent()
+        .expect("binary has parent")
+        .join(".math_talk_radar.rollback");
+    assert!(
+        rollback.exists(),
+        "rollback copy must be retained after successful update: {}",
+        rollback.display()
+    );
+    let rollback_content = std::fs::read(&rollback).expect("read rollback");
+    assert_eq!(
+        rollback_content, original,
+        "rollback must contain the PREVIOUS binary content"
+    );
+    // The current binary must have the NEW content.
+    let content_after = std::fs::read(&binary).expect("read binary after");
+    assert_eq!(
+        content_after, VALID_SCRIPT,
+        "binary must be the new version"
+    );
+}
+
 // UPD-004: broken candidate triggers rollback (original preserved).
 #[tokio::test]
 async fn upd_004_broken_candidate_preserves_binary() {

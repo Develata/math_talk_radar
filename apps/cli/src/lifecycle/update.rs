@@ -557,8 +557,14 @@ fn self_test(binary: &Path) -> Result<(), CliError> {
 
 /// `update`: full algorithm (§34.2). Refuse unmanaged binary unless
 /// `force_unmanaged`. Download -> verify SHA-256 -> fsync -> self-test ->
-/// rollback copy -> atomic replace -> self-test -> cleanup. Any failure leaves
-/// the current binary usable.
+/// rollback copy -> atomic replace -> self-test. Any failure leaves the
+/// current binary usable.
+///
+/// R9-M07: the rollback copy is **retained** after a successful update —
+/// exactly one previous binary is kept at `.<stem>.rollback`, overwritten by
+/// the next successful update. This guarantees a manual-recovery path to the
+/// last-known-good version if the new binary fails at runtime (a defect not
+/// caught by the self-test).
 pub async fn run(force_unmanaged: bool) -> Result<String, CliError> {
     // H7: acquire the update lock before any I/O. Two concurrent `update`
     // invocations would race on download/replace/rollback; the lock serializes
@@ -652,7 +658,15 @@ pub async fn run(force_unmanaged: bool) -> Result<String, CliError> {
         return Err(CliError::update(msg));
     }
 
-    let _ = std::fs::remove_file(&rollback_path);
+    // R9-M07: retain the rollback copy. The previous binary stays at
+    // `.<stem>.rollback` and is overwritten by the next successful update.
+    // This guarantees a manual-recovery path to the last-known-good version
+    // if the new binary fails at runtime (a defect the self-test cannot
+    // catch). See §34.2.
+    let rollback_note = match rollback_path.metadata() {
+        Ok(_) => format!("\nrollback retained: {}", rollback_path.display()),
+        Err(_) => String::new(),
+    };
 
     // Update manifest. The binary is already replaced and self-tested, so a
     // manifest write failure is NOT fatal — surface it as a warning in the
@@ -668,8 +682,8 @@ pub async fn run(force_unmanaged: bool) -> Result<String, CliError> {
     };
 
     Ok(format!(
-        "updated: {} -> {}{}",
-        CURRENT_VERSION, release.tag_name, manifest_note
+        "updated: {} -> {}{}{}",
+        CURRENT_VERSION, release.tag_name, manifest_note, rollback_note
     ))
 }
 
