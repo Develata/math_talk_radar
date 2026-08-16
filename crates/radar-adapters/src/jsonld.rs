@@ -114,59 +114,87 @@ impl SourceAdapter for JsonLdAdapter {
             let html = crate::helpers::doc_body(&doc.body);
             let document = scraper::Html::parse_document(&html);
             access = helpers::classify_access(&document);
-            for block in extract_jsonld_blocks(&html) {
-                for ev in find_events(&block).into_iter().flatten() {
-                    if !event_matches_stub(ev, &stub) {
-                        continue;
+
+            // R9-H05: collect ALL event nodes first, classify each by match
+            // kind, then resolve to an unambiguous set. Previously the loop
+            // matched and accumulated inline, so multiple identifier-less
+            // same-named nodes on one page all matched the stub and
+            // cross-contaminated description/location. Now:
+            //   - Identity matches (url/@id == stub.url) always win.
+            //   - Name fallback is used only when there are zero identity
+            //     matches AND exactly one name match (unambiguous).
+            //   - Otherwise (2+ name matches, no identity) the stub gets no
+            //     enrichment rather than contaminated enrichment.
+            let blocks = extract_jsonld_blocks(&html);
+            let all_events: Vec<&serde_json::Value> = blocks
+                .iter()
+                .flat_map(|block| find_events(block).into_iter().flatten())
+                .collect();
+            let mut identity_matches = Vec::new();
+            let mut name_matches = Vec::new();
+            for ev in all_events {
+                match classify_match(ev, &stub) {
+                    MatchKind::Identity => identity_matches.push(ev),
+                    MatchKind::Name => name_matches.push(ev),
+                    MatchKind::None => {}
+                }
+            }
+            let resolved: Vec<&serde_json::Value> = if !identity_matches.is_empty() {
+                identity_matches
+            } else if name_matches.len() == 1 {
+                name_matches
+            } else {
+                Vec::new()
+            };
+
+            for ev in resolved {
+                if description.is_none() {
+                    description = ev
+                        .get("description")
+                        .and_then(|v| v.as_str())
+                        .map(helpers::strip_html_to_text);
+                }
+                if location.is_none() {
+                    location = ev.get("location").and_then(extract_location);
+                }
+                let talk_source = SourceEvidence {
+                    source_id: source.id.clone(),
+                    source_url: doc.final_url.clone(),
+                    evidence: None,
+                    captured_at: Some(doc.fetched_at),
+                    native_id: None,
+                };
+                // TALK-001: performer → one Talk with all performers as
+                // co-speakers (schema.org co-presenters).
+                if let Some(performers) = ev.get("performer") {
+                    let names = extract_person_names(performers);
+                    if !names.is_empty() {
+                        talks.push(make_talk(
+                            &stub.title,
+                            &names,
+                            talk_source.clone(),
+                            "jsonld:performer",
+                        ));
                     }
-                    if description.is_none() {
-                        description = ev
-                            .get("description")
+                }
+                // TALK-001: subEvent → one Talk per sub-event, speakers from
+                // its own performer field (schema.org conference→talk model).
+                if let Some(sub_events) = ev.get("subEvent") {
+                    for sub_ev in iter_subevents(sub_events) {
+                        let sub_title = sub_ev
+                            .get("name")
                             .and_then(|v| v.as_str())
-                            .map(helpers::strip_html_to_text);
-                    }
-                    if location.is_none() {
-                        location = ev.get("location").and_then(extract_location);
-                    }
-                    let talk_source = SourceEvidence {
-                        source_id: source.id.clone(),
-                        source_url: doc.final_url.clone(),
-                        evidence: None,
-                        captured_at: Some(doc.fetched_at),
-                        native_id: None,
-                    };
-                    // TALK-001: performer → one Talk with all performers as
-                    // co-speakers (schema.org co-presenters).
-                    if let Some(performers) = ev.get("performer") {
-                        let names = extract_person_names(performers);
-                        if !names.is_empty() {
-                            talks.push(make_talk(
-                                &stub.title,
-                                &names,
-                                talk_source.clone(),
-                                "jsonld:performer",
-                            ));
-                        }
-                    }
-                    // TALK-001: subEvent → one Talk per sub-event, speakers from
-                    // its own performer field (schema.org conference→talk model).
-                    if let Some(sub_events) = ev.get("subEvent") {
-                        for sub_ev in iter_subevents(sub_events) {
-                            let sub_title = sub_ev
-                                .get("name")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or(&stub.title)
-                                .to_string();
-                            if let Some(performers) = sub_ev.get("performer") {
-                                let names = extract_person_names(performers);
-                                if !names.is_empty() {
-                                    talks.push(make_talk(
-                                        &sub_title,
-                                        &names,
-                                        talk_source.clone(),
-                                        "jsonld:subEvent:performer",
-                                    ));
-                                }
+                            .unwrap_or(&stub.title)
+                            .to_string();
+                        if let Some(performers) = sub_ev.get("performer") {
+                            let names = extract_person_names(performers);
+                            if !names.is_empty() {
+                                talks.push(make_talk(
+                                    &sub_title,
+                                    &names,
+                                    talk_source.clone(),
+                                    "jsonld:subEvent:performer",
+                                ));
                             }
                         }
                     }
@@ -231,36 +259,46 @@ fn urls_match_ignoring_mtr_eid(a: &Url, b: &Url) -> bool {
     strip(a) == strip(b)
 }
 
-/// ADAP-21: match a JSON-LD event node to a stub by url/@id OR name.
-/// H05: url/@id is checked FIRST — it is a stable identity signal. Title
-/// alone is fragile: a detail page listing multiple events with the same
-/// name (e.g. a series of "Seminar" talks) would let the first matching
-/// node claim every same-named stub, contaminating description/location
-/// enrichment across distinct events. Identity-based matching wins when
-/// available; name is the fallback.
-fn event_matches_stub(ev: &serde_json::Value, stub: &EventStub) -> bool {
+/// ADAP-21 + R9-H05: classify how a JSON-LD event node matches a stub.
+/// `Identity` = url or @id equals the stub url (stable, unambiguous).
+/// `Name` = no parseable url/@id on the node, and name equals the stub
+/// title (fragile — same-named events on one page are indistinguishable).
+/// `None` = no match, or the node has a url/@id that does NOT match the
+/// stub (falling back to name would cross-contaminate distinct events).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MatchKind {
+    Identity,
+    Name,
+    None,
+}
+
+fn classify_match(ev: &serde_json::Value, stub: &EventStub) -> MatchKind {
     let ev_url = ev
         .get("url")
         .and_then(|v| v.as_str())
         .and_then(|s| Url::parse(s).ok());
     if ev_url.as_ref().is_some_and(|u| u == &stub.url) {
-        return true;
+        return MatchKind::Identity;
     }
     let ev_id = ev
         .get("@id")
         .and_then(|v| v.as_str())
         .and_then(|s| Url::parse(s).ok());
     if ev_id.as_ref().is_some_and(|u| u == &stub.url) {
-        return true;
+        return MatchKind::Identity;
     }
     // R9-H05: when the event carries a parseable url or @id that did NOT
     // match the stub, falling back to name would cross-contaminate
     // same-named events on the same page. Name fallback is safe only when
     // the event has no parseable url/@id at all.
     if ev_url.is_some() || ev_id.is_some() {
-        return false;
+        return MatchKind::None;
     }
-    ev.get("name").and_then(|v| v.as_str()) == Some(&stub.title)
+    if ev.get("name").and_then(|v| v.as_str()) == Some(&stub.title) {
+        MatchKind::Name
+    } else {
+        MatchKind::None
+    }
 }
 
 /// Parse every `<script type="application/ld+json">` block in `html` into a
@@ -738,6 +776,79 @@ mod tests {
             candidate.event.description.as_deref(),
             Some("Seminar TWO description"),
             "stub for s2 must get s2's description, not s1's"
+        );
+    }
+
+    // R9-H05 (completed): two same-named events WITHOUT url/@id on one page
+    // are ambiguous — name alone cannot tell which node belongs to the stub.
+    // Before the completion, both nodes matched by name and the stub got
+    // contaminated with the first node's description. Now the name fallback
+    // is rejected when there are 2+ name matches and no identity match, so
+    // the stub gets NO enrichment rather than wrong enrichment.
+    #[test]
+    fn enrich_ambiguous_name_only_matches_yield_no_enrichment() {
+        let html = r#"<script type="application/ld+json">
+        {"@type":"Event","name":"Seminar","description":"First Seminar description"}
+        </script>
+        <script type="application/ld+json">
+        {"@type":"Event","name":"Seminar","description":"Second Seminar description"}
+        </script>"#;
+        let doc = make_doc(html);
+        let spec = make_spec();
+
+        let stub = EventStub {
+            title: "Seminar".to_string(),
+            url: Url::parse("https://example.com/some-stub").unwrap(),
+            date_hint: None,
+            source: SourceEvidence {
+                source_id: "test-jsonld".to_string(),
+                source_url: Url::parse("https://example.com/page").unwrap(),
+                evidence: None,
+                captured_at: None,
+                native_id: None,
+            },
+        };
+        let candidate = JsonLdAdapter
+            .enrich(stub, std::slice::from_ref(&doc), &spec)
+            .unwrap();
+        assert!(
+            candidate.event.description.is_none(),
+            "ambiguous name-only matches (2+ nodes, no url/@id) must yield NO enrichment, \
+             not the first node's description; got {:?}",
+            candidate.event.description
+        );
+    }
+
+    // R9-H05 (completed): a single name-only match (no url/@id) is
+    // unambiguous and SHOULD be enriched — the completion must not over-
+    // restrict and drop legitimate single-node enrichment.
+    #[test]
+    fn enrich_single_name_only_match_is_enriched() {
+        let html = r#"<script type="application/ld+json">
+        {"@type":"Event","name":"Seminar","description":"The only Seminar description"}
+        </script>"#;
+        let doc = make_doc(html);
+        let spec = make_spec();
+
+        let stub = EventStub {
+            title: "Seminar".to_string(),
+            url: Url::parse("https://example.com/some-stub").unwrap(),
+            date_hint: None,
+            source: SourceEvidence {
+                source_id: "test-jsonld".to_string(),
+                source_url: Url::parse("https://example.com/page").unwrap(),
+                evidence: None,
+                captured_at: None,
+                native_id: None,
+            },
+        };
+        let candidate = JsonLdAdapter
+            .enrich(stub, std::slice::from_ref(&doc), &spec)
+            .unwrap();
+        assert_eq!(
+            candidate.event.description.as_deref(),
+            Some("The only Seminar description"),
+            "a single unambiguous name-only match must still be enriched"
         );
     }
 
