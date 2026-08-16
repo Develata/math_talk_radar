@@ -268,6 +268,61 @@ async fn r9_m07_rollback_retained_after_successful_update() {
     );
 }
 
+// R9-B05: update must refuse to overwrite a symlink pre-planted at the
+// rollback path. `std::fs::copy` would follow the symlink and clobber its
+// target; the new code path rejects the symlink and fails the update with
+// exit 10, leaving the current binary intact.
+#[cfg(unix)]
+#[tokio::test]
+async fn r9_b05_update_refuses_symlink_at_rollback_path() {
+    use std::os::unix::fs::symlink;
+    let server = MockServer::start().await;
+    let original = b"#!/bin/sh\necho old\nexit 0\n";
+    mount_release(&server, "v99.0.0", VALID_SCRIPT, None).await;
+
+    let sandbox = Sandbox::new();
+    let binary = sandbox.setup_full(original);
+
+    // Pre-plant a symlink at the rollback path pointing to a sentinel file
+    // outside the binary's directory. A vulnerable `std::fs::copy` would
+    // overwrite the sentinel's body with the old binary content.
+    let sentinel_dir = tempfile::tempdir().expect("sentinel dir");
+    let sentinel = sentinel_dir.path().join("sentinel.txt");
+    std::fs::write(&sentinel, b"SENTINEL-ORIGINAL").expect("write sentinel");
+    let rollback = binary
+        .parent()
+        .expect("binary has parent")
+        .join(".math_talk_radar.rollback");
+    symlink(&sentinel, &rollback).expect("plant symlink");
+
+    let mut cmd = bin();
+    sandbox.set_env(&mut cmd);
+    cmd.env("MATH_TALK_RADAR_RELEASE_API", server.uri())
+        .args(["update"])
+        .assert()
+        .failure()
+        .code(10);
+
+    // The current binary must be untouched (update failed before rename).
+    let content_after = std::fs::read(&binary).expect("read binary");
+    assert_eq!(
+        content_after, original,
+        "binary must NOT be replaced when rollback path is a symlink"
+    );
+    // The sentinel must be untouched (symlink was not followed).
+    let sentinel_after = std::fs::read(&sentinel).expect("read sentinel");
+    assert_eq!(
+        sentinel_after, b"SENTINEL-ORIGINAL",
+        "symlink target must NOT be followed/overwritten"
+    );
+    // The planted symlink itself must remain (we didn't remove it).
+    let meta = std::fs::symlink_metadata(&rollback).expect("rollback meta");
+    assert!(
+        meta.is_symlink(),
+        "the planted symlink must still be there (we refused to touch it)"
+    );
+}
+
 // UPD-004: broken candidate triggers rollback (original preserved).
 #[tokio::test]
 async fn upd_004_broken_candidate_preserves_binary() {

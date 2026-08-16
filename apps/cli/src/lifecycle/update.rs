@@ -626,8 +626,30 @@ pub async fn run(force_unmanaged: bool) -> Result<String, CliError> {
 
     // Rollback copy alongside the binary.
     let rollback_path = rollback_path(&current_binary);
-    std::fs::copy(&current_binary, &rollback_path)
-        .map_err(|e| CliError::update(format!("create rollback failed: {e}")))?;
+
+    // R9-B05: std::fs::copy follows a pre-existing symlink at the destination.
+    // A local attacker who pre-creates a symlink at the predictable rollback
+    // path → /etc/passwd would have the rollback copy overwrite the symlink
+    // target. Guard with:
+    //   1. reject_symlink_in_components on the rollback path (catches a
+    //      symlink in any component, including the leaf).
+    //   2. If a previous rollback exists (M07 retention), verify with
+    //      symlink_metadata that it is a regular file (not a symlink) before
+    //      removing it, then create the new one with create_new so a race
+    //      between remove and create cannot follow a re-created symlink.
+    paths::reject_symlink_in_components(&rollback_path)
+        .map_err(|e| CliError::update(format!("rollback path unsafe: {e}")))?;
+    if let Ok(meta) = std::fs::symlink_metadata(&rollback_path) {
+        if meta.is_symlink() {
+            return Err(CliError::update(format!(
+                "refusing to overwrite symlink at rollback path: {}",
+                rollback_path.display()
+            )));
+        }
+        std::fs::remove_file(&rollback_path)
+            .map_err(|e| CliError::update(format!("remove old rollback failed: {e}")))?;
+    }
+    copy_binary_to_new_file(&current_binary, &rollback_path)?;
     fsync_file(&rollback_path)?;
 
     // Atomic replace. On Unix, rename over an existing file is atomic.
@@ -706,6 +728,37 @@ fn fsync_file(path: &Path) -> Result<(), CliError> {
         .map_err(|e| CliError::update(format!("fsync open {}: {e}", path.display())))?;
     file.sync_all()
         .map_err(|e| CliError::update(format!("fsync {}: {e}", path.display())))?;
+    Ok(())
+}
+
+/// R9-B05: copy `src` binary to `dest` using `create_new(true)` so an
+/// existing file or symlink at `dest` is rejected (never followed). The
+/// caller removes any pre-existing rollback file before invoking this, so
+/// `create_new` is the second guard against a race where a symlink is
+/// re-created between remove and create. Copies in chunks to bound memory
+/// (the binary is up to ~64 MiB). Preserves executable permissions on Unix.
+fn copy_binary_to_new_file(src: &Path, dest: &Path) -> Result<(), CliError> {
+    let mut src_file =
+        std::fs::File::open(src).map_err(|e| CliError::update(format!("open src {src:?}: {e}")))?;
+    let mut dest_file = std::fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(dest)
+        .map_err(|e| CliError::update(format!("create dest {dest:?}: {e}")))?;
+    std::io::copy(&mut src_file, &mut dest_file)
+        .map_err(|e| CliError::update(format!("copy body {src:?} -> {dest:?}: {e}")))?;
+    dest_file
+        .sync_all()
+        .map_err(|e| CliError::update(format!("fsync dest {dest:?}: {e}")))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let meta = std::fs::symlink_metadata(src)
+            .map_err(|e| CliError::update(format!("stat src {src:?}: {e}")))?;
+        let mode = meta.permissions().mode();
+        std::fs::set_permissions(dest, std::fs::Permissions::from_mode(mode))
+            .map_err(|e| CliError::update(format!("chmod dest {dest:?}: {e}")))?;
+    }
     Ok(())
 }
 
