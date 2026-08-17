@@ -1,6 +1,9 @@
 # ADR-0010 — Persist source-health history (multi-record + timestamp)
 
-- Status: Draft (awaiting Deve sign-off)
+- Status: Superseded by ADR-0011 (2026-08-17). ADR-0011 folds M06 into an
+  integrated state-v3 design with B06, H08, and H09 to avoid a repeated
+  schema bump. This file is retained for history; see ADR-0011 for the
+  authoritative decision.
 - Date: 2026-08-16
 - Decider: Deve
 - Supersedes: none (reconciles §22/§23 plan text "source-health history" with
