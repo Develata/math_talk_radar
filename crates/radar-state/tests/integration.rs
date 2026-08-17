@@ -7,7 +7,7 @@ use chrono::{DateTime, NaiveDate, Utc};
 use radar_core::{
     AccessInfo, DatePrecision, DateTimeOrDate, Event, EventDate, EventId, EventStatus, EventType,
     Location, MediaId, MediaResource, MediaType, OnlineAvailability, PublicAccess, ScoreComponents,
-    SourceEvidence,
+    SourceEvidence, SourceHealth, SourceStatus,
 };
 use radar_state::{ChangeKind, Repository, StateError, detect_changes};
 use url::Url;
@@ -606,16 +606,17 @@ fn store_scan_matches_manual_pattern() {
     assert_eq!(manual_changes, scan_changes);
 }
 
-/// ST-16 regression: a v1 database (version=1, no `cancelled_events` table)
-/// is migrated in place to v2 by `Repository::open`. The tombstone table is
-/// created and the version row is bumped — existing events are preserved.
+/// ST-16 / ADR-0011: a v1 database (version=1, no `cancelled_events` table)
+/// is migrated in place to v3 by `Repository::open`. The tombstone and
+/// change_log tables are created and the version row is bumped — existing
+/// events are preserved.
 #[test]
-fn migrates_v1_to_v2_in_place() {
+fn migrates_v1_to_v3_in_place() {
     let dir = tempfile::TempDir::new().expect("temp dir");
     let db_path = dir.path().join("state.redb");
 
     // Simulate a v1 database: version=1, EVENTS + SOURCE_HEALTH tables, but
-    // NO CANCELLED_EVENTS table (the v2 addition).
+    // NO CANCELLED_EVENTS or CHANGE_LOG tables (the v2/v3 additions).
     {
         use radar_state::schema::{EVENTS, SCHEMA_VERSION, SOURCE_HEALTH};
         let db = redb::Database::create(&db_path).expect("create v1 db");
@@ -629,9 +630,9 @@ fn migrates_v1_to_v2_in_place() {
         txn.commit().expect("v1 commit");
     }
 
-    // Open with current binary — should forward-migrate v1→v2.
-    let repo = Repository::open(&db_path).expect("migrate v1 to v2");
-    assert_eq!(repo.schema_version().expect("version"), 2);
+    // Open with current binary — should forward-migrate v1→v3.
+    let repo = Repository::open(&db_path).expect("migrate v1 to v3");
+    assert_eq!(repo.schema_version().expect("version"), 3);
 
     // The tombstone table must exist: exercise it by storing, cancelling, and
     // reappearing an event. If the table were missing, the cancel step would
@@ -646,7 +647,7 @@ fn migrates_v1_to_v2_in_place() {
     assert_eq!(
         stored[0].first_seen_at,
         Some(t0()),
-        "first_seen_at restored from tombstone after v1 to v2 migration"
+        "first_seen_at restored from tombstone after v1 to v3 migration"
     );
 }
 
@@ -675,10 +676,232 @@ fn refuses_to_open_newer_schema_version() {
         matches!(
             err,
             StateError::Schema {
-                expected: 2,
+                expected: 3,
                 found: 999
             }
         ),
         "got {err:?}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// ADR-0011 tests: store_scan_bundle, source-health history, change log,
+// retention purge, v2→v3 migration.
+// ---------------------------------------------------------------------------
+
+fn health(source: &str, status: SourceStatus, at: DateTime<Utc>) -> SourceHealth {
+    SourceHealth {
+        source: source.into(),
+        status,
+        duration_ms: 100,
+        requests: 5,
+        events: 10,
+        recorded_at: Some(at),
+    }
+}
+
+/// TXN-1 (ADR-0011 §6): store_scan_bundle atomically persists events, change
+/// records, and source-health observations in ONE transaction. Reopening the
+/// repo must show all three — no partial write.
+#[test]
+fn bundle_atomicity_persists_events_changes_and_health() {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let db_path = dir.path().join("state.redb");
+    {
+        let repo = Repository::open(&db_path).expect("open");
+        let event = base_event("e1", vec![]);
+        let h = health("s1", SourceStatus::Ok, t0());
+        let (stored, changes) = repo
+            .store_scan_bundle(std::slice::from_ref(&event), std::slice::from_ref(&h), t0())
+            .expect("bundle");
+        assert_eq!(stored.len(), 1);
+        assert_eq!(changes.len(), 1, "EventAdded change expected");
+        assert_eq!(changes[0].kind, ChangeKind::EventAdded);
+    }
+
+    // Reopen — all three must be present.
+    let repo2 = Repository::open(&db_path).expect("reopen");
+    let events = repo2.list_events().expect("list events");
+    assert_eq!(events.len(), 1, "event must survive reopen");
+    let health_history = repo2.list_source_health("s1").expect("list health");
+    assert_eq!(health_history.len(), 1, "health record must survive reopen");
+    assert_eq!(health_history[0].source, "s1");
+    let change_history = repo2
+        .list_changes(DateTime::from_timestamp(0, 0).unwrap())
+        .expect("list changes");
+    assert!(
+        change_history
+            .iter()
+            .any(|c| c.kind == ChangeKind::EventAdded),
+        "change record must survive reopen: {change_history:?}"
+    );
+}
+
+/// ADR-0011 §1/§2: source-health history accumulates per-scan records.
+/// Two scans of the same source must produce two distinct health records,
+/// retrievable in chronological order via list_source_health.
+#[test]
+fn source_health_history_accumulates_across_scans() {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let db_path = dir.path().join("state.redb");
+    let repo = Repository::open(&db_path).expect("open");
+
+    let h0 = health("s1", SourceStatus::Ok, t0());
+    let h1 = health("s1", SourceStatus::Partial, t1());
+    let event = base_event("e1", vec![]);
+    repo.store_scan_bundle(
+        std::slice::from_ref(&event),
+        std::slice::from_ref(&h0),
+        t0(),
+    )
+    .expect("scan 1");
+    repo.store_scan_bundle(
+        std::slice::from_ref(&event),
+        std::slice::from_ref(&h1),
+        t1(),
+    )
+    .expect("scan 2");
+
+    let history = repo.list_source_health("s1").expect("list");
+    assert_eq!(
+        history.len(),
+        2,
+        "two scans must produce two health records"
+    );
+    assert_eq!(history[0].recorded_at, Some(t0()), "oldest first");
+    assert_eq!(history[1].recorded_at, Some(t1()), "newest second");
+    assert_eq!(history[0].status, SourceStatus::Ok);
+    assert_eq!(history[1].status, SourceStatus::Partial);
+}
+
+/// ADR-0011 §3 (R9-H08): change records are persisted to CHANGE_LOG and
+/// survive a reopen. Media history must not be silently lost (§65).
+#[test]
+fn change_log_persists_media_added_across_reopen() {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let db_path = dir.path().join("state.redb");
+    {
+        let repo = Repository::open(&db_path).expect("open");
+        let event = base_event("e1", vec![]);
+        repo.store_scan_bundle(std::slice::from_ref(&event), &[], t0())
+            .expect("seed");
+        let event_with_video = base_event("e1", vec![video("https://youtube.com/v/1")]);
+        repo.store_scan_bundle(std::slice::from_ref(&event_with_video), &[], t1())
+            .expect("add video");
+    }
+
+    let repo2 = Repository::open(&db_path).expect("reopen");
+    let changes = repo2
+        .list_changes(DateTime::from_timestamp(0, 0).unwrap())
+        .expect("list changes");
+    assert!(
+        changes.iter().any(|c| c.kind == ChangeKind::MediaAdded),
+        "MediaAdded must survive reopen: {changes:?}"
+    );
+}
+
+/// ADR-0011 §7: retention purge. Health records and change records older
+/// than RETENTION_DAYS (90) are purged during store_scan_bundle. After
+/// advancing time 91 days, the old records must be gone.
+#[test]
+fn retention_purges_expired_health_and_changes() {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let db_path = dir.path().join("state.redb");
+    let repo = Repository::open(&db_path).expect("open");
+
+    let event = base_event("e1", vec![]);
+    let h = health("s1", SourceStatus::Ok, t0());
+    repo.store_scan_bundle(std::slice::from_ref(&event), std::slice::from_ref(&h), t0())
+        .expect("seed at t0");
+
+    // 91 days later: the old health record and change record are past
+    // retention. A new scan must purge them. Store the SAME event (not empty)
+    // so no EventCancelled is produced — the only old change is EventAdded
+    // from t0, which must be purged.
+    let t_old = t0() + chrono::Duration::days(91);
+    let h_new = health("s1", SourceStatus::Ok, t_old);
+    repo.store_scan_bundle(
+        std::slice::from_ref(&event),
+        std::slice::from_ref(&h_new),
+        t_old,
+    )
+    .expect("scan at t+91d");
+
+    let history = repo.list_source_health("s1").expect("list health");
+    assert_eq!(
+        history.len(),
+        1,
+        "old health record must be purged, only the new one remains"
+    );
+    assert_eq!(history[0].recorded_at, Some(t_old));
+
+    let changes = repo
+        .list_changes(DateTime::from_timestamp(0, 0).unwrap())
+        .expect("list changes");
+    assert!(
+        changes.iter().all(|c| c.detected_at >= t_old),
+        "change records older than retention window must be purged, got: {changes:?}"
+    );
+}
+
+/// ADR-0011 §5: v2→v3 migration re-keys legacy SOURCE_HEALTH rows from bare
+/// source id to composite "{source}\x00{recorded_at}". On real v2 databases
+/// the table is empty (scan path never wrote it); this test simulates the
+/// defensive case where a legacy row exists.
+#[test]
+fn migrates_v2_to_v3_rekeys_legacy_source_health() {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let db_path = dir.path().join("state.redb");
+
+    // Simulate a v2 database with a legacy SOURCE_HEALTH row keyed by bare
+    // source id (no composite key, no recorded_at in the serialized value).
+    {
+        use radar_state::schema::{CANCELLED_EVENTS, EVENTS, SCHEMA_VERSION, SOURCE_HEALTH};
+        let db = redb::Database::create(&db_path).expect("create v2 db");
+        let txn = db.begin_write().expect("v2 txn");
+        {
+            let mut vtable = txn.open_table(SCHEMA_VERSION).expect("v2 schema table");
+            vtable.insert("version", 2u32).expect("write v2 version");
+        }
+        let _ = txn.open_table(EVENTS).expect("v2 events table");
+        let _ = txn.open_table(SOURCE_HEALTH).expect("v2 health table");
+        let _ = txn
+            .open_table(CANCELLED_EVENTS)
+            .expect("v2 tombstone table");
+
+        // Insert a legacy health row: key = bare "s1", value = SourceHealth
+        // serialized WITHOUT recorded_at (serde skip_serializing_if omits None).
+        let legacy = SourceHealth {
+            source: "s1".into(),
+            status: SourceStatus::Ok,
+            duration_ms: 50,
+            requests: 3,
+            events: 7,
+            recorded_at: None,
+        };
+        let bytes = serde_json::to_vec(&legacy).expect("serialize legacy");
+        {
+            let mut health_table = txn.open_table(SOURCE_HEALTH).expect("health table");
+            health_table
+                .insert("s1", bytes.as_slice())
+                .expect("insert legacy");
+        }
+        txn.commit().expect("v2 commit");
+    }
+
+    // Open with current binary — should forward-migrate v2→v3 and re-key.
+    let repo = Repository::open(&db_path).expect("migrate v2 to v3");
+    assert_eq!(repo.schema_version().expect("version"), 3);
+
+    // The legacy row must have been re-keyed to composite and stamped with
+    // recorded_at (= migration time, not None).
+    let history = repo.list_source_health("s1").expect("list health");
+    assert_eq!(history.len(), 1, "legacy row must survive migration");
+    assert!(
+        history[0].recorded_at.is_some(),
+        "recorded_at must be stamped during migration, got {:?}",
+        history[0].recorded_at
+    );
+    assert_eq!(history[0].source, "s1");
+    assert_eq!(history[0].duration_ms, 50);
 }

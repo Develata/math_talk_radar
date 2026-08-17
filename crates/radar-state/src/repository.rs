@@ -17,19 +17,20 @@ use serde::{Deserialize, Serialize};
 use crate::changes::{ChangeRecord, detect_changes};
 use crate::migrations::run_migrations;
 use crate::schema::{
-    CANCELLED_EVENTS, EVENTS, SCHEMA_VERSION, SOURCE_HEALTH, STATE_SCHEMA_VERSION,
+    CANCELLED_EVENTS, CHANGE_LOG, EVENTS, SCHEMA_VERSION, SOURCE_HEALTH, STATE_SCHEMA_VERSION,
 };
 
-/// Tombstone retention window (ST-16). A cancelled event's `first_seen_at` is
-/// preserved for this long so a reappearance restores the original first-seen
-/// timestamp instead of resetting it. 90 days covers the typical academic-year
-/// cycle (a talk announced for a term, removed when the term ends, re-listed
-/// the following year).
-const TOMBSTONE_RETENTION_DAYS: i64 = 90;
+/// Retention window (days) for cancelled-event tombstones (ST-16),
+/// source-health history (ADR-0011 §7), and the change log (ADR-0011 §3).
+/// A single constant governs all three so they age out together and the
+/// embedded DB stays bounded. 90 days covers the typical academic-year
+/// cycle.
+const RETENTION_DAYS: i64 = 90;
 
-/// Tombstone for a cancelled event (ST-16). Stores the `first_seen_at` of the
-/// event at the moment it was pruned, plus the `cancelled_at` timestamp used
-/// to age out the tombstone after [`TOMBSTONE_RETENTION_DAYS`].
+/// Tombstone for a cancelled event (ST-16, ADR-0011 INV-1..INV-5). Stores the
+/// `first_seen_at` of the event at the moment it was pruned, plus the
+/// `cancelled_at` timestamp used to age out the tombstone after
+/// [`RETENTION_DAYS`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CancelledEventTombstone {
     pub first_seen_at: DateTime<Utc>,
@@ -204,6 +205,41 @@ impl Repository {
         events: &[Event],
         now: DateTime<Utc>,
     ) -> Result<(Vec<Event>, Vec<ChangeRecord>), StateError> {
+        self.store_scan_bundle(events, &[], now)
+    }
+
+    /// Atomically compare-and-store a scan's events, change log, and source
+    /// health in ONE redb transaction (ADR-0011 §6). Also purges expired
+    /// tombstones, health records, and change records (> [`RETENTION_DAYS`])
+    /// in the same transaction.
+    ///
+    /// This is the canonical scan-path write primitive. It supersedes
+    /// [`Repository::store_scan`] (which delegates here with an empty health
+    /// slice) and [`Repository::store_source_health`] (which was never called
+    /// by the scan path and overwrote rather than appended).
+    ///
+    /// Within the transaction:
+    /// 1. Reads all previous events and tombstones.
+    /// 2. Runs `detect_changes` → `Vec<ChangeRecord>`.
+    /// 3. Upserts each current event, preserving `first_seen_at` (INV-1) and
+    ///    restoring from tombstones within the retention window (INV-2).
+    /// 4. Prunes absent events: writes tombstones, removes event rows (INV-4).
+    /// 5. Appends each `ChangeRecord` to `CHANGE_LOG` (R9-H08).
+    /// 6. Appends each `source_health` record to `SOURCE_HEALTH` under
+    ///    composite key `"{source}\x00{recorded_at}"` (R9-M06/B06). Defensive:
+    ///    stamps `recorded_at = now` if the caller left it `None`.
+    /// 7. Purges expired rows from `CANCELLED_EVENTS`, `SOURCE_HEALTH`, and
+    ///    `CHANGE_LOG` (all older than `now - RETENTION_DAYS`).
+    ///
+    /// A failure rolls back the entire transaction (TXN-2). The scan path
+    /// surfaces this as exit 5 (CLI-21). The `--no-state` path opens
+    /// read-only and never calls this method (RO-1).
+    pub fn store_scan_bundle(
+        &self,
+        events: &[Event],
+        source_health: &[SourceHealth],
+        now: DateTime<Utc>,
+    ) -> Result<(Vec<Event>, Vec<ChangeRecord>), StateError> {
         if self.read_only {
             return Err(StateError::ReadOnly);
         }
@@ -211,6 +247,8 @@ impl Repository {
         let (stored, changes) = {
             let mut table = txn.open_table(EVENTS)?;
             let mut tombstones = txn.open_table(CANCELLED_EVENTS)?;
+            let mut health_table = txn.open_table(SOURCE_HEALTH)?;
+            let mut change_log = txn.open_table(CHANGE_LOG)?;
             // Read all previous events once — used for both change detection
             // and `first_seen_at` preservation (ST-2: no per-upsert re-deser).
             let mut prev_events: Vec<Event> = Vec::new();
@@ -225,8 +263,8 @@ impl Repository {
             // ST-16: read tombstones so a reappearing event restores its
             // original `first_seen_at` instead of being treated as brand-new.
             // Tombstones past the retention window are treated as if purged:
-            // a reappear past the window is a genuinely new event.
-            let retention_cutoff = now - chrono::Duration::days(TOMBSTONE_RETENTION_DAYS);
+            // a reappear past the window is a genuinely new event (INV-3).
+            let retention_cutoff = now - chrono::Duration::days(RETENTION_DAYS);
             let mut tombstone_first_seen: HashMap<String, DateTime<Utc>> = HashMap::new();
             let mut expired_tombstone_keys: Vec<String> = Vec::new();
             for entry in tombstones.iter()? {
@@ -245,9 +283,9 @@ impl Repository {
             for event in events {
                 let mut s = event.clone();
                 let prev_first = prev_first_seen.get(event.id.0.as_str()).copied().flatten();
-                // ST-16: if the event was previously cancelled (a tombstone
-                // exists), restore its `first_seen_at` and remove the tombstone
-                // — the event is no longer cancelled.
+                // ST-16 / INV-2: if the event was previously cancelled (a
+                // tombstone exists), restore its `first_seen_at` and remove
+                // the tombstone — the event is no longer cancelled.
                 let restored_first = tombstone_first_seen.get(&event.id.0).copied();
                 let first_seen = prev_first.or(restored_first).unwrap_or(now);
                 if restored_first.is_some() {
@@ -259,15 +297,10 @@ impl Repository {
                 table.insert(event.id.0.as_str(), bytes.as_slice())?;
                 stored.push(s);
             }
-            // ST M-1: prune events that were in the previous scan but are absent
-            // from the current one (the cancelled set). Without this, cancelled
-            // events stay in the table forever and detect_changes re-emits
-            // EventCancelled for them on every subsequent scan. Deleting here
-            // keeps the DB bounded and makes EventCancelled a one-shot signal.
-            //
-            // ST-16: when pruning, write a tombstone preserving `first_seen_at`
-            // so a future reappearance restores it instead of resetting to the
-            // reappearance scan time.
+            // ST M-1 / INV-4: prune events that were in the previous scan but
+            // are absent from the current one (the cancelled set). Write a
+            // tombstone preserving `first_seen_at` so a future reappearance
+            // restores it instead of resetting to the reappearance scan time.
             for prev in &prev_events {
                 if !current_ids.contains(prev.id.0.as_str()) {
                     if let Some(first_seen) = prev.first_seen_at {
@@ -281,10 +314,69 @@ impl Repository {
                     table.remove(prev.id.0.as_str())?;
                 }
             }
-            // ST-16: purge expired tombstones collected during the read pass.
+            // INV-4: purge expired tombstones collected during the read pass.
             for key in expired_tombstone_keys {
                 tombstones.remove(key.as_str())?;
             }
+
+            // ADR-0011 §3 (R9-H08): persist change records to CHANGE_LOG so
+            // media history and change signals survive a restart (§65).
+            for record in &changes {
+                let key = format!(
+                    "{}\u{0}{}\u{0}{}",
+                    record.detected_at.to_rfc3339(),
+                    record.event_id.0,
+                    record.kind.as_str()
+                );
+                let bytes = serde_json::to_vec(record)?;
+                change_log.insert(key.as_str(), bytes.as_slice())?;
+            }
+
+            // ADR-0011 §1/§2 (R9-M06/B06): persist source-health observations
+            // to SOURCE_HEALTH under composite key for per-scan history.
+            // Defensive: stamp recorded_at = now if the caller left it None.
+            for h in source_health {
+                let mut record = h.clone();
+                if record.recorded_at.is_none() {
+                    record.recorded_at = Some(now);
+                }
+                let ts = record
+                    .recorded_at
+                    .map(|t| t.to_rfc3339())
+                    .unwrap_or_else(|| now.to_rfc3339());
+                let key = format!("{}\u{0}{}", record.source, ts);
+                let bytes = serde_json::to_vec(&record)?;
+                health_table.insert(key.as_str(), bytes.as_slice())?;
+            }
+
+            // ADR-0011 §7: purge expired SOURCE_HEALTH and CHANGE_LOG records
+            // (older than RETENTION_DAYS). Same transaction as the writes.
+            let mut expired_health_keys: Vec<String> = Vec::new();
+            for entry in health_table.iter()? {
+                let (key, value) = entry?;
+                let h: SourceHealth = serde_json::from_slice(value.value())?;
+                if let Some(ts) = h.recorded_at
+                    && ts < retention_cutoff
+                {
+                    expired_health_keys.push(key.value().to_string());
+                }
+            }
+            for key in expired_health_keys {
+                health_table.remove(key.as_str())?;
+            }
+
+            let mut expired_change_keys: Vec<String> = Vec::new();
+            for entry in change_log.iter()? {
+                let (key, value) = entry?;
+                let r: ChangeRecord = serde_json::from_slice(value.value())?;
+                if r.detected_at < retention_cutoff {
+                    expired_change_keys.push(key.value().to_string());
+                }
+            }
+            for key in expired_change_keys {
+                change_log.remove(key.as_str())?;
+            }
+
             (stored, changes)
         };
         txn.commit()?;
@@ -328,6 +420,37 @@ impl Repository {
         }
         txn.commit()?;
         Ok(())
+    }
+
+    /// List source-health history for `source`, ordered oldest-to-newest by
+    /// `recorded_at` (ADR-0011 §2). Reads composite keys starting with
+    /// `"{source}\x00"`; legacy keys (bare source id, pre-v3) are skipped.
+    pub fn list_source_health(&self, source: &str) -> Result<Vec<SourceHealth>, StateError> {
+        let txn = self.db.begin_read()?;
+        let table = txn.open_table(SOURCE_HEALTH)?;
+        let prefix = format!("{source}\u{0}");
+        let mut out = Vec::new();
+        for entry in table.iter()? {
+            let (key, value) = entry?;
+            if key.value().starts_with(&prefix) {
+                out.push(serde_json::from_slice(value.value())?);
+            }
+        }
+        Ok(out)
+    }
+
+    /// List change records since `since` (ADR-0011 §3, R9-H08). Ordered
+    /// oldest-to-newest by `detected_at` (composite key lexicographic sort).
+    pub fn list_changes(&self, since: DateTime<Utc>) -> Result<Vec<ChangeRecord>, StateError> {
+        let txn = self.db.begin_read()?;
+        let table = txn.open_table(CHANGE_LOG)?;
+        let start = since.to_rfc3339();
+        let mut out = Vec::new();
+        for entry in table.range(start.as_str()..)? {
+            let (_, value) = entry?;
+            out.push(serde_json::from_slice(value.value())?);
+        }
+        Ok(out)
     }
 
     /// The persisted schema version.

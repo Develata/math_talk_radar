@@ -49,6 +49,23 @@ impl ChangeRecord {
     }
 }
 
+impl ChangeKind {
+    /// Stable snake_case string for composite-key construction in
+    /// `CHANGE_LOG` (ADR-0011 §3). Must match `#[serde(rename_all)]`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ChangeKind::EventAdded => "event_added",
+            ChangeKind::EventUpdated => "event_updated",
+            ChangeKind::ScheduleAdded => "schedule_added",
+            ChangeKind::SpeakerAdded => "speaker_added",
+            ChangeKind::LivestreamAdded => "livestream_added",
+            ChangeKind::MediaAdded => "media_added",
+            ChangeKind::MediaRemoved => "media_removed",
+            ChangeKind::EventCancelled => "event_cancelled",
+        }
+    }
+}
+
 /// Compare a previous scan's persisted events against the current scan and
 /// emit change records (§23). Events are matched by [`EventId`].
 ///
