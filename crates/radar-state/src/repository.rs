@@ -49,6 +49,8 @@ pub enum StateError {
     ReadOnly,
     #[error("state serialization error: {0}")]
     Serde(#[from] serde_json::Error),
+    #[error("source health record missing recorded_at (required for v3 composite key)")]
+    MissingRecordedAt,
 }
 
 // Manual From impls so `?` converts each redb-specific error into the single
@@ -216,7 +218,8 @@ impl Repository {
     /// This is the canonical scan-path write primitive. It supersedes
     /// [`Repository::store_scan`] (which delegates here with an empty health
     /// slice) and [`Repository::store_source_health`] (which was never called
-    /// by the scan path and overwrote rather than appended).
+    /// by the scan path and operates one record at a time rather than in the
+    /// scan's atomic transaction).
     ///
     /// Within the transaction:
     /// 1. Reads all previous events and tombstones.
@@ -336,42 +339,47 @@ impl Repository {
             // to SOURCE_HEALTH under composite key for per-scan history.
             // Defensive: stamp recorded_at = now if the caller left it None.
             for h in source_health {
-                let mut record = h.clone();
-                if record.recorded_at.is_none() {
-                    record.recorded_at = Some(now);
-                }
-                let ts = record
-                    .recorded_at
-                    .map(|t| t.to_rfc3339())
-                    .unwrap_or_else(|| now.to_rfc3339());
-                let key = format!("{}\u{0}{}", record.source, ts);
-                let bytes = serde_json::to_vec(&record)?;
+                let ts = h.recorded_at.unwrap_or(now);
+                let key = format!("{}\u{0}{}", h.source, ts.to_rfc3339());
+                let bytes = if h.recorded_at.is_some() {
+                    serde_json::to_vec(h)?
+                } else {
+                    let mut stamped = h.clone();
+                    stamped.recorded_at = Some(now);
+                    serde_json::to_vec(&stamped)?
+                };
                 health_table.insert(key.as_str(), bytes.as_slice())?;
             }
 
             // ADR-0011 §7: purge expired SOURCE_HEALTH and CHANGE_LOG records
             // (older than RETENTION_DAYS). Same transaction as the writes.
+            // Key-based expiry: the composite keys encode the timestamp, so we
+            // parse it from the key string instead of deserializing the full
+            // value — O(n) iteration but zero serde cost per row, and a
+            // corrupt value can't crash the purge.
+            let cutoff_rfc3339 = retention_cutoff.to_rfc3339();
             let mut expired_health_keys: Vec<String> = Vec::new();
             for entry in health_table.iter()? {
-                let (key, value) = entry?;
-                let h: SourceHealth = serde_json::from_slice(value.value())?;
-                if let Some(ts) = h.recorded_at
-                    && ts < retention_cutoff
-                {
-                    expired_health_keys.push(key.value().to_string());
+                let (key, _value) = entry?;
+                let key_str = key.value();
+                if let Some(idx) = key_str.find('\u{0}') {
+                    let ts = &key_str[idx + 1..];
+                    if ts < cutoff_rfc3339.as_str() {
+                        expired_health_keys.push(key_str.to_string());
+                    }
                 }
             }
             for key in expired_health_keys {
                 health_table.remove(key.as_str())?;
             }
 
+            // CHANGE_LOG key starts with `{detected_at_rfc3339}\x00...`, so
+            // range(..cutoff) yields exactly the expired records — O(log n +
+            // expired), zero deserialization.
             let mut expired_change_keys: Vec<String> = Vec::new();
-            for entry in change_log.iter()? {
-                let (key, value) = entry?;
-                let r: ChangeRecord = serde_json::from_slice(value.value())?;
-                if r.detected_at < retention_cutoff {
-                    expired_change_keys.push(key.value().to_string());
-                }
+            for entry in change_log.range(..cutoff_rfc3339.as_str())? {
+                let (key, _value) = entry?;
+                expired_change_keys.push(key.value().to_string());
             }
             for key in expired_change_keys {
                 change_log.remove(key.as_str())?;
@@ -406,35 +414,42 @@ impl Repository {
         Ok(out)
     }
 
-    /// Persist a source-health record, overwriting any previous entry for the
-    /// same source id.
+    /// Persist a source-health record under the v3 composite key
+    /// `"{source}\x00{recorded_at}"` (ADR-0011 §2). Requires `recorded_at`
+    /// to be set — the scan path uses [`Repository::store_scan_bundle`] which
+    /// stamps it from the caller-supplied `now`; this standalone method
+    /// enforces the same contract since it has no `now` parameter.
     pub fn store_source_health(&self, health: &SourceHealth) -> Result<(), StateError> {
         if self.read_only {
             return Err(StateError::ReadOnly);
         }
+        let ts = health.recorded_at.ok_or(StateError::MissingRecordedAt)?;
+        let key = format!("{}\u{0}{}", health.source, ts.to_rfc3339());
         let txn = self.db.begin_write()?;
         {
             let mut table = txn.open_table(SOURCE_HEALTH)?;
             let bytes = serde_json::to_vec(health)?;
-            table.insert(health.source.as_str(), bytes.as_slice())?;
+            table.insert(key.as_str(), bytes.as_slice())?;
         }
         txn.commit()?;
         Ok(())
     }
 
     /// List source-health history for `source`, ordered oldest-to-newest by
-    /// `recorded_at` (ADR-0011 §2). Reads composite keys starting with
-    /// `"{source}\x00"`; legacy keys (bare source id, pre-v3) are skipped.
+    /// `recorded_at` (ADR-0011 §2). Uses a prefix range scan
+    /// `"{source}\x00".."{source}\x01"` so only this source's rows are visited
+    /// — O(log n + k) instead of a full-table scan with prefix filtering.
+    /// Legacy keys (bare source id, pre-v3) fall outside the range and are
+    /// skipped.
     pub fn list_source_health(&self, source: &str) -> Result<Vec<SourceHealth>, StateError> {
         let txn = self.db.begin_read()?;
         let table = txn.open_table(SOURCE_HEALTH)?;
-        let prefix = format!("{source}\u{0}");
+        let start = format!("{source}\u{0}");
+        let end = format!("{source}\u{1}");
         let mut out = Vec::new();
-        for entry in table.iter()? {
-            let (key, value) = entry?;
-            if key.value().starts_with(&prefix) {
-                out.push(serde_json::from_slice(value.value())?);
-            }
+        for entry in table.range(start.as_str()..end.as_str())? {
+            let (_, value) = entry?;
+            out.push(serde_json::from_slice(value.value())?);
         }
         Ok(out)
     }
