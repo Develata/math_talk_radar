@@ -1,6 +1,7 @@
 # ADR-0011 — Integrated state-v3 (source-health history, change log, tombstones, first_seen)
 
-- Status: Draft (awaiting Deve sign-off)
+- Status: Accepted (Deve sign-off 2026-08-17 — defaults approved: RETENTION_DAYS=90,
+  §64 optional-field path, lossless additive migration)
 - Date: 2026-08-17
 - Decider: Deve
 - Supersedes: ADR-0010 (rolled into this ADR; ADR-0010's M06 content is

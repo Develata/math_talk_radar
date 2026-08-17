@@ -14,7 +14,7 @@ use radar_core::normalize::normalize_name;
 use radar_core::people::{MatchContext, ScholarRecord};
 use radar_core::ranking::{InterestWeights, score_event};
 use radar_core::topics::{NormalizedTopic, match_topics_normalized};
-use radar_core::{Event, config::SourceSpec, config::SourceTier};
+use radar_core::{Event, SourceHealth, config::SourceSpec, config::SourceTier};
 
 use crate::cli::{ScanArgs, ScanMode};
 use crate::config_loader::load_sources;
@@ -197,11 +197,20 @@ pub async fn run_scan(args: ScanArgs) -> Result<ScanOutput, CliError> {
     // given query must NOT be recorded as `EventCancelled` in persisted state
     // (CLI-10: regression from ST-1 wiring that ran store_scan after the cap).
     let now = Utc::now();
+
+    // ADR-0011 §6: collect source_health before the state write and stamp
+    // recorded_at so store_scan_bundle can persist per-scan history. The same
+    // vector is reused for the output ScanOutput below.
+    let mut source_health: Vec<SourceHealth> = results.iter().map(|r| r.health.clone()).collect();
+    for h in &mut source_health {
+        h.recorded_at = Some(now);
+    }
+
     let (mut events, changes) = if args.no_state {
         (events, Vec::new())
     } else {
         match open_state_repo(args.state.as_deref()) {
-            Ok(repo) => match repo.store_scan(&events, now) {
+            Ok(repo) => match repo.store_scan_bundle(&events, &source_health, now) {
                 Ok((stored, changes)) => (stored, changes),
                 // CLI-21: the DB opened but the write failed — that is a
                 // state-fatal condition (§32 exit 5), not a best-effort
@@ -259,8 +268,6 @@ pub async fn run_scan(args: ScanArgs) -> Result<ScanOutput, CliError> {
         kept.push(e);
     }
     events = kept;
-
-    let source_health = results.into_iter().map(|r| r.health).collect();
 
     let output = ScanOutput {
         schema_version: OUTPUT_SCHEMA_VERSION.to_string(),
