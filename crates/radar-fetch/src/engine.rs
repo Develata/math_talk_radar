@@ -418,6 +418,7 @@ pub async fn fetch_source(
                 duration_ms: 0,
                 requests: 0,
                 events: 0,
+                recorded_at: None,
             },
         };
     }
@@ -441,6 +442,7 @@ pub async fn fetch_source(
                     duration_ms: start.elapsed().as_millis() as u64,
                     requests: 0,
                     events: 0,
+                    recorded_at: None,
                 },
             };
         }
@@ -467,6 +469,7 @@ pub async fn fetch_source(
                     duration_ms: start.elapsed().as_millis() as u64,
                     requests: source.request_budget - budget.remaining,
                     events: 0,
+                    recorded_at: None,
                 },
             };
         }
@@ -485,6 +488,7 @@ pub async fn fetch_source(
                     duration_ms: start.elapsed().as_millis() as u64,
                     requests: source.request_budget - budget.remaining,
                     events: 0,
+                    recorded_at: None,
                 },
             };
         }
@@ -560,6 +564,7 @@ pub async fn fetch_source(
             duration_ms: start.elapsed().as_millis() as u64,
             requests: source.request_budget - budget.remaining,
             events,
+            recorded_at: None,
         },
     }
 }
@@ -624,6 +629,7 @@ pub async fn fetch_all(
                     duration_ms: 0,
                     requests: 0,
                     events: 0,
+                    recorded_at: None,
                 },
             });
         }
