@@ -49,8 +49,6 @@ pub enum StateError {
     ReadOnly,
     #[error("state serialization error: {0}")]
     Serde(#[from] serde_json::Error),
-    #[error("source health record missing recorded_at (required for v3 composite key)")]
-    MissingRecordedAt,
 }
 
 // Manual From impls so `?` converts each redb-specific error into the single
@@ -118,7 +116,7 @@ impl Repository {
     }
 
     /// Open the database in read-only mode. Writes (store_event /
-    /// store_source_health) return [`StateError::ReadOnly`]. The database file
+    /// store_scan_bundle) return [`StateError::ReadOnly`]. The database file
     /// is never created or modified. Used by the `--no-state` path (STATE-004).
     pub fn open_read_only(path: &Path) -> Result<Self, StateError> {
         let db = redb::Database::open(path)?;
@@ -217,9 +215,8 @@ impl Repository {
     ///
     /// This is the canonical scan-path write primitive. It supersedes
     /// [`Repository::store_scan`] (which delegates here with an empty health
-    /// slice) and [`Repository::store_source_health`] (which was never called
-    /// by the scan path and operates one record at a time rather than in the
-    /// scan's atomic transaction).
+    /// slice). Health records are written here in the scan's atomic
+    /// transaction under composite keys `"{source}\x00{recorded_at}"`.
     ///
     /// Within the transaction:
     /// 1. Reads all previous events and tombstones.
@@ -339,15 +336,15 @@ impl Repository {
             // to SOURCE_HEALTH under composite key for per-scan history.
             // Defensive: stamp recorded_at = now if the caller left it None.
             for h in source_health {
-                let ts = h.recorded_at.unwrap_or(now);
-                let key = format!("{}\u{0}{}", h.source, ts.to_rfc3339());
-                let bytes = if h.recorded_at.is_some() {
-                    serde_json::to_vec(h)?
-                } else {
-                    let mut stamped = h.clone();
-                    stamped.recorded_at = Some(now);
-                    serde_json::to_vec(&stamped)?
+                let (ts, bytes) = match h.recorded_at {
+                    Some(existing) => (existing, serde_json::to_vec(h)?),
+                    None => {
+                        let mut stamped = h.clone();
+                        stamped.recorded_at = Some(now);
+                        (now, serde_json::to_vec(&stamped)?)
+                    }
                 };
+                let key = format!("{}\u{0}{}", h.source, ts.to_rfc3339());
                 health_table.insert(key.as_str(), bytes.as_slice())?;
             }
 
@@ -412,27 +409,6 @@ impl Repository {
             out.push(serde_json::from_slice(value.value())?);
         }
         Ok(out)
-    }
-
-    /// Persist a source-health record under the v3 composite key
-    /// `"{source}\x00{recorded_at}"` (ADR-0011 §2). Requires `recorded_at`
-    /// to be set — the scan path uses [`Repository::store_scan_bundle`] which
-    /// stamps it from the caller-supplied `now`; this standalone method
-    /// enforces the same contract since it has no `now` parameter.
-    pub fn store_source_health(&self, health: &SourceHealth) -> Result<(), StateError> {
-        if self.read_only {
-            return Err(StateError::ReadOnly);
-        }
-        let ts = health.recorded_at.ok_or(StateError::MissingRecordedAt)?;
-        let key = format!("{}\u{0}{}", health.source, ts.to_rfc3339());
-        let txn = self.db.begin_write()?;
-        {
-            let mut table = txn.open_table(SOURCE_HEALTH)?;
-            let bytes = serde_json::to_vec(health)?;
-            table.insert(key.as_str(), bytes.as_slice())?;
-        }
-        txn.commit()?;
-        Ok(())
     }
 
     /// List source-health history for `source`, ordered oldest-to-newest by

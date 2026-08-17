@@ -33,14 +33,21 @@ pub const CANCELLED_EVENTS: TableDefinition<&str, &[u8]> = TableDefinition::new(
 /// Source health history (ADR-0011 §2). Keyed by composite
 /// `"{source_id}\x00{recorded_at_rfc3339}"` so each scan appends a new record
 /// rather than overwriting. Lexicographic sort of the composite key yields
-/// chronological order per source. Value is a serde_json-serialized
-/// [`radar_core::SourceHealth`] (with `recorded_at` stamped by the scan path).
-/// Purged after [`super::repository::RETENTION_DAYS`] (90 days).
+/// chronological order per source — this relies on `recorded_at` being a
+/// `DateTime<Utc>` (fixed `Z` offset, zero-padded RFC3339); a `FixedOffset`
+/// or raw-string timestamp would silently break the ordering. Value is a
+/// serde_json-serialized [`radar_core::SourceHealth`] (with `recorded_at`
+/// stamped by the scan path). Purged after
+/// [`super::repository::RETENTION_DAYS`] (90 days).
 pub const SOURCE_HEALTH: TableDefinition<&str, &[u8]> = TableDefinition::new("source_health");
 
 /// Change log (ADR-0011 §3, R9-H08). Keyed by composite
 /// `"{detected_at_rfc3339}\x00{event_id}\x00{kind}"` so records sort
-/// chronologically across all events, and per-event within a scan. Value is a
+/// chronologically across all events, and per-event within a scan. The
+/// timestamp-first layout enables `range(..cutoff)` expiry in
+/// O(log n + expired) — this relies on `detected_at` being a `DateTime<Utc>`
+/// (fixed `Z` offset, zero-padded RFC3339); a `FixedOffset` or raw-string
+/// timestamp would silently break the ordering. Value is a
 /// serde_json-serialized [`super::changes::ChangeRecord`]. Purged after
 /// [`super::repository::RETENTION_DAYS`] (90 days).
 pub const CHANGE_LOG: TableDefinition<&str, &[u8]> = TableDefinition::new("change_log");
