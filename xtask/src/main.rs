@@ -398,7 +398,6 @@ fn validate_source_registry(root: &Path) -> Vec<String> {
     let mut seen = HashSet::new();
     let mut audited_count: usize = 0;
     let mut enabled_fixture_count: usize = 0;
-    let mut missing_detail_fixture_count: usize = 0;
     let mut pending_audit_count: usize = 0;
     let mut media_source_count: usize = 0;
     let mut enabled_adapter_kinds: HashSet<&str> = HashSet::new();
@@ -500,7 +499,10 @@ fn validate_source_registry(root: &Path) -> Vec<String> {
                     ));
                 }
             } else if ADAPTERS_WITH_DETAIL.contains(&cell(i_adapter)) {
-                missing_detail_fixture_count += 1;
+                errors.push(format!(
+                    "source-registry row {i} ({id}): enabled source with adapter '{}' requires detail_fixture (§45)",
+                    cell(i_adapter)
+                ));
             }
             enabled_adapter_kinds.insert(cell(i_adapter));
 
@@ -574,15 +576,6 @@ fn validate_source_registry(root: &Path) -> Vec<String> {
         if media_source_count < 3 {
             eprintln!(
                 "warning: §18 coverage: need >=3 media/recording sources, got {media_source_count}"
-            );
-        }
-        // R9-H03: §45 expects a detail_fixture for every enabled source whose
-        // adapter fetches a detail page. Currently a warning (fixtures are
-        // being captured incrementally); upgradable to a hard error once the
-        // set is complete. Suppressed during an in-progress audit.
-        if missing_detail_fixture_count > 0 {
-            eprintln!(
-                "warning: R9-H03 / §45: {missing_detail_fixture_count} enabled source(s) with a detail-fetching adapter have no detail_fixture (file-existence is hard-enforced when the column is non-empty)"
             );
         }
     }

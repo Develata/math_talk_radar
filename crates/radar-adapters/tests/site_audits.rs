@@ -496,3 +496,274 @@ fn rss_enrich_extracts_vimeo_media_from_html_content() {
         candidate.event.media
     );
 }
+
+// ===========================================================================
+// R9-H03 / §45: detail-fixture enrich golden tests. Each enabled source has a
+// sanitized detail fixture; enrich must extract title/date/media from it.
+// For RSS the stub title is preserved and description/media come from the
+// detail page. For html_config the title/date come from the configured
+// selectors (detail_title, detail_date) and media from link heuristics.
+// ===========================================================================
+
+fn enrich_fixture_rss(
+    id: &str,
+    fixture_path: &str,
+    stub_title: &str,
+) -> radar_core::EventCandidate {
+    let body = std::fs::read_to_string(fixture_path)
+        .unwrap_or_else(|e| panic!("{id}: fixture {fixture_path}: {e}"));
+    let source = make_source(id, AdapterKind::Rss);
+    let entry = source
+        .entrypoint
+        .clone()
+        .unwrap_or_else(|| Url::parse("https://example.com/").unwrap());
+    let doc = make_doc(&body, "text/html", entry.as_str());
+    let s = stub(stub_title, "https://example.com/event/1", id);
+    RssAdapter
+        .enrich(s, std::slice::from_ref(&doc), &source)
+        .unwrap_or_else(|e| panic!("{id}: enrich must not error, got {e:?}"))
+}
+
+fn enrich_fixture_html(
+    id: &str,
+    fixture_path: &str,
+    stub_title: &str,
+) -> radar_core::EventCandidate {
+    let body = std::fs::read_to_string(fixture_path)
+        .unwrap_or_else(|e| panic!("{id}: fixture {fixture_path}: {e}"));
+    let source = source_from_embedded(id);
+    let url = source
+        .entrypoint
+        .as_ref()
+        .map(|u| u.as_str())
+        .unwrap_or("https://example.com/");
+    let doc = make_doc(&body, "text/html", url);
+    let s = stub(stub_title, "https://example.com/event/1", id);
+    HtmlConfigAdapter
+        .enrich(s, std::slice::from_ref(&doc), &source)
+        .unwrap_or_else(|e| panic!("{id}: enrich must not error, got {e:?}"))
+}
+
+fn assert_has_video(id: &str, candidate: &radar_core::EventCandidate) {
+    assert!(
+        candidate
+            .event
+            .media
+            .iter()
+            .any(|m| m.media_type == radar_core::MediaType::Video),
+        "{id}: enrich must extract video media from detail fixture, got {:?}",
+        candidate.event.media
+    );
+}
+
+fn assert_dated(id: &str, candidate: &radar_core::EventCandidate) {
+    assert!(
+        candidate.event.date.precision != DatePrecision::Unknown,
+        "{id}: enrich must extract a dated EventDate from detail fixture, got {:?}",
+        candidate.event.date
+    );
+}
+
+// --- RSS (2): stub title preserved, description + media from detail page ---
+
+#[test]
+fn site_clay_rss_enrich_extracts_detail() {
+    let c = enrich_fixture_rss(
+        "clay",
+        "tests/fixtures/sites/clay-detail.html",
+        "Claude Shannon's Information Theory and Its Legacy",
+    );
+    assert_eq!(
+        c.event.title, "Claude Shannon's Information Theory and Its Legacy",
+        "rss enrich preserves stub title"
+    );
+    assert!(
+        c.event.description.is_some(),
+        "clay: enrich must extract description from detail page"
+    );
+    assert_has_video("clay", &c);
+}
+
+#[test]
+fn site_ihes_rss_enrich_extracts_detail() {
+    let c = enrich_fixture_rss(
+        "ihes",
+        "tests/fixtures/sites/ihes-detail.html",
+        "On the Geometry of Moduli Spaces of Sheaves",
+    );
+    assert!(
+        c.event.description.is_some(),
+        "ihes: enrich must extract description from detail page"
+    );
+    assert_has_video("ihes", &c);
+}
+
+// --- html_config (11): title + date from configured selectors, media from links ---
+
+#[test]
+fn site_fields_html_config_enrich_extracts_detail() {
+    let c = enrich_fixture_html(
+        "fields",
+        "tests/fixtures/sites/fields-detail.html",
+        "stub title",
+    );
+    assert!(
+        c.event.title.contains("Complex Analysis"),
+        "fields: enrich must extract title from h1.title, got {:?}",
+        c.event.title
+    );
+    assert_dated("fields", &c);
+    assert_has_video("fields", &c);
+}
+
+#[test]
+fn site_ini_html_config_enrich_extracts_detail() {
+    let c = enrich_fixture_html(
+        "ini",
+        "tests/fixtures/sites/newton-detail.html",
+        "stub title",
+    );
+    assert!(
+        c.event.title.contains("Koopman"),
+        "ini: enrich must extract title from h1, got {:?}",
+        c.event.title
+    );
+    assert_dated("ini", &c);
+    assert_has_video("ini", &c);
+}
+
+#[test]
+fn site_hcm_html_config_enrich_extracts_detail() {
+    let c = enrich_fixture_html("hcm", "tests/fixtures/sites/hcm-detail.html", "stub title");
+    assert!(
+        c.event.title.contains("Floer"),
+        "hcm: enrich must extract title from h1, got {:?}",
+        c.event.title
+    );
+    assert_dated("hcm", &c);
+    assert_has_video("hcm", &c);
+}
+
+#[test]
+fn site_mpim_html_config_enrich_extracts_detail() {
+    let c = enrich_fixture_html(
+        "mpim",
+        "tests/fixtures/sites/mpim-detail.html",
+        "stub title",
+    );
+    assert!(
+        c.event.title.contains("L-functions"),
+        "mpim: enrich must extract title from h1, got {:?}",
+        c.event.title
+    );
+    assert_dated("mpim", &c);
+    assert_has_video("mpim", &c);
+}
+
+#[test]
+fn site_mit_math_html_config_enrich_extracts_detail() {
+    let c = enrich_fixture_html(
+        "mit-math",
+        "tests/fixtures/sites/mit-math-detail.html",
+        "stub title",
+    );
+    assert!(
+        c.event.title.contains("Gross-Zagier"),
+        "mit-math: enrich must extract title from h1, got {:?}",
+        c.event.title
+    );
+    assert_dated("mit-math", &c);
+    assert_has_video("mit-math", &c);
+}
+
+#[test]
+fn site_princeton_math_html_config_enrich_extracts_detail() {
+    let c = enrich_fixture_html(
+        "princeton-math",
+        "tests/fixtures/sites/princeton-math-detail.html",
+        "stub title",
+    );
+    assert!(
+        c.event.title.contains("Positive Mass"),
+        "princeton-math: enrich must extract title from h1, got {:?}",
+        c.event.title
+    );
+    assert_dated("princeton-math", &c);
+    assert_has_video("princeton-math", &c);
+}
+
+#[test]
+fn site_oxford_math_html_config_enrich_extracts_detail() {
+    let c = enrich_fixture_html(
+        "oxford-math",
+        "tests/fixtures/sites/oxford-math-detail.html",
+        "stub title",
+    );
+    assert!(
+        c.event.title.contains("Sarah Hart"),
+        "oxford-math: enrich must extract title from h1, got {:?}",
+        c.event.title
+    );
+    assert_dated("oxford-math", &c);
+    assert_has_video("oxford-math", &c);
+}
+
+#[test]
+fn site_cambridge_dpmms_html_config_enrich_extracts_detail() {
+    let c = enrich_fixture_html(
+        "cambridge-dpmms",
+        "tests/fixtures/sites/cambridge-dpmms-detail.html",
+        "stub title",
+    );
+    assert!(
+        c.event.title.contains("Statistics Clinic"),
+        "cambridge-dpmms: enrich must extract title from h1, got {:?}",
+        c.event.title
+    );
+    assert_dated("cambridge-dpmms", &c);
+    assert_has_video("cambridge-dpmms", &c);
+}
+
+#[test]
+fn site_eth_math_html_config_enrich_extracts_detail() {
+    let c = enrich_fixture_html(
+        "eth-math",
+        "tests/fixtures/sites/eth-math-detail.html",
+        "stub title",
+    );
+    assert!(
+        c.event.title.contains("Algebraic Geometry"),
+        "eth-math: enrich must extract title from h1, got {:?}",
+        c.event.title
+    );
+    assert_dated("eth-math", &c);
+    assert_has_video("eth-math", &c);
+}
+
+#[test]
+fn site_ams_calendar_html_config_enrich_extracts_detail() {
+    let c = enrich_fixture_html(
+        "ams-calendar",
+        "tests/fixtures/sites/ams-calendar-detail.html",
+        "stub title",
+    );
+    assert!(
+        c.event.title.contains("Algebraic Topology"),
+        "ams-calendar: enrich must extract title from h1, got {:?}",
+        c.event.title
+    );
+    assert_dated("ams-calendar", &c);
+    assert_has_video("ams-calendar", &c);
+}
+
+#[test]
+fn site_icm_html_config_enrich_extracts_detail() {
+    let c = enrich_fixture_html("icm", "tests/fixtures/sites/icm-detail.html", "stub title");
+    assert!(
+        c.event.title.contains("Hilbert"),
+        "icm: enrich must extract title from h1, got {:?}",
+        c.event.title
+    );
+    assert_dated("icm", &c);
+    assert_has_video("icm", &c);
+}
