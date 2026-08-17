@@ -6,8 +6,11 @@
 ## Columns (§17)
 
 `id`, `name`, `tier`, `kind`, `adapter`, `entrypoint`, `allowed_hosts`,
-`max_depth`, `request_budget`, `media_strategy`, `dynamic`, `enabled`, `fixture`,
-`last_verified`, `status`, `notes`.
+`max_depth`, `request_budget`, `media_strategy`, `dynamic`, `enabled`,
+`list_fixture`, `detail_fixture`, `last_verified`, `status`, `notes`. R9-H03
+split the legacy `fixture` column into `list_fixture` (list/discovery page) and
+`detail_fixture` (enrichment/detail page; required when the adapter fetches a
+detail page — rss, ics, jsonld, html_config, html_generic).
 
 ## Enumerations
 

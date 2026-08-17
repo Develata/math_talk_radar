@@ -35,7 +35,14 @@ links are recorded, not followed.
 
 `docs/registry/source-registry.tsv` fields: id, name, tier, kind, adapter,
 entrypoint, allowed_hosts, max_depth, request_budget, media_strategy, dynamic,
-enabled, fixture, last_verified, status, notes. Validated by `cargo xtask check`.
+enabled, list_fixture, detail_fixture, last_verified, status, notes. Validated
+by `cargo xtask check`. R9-H03 splits the legacy `fixture` column into
+`list_fixture` (the list/discovery page) and `detail_fixture` (the
+enrichment/detail page); the gate hard-errors on a non-empty path that does
+not exist on disk and warns when the column is empty for an enabled source
+whose adapter fetches a detail page (rss, ics, jsonld, html_config,
+html_generic). The warning path is upgradable to a hard error once the
+detail fixture set is complete.
 
 ## Coverage baseline (§18)
 
@@ -58,10 +65,14 @@ Event/Talk). Do not rely on conference list pages alone.
 
 ## Fixture policy (§45, §63)
 
-Every enabled source: ≥1 list fixture, ≥1 detail fixture (if detail), ≥1 golden
-expectation. On redesign: reproduce → refresh sanitized fixture → update adapter
-→ targeted tests → bump `last_verified` → baseline → commit. Never hack a
-selector against live HTML without a fixture.
+Every enabled source: ≥1 list fixture (`list_fixture` column), ≥1 detail
+fixture (`detail_fixture` column, required when the adapter fetches a detail
+page — rss, ics, jsonld, html_config, html_generic), ≥1 golden expectation. On
+redesign: reproduce → refresh sanitized fixture → update adapter → targeted
+tests → bump `last_verified` → baseline → commit. Never hack a selector
+against live HTML without a fixture. R9-H03: the `detail_fixture` gate is
+warning-while-empty (fixtures captured incrementally) and hard-error when a
+non-empty path is missing from disk.
 
 ## Acceptance cases
 

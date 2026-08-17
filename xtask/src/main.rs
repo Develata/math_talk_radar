@@ -309,11 +309,19 @@ const SRC_COLS: &[&str] = &[
     "media_strategy",
     "dynamic",
     "enabled",
-    "fixture",
+    "list_fixture",
+    "detail_fixture",
     "last_verified",
     "status",
     "notes",
 ];
+
+// R9-H03: adapters whose `plan_enrichment` emits a detail-page fetch. Sources
+// enabled with one of these adapters SHOULD have a `detail_fixture` (§45);
+// the gate warns when missing (hard-error path is deferred until fixtures
+// are captured). `indico` is not yet implemented (returns no fetch plans);
+// `none` has no adapter.
+const ADAPTERS_WITH_DETAIL: &[&str] = &["rss", "ics", "jsonld", "html_config", "html_generic"];
 const SRC_REQUIRED: &[&str] = &[
     "id",
     "name",
@@ -383,12 +391,14 @@ fn validate_source_registry(root: &Path) -> Vec<String> {
     let i_en = idx("enabled");
     let i_status = idx("status");
 
-    let i_fixture = idx("fixture");
+    let i_list_fixture = idx("list_fixture");
+    let i_detail_fixture = idx("detail_fixture");
     let i_media = idx("media_strategy");
 
     let mut seen = HashSet::new();
     let mut audited_count: usize = 0;
     let mut enabled_fixture_count: usize = 0;
+    let mut missing_detail_fixture_count: usize = 0;
     let mut pending_audit_count: usize = 0;
     let mut media_source_count: usize = 0;
     let mut enabled_adapter_kinds: HashSet<&str> = HashSet::new();
@@ -459,7 +469,7 @@ fn validate_source_registry(root: &Path) -> Vec<String> {
             audited_count += 1;
         }
         if cell(i_en) == "true" {
-            let fixture = cell(i_fixture);
+            let fixture = cell(i_list_fixture);
             if !fixture.is_empty() {
                 let fixture_path = root
                     .join("crates/radar-adapters/tests/fixtures")
@@ -468,9 +478,29 @@ fn validate_source_registry(root: &Path) -> Vec<String> {
                     enabled_fixture_count += 1;
                 } else {
                     errors.push(format!(
-                        "source-registry row {i} ({id}): fixture '{fixture}' not found on disk"
+                        "source-registry row {i} ({id}): list_fixture '{fixture}' not found on disk"
                     ));
                 }
+            }
+            // R9-H03: detail_fixture dual gate.
+            //   - hard error if the column is non-empty but the file is
+            //     missing (a typo'd path must not pass silently);
+            //   - warning if the column is empty for an enabled source whose
+            //     adapter fetches a detail page (§45 expects a detail
+            //     fixture; the warning path is upgradable to a hard error
+            //     once the fixtures are captured).
+            let detail = cell(i_detail_fixture);
+            if !detail.is_empty() {
+                let detail_path = root
+                    .join("crates/radar-adapters/tests/fixtures")
+                    .join(detail);
+                if !detail_path.exists() {
+                    errors.push(format!(
+                        "source-registry row {i} ({id}): detail_fixture '{detail}' not found on disk"
+                    ));
+                }
+            } else if ADAPTERS_WITH_DETAIL.contains(&cell(i_adapter)) {
+                missing_detail_fixture_count += 1;
             }
             enabled_adapter_kinds.insert(cell(i_adapter));
 
@@ -544,6 +574,15 @@ fn validate_source_registry(root: &Path) -> Vec<String> {
         if media_source_count < 3 {
             eprintln!(
                 "warning: §18 coverage: need >=3 media/recording sources, got {media_source_count}"
+            );
+        }
+        // R9-H03: §45 expects a detail_fixture for every enabled source whose
+        // adapter fetches a detail page. Currently a warning (fixtures are
+        // being captured incrementally); upgradable to a hard error once the
+        // set is complete. Suppressed during an in-progress audit.
+        if missing_detail_fixture_count > 0 {
+            eprintln!(
+                "warning: R9-H03 / §45: {missing_detail_fixture_count} enabled source(s) with a detail-fetching adapter have no detail_fixture (file-existence is hard-enforced when the column is non-empty)"
             );
         }
     }
