@@ -100,7 +100,8 @@ fn write_lock_content(file: &mut std::fs::File) -> Result<u64, CliError> {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos() as u64)
         .unwrap_or(1);
-    let _ = writeln!(file, "{pid}:{starttime}:{token}");
+    writeln!(file, "{pid}:{starttime}:{token}")
+        .map_err(|e| CliError::update(format!("write lock file: {e}")))?;
     Ok(token)
 }
 
