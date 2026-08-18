@@ -1,5 +1,6 @@
 //! Topic model (§7). MVP uses canonical topic + aliases + phrases, no semantic
 //! model. User interest weights alter ranking only; they never delete events.
+use crate::model::Event;
 use crate::normalize::{contains_phrase, normalize_name};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -126,6 +127,49 @@ pub fn match_topics_normalized(text: &str, topics: &[NormalizedTopic]) -> Vec<To
 pub fn match_topics(text: &str, topics: &[TopicRecord]) -> Vec<TopicMatch> {
     let normalized = normalize_topics(topics);
     match_topics_normalized(text, &normalized)
+}
+
+/// Enrich `event.topics` with registry matches (§7, §6.2, CLI-22).
+///
+/// The title is matched first (canonical names are more likely there), then
+/// the description; matches are deduplicated by `topic_id`, keeping the
+/// highest-confidence hit so a canonical title match beats an alias match from
+/// the description.
+///
+/// CLI-22: merges registry matches with adapter-set topics instead of
+/// replacing. Keeps adapter topics, then adds registry matches, deduping by
+/// `topic_id` and keeping the higher confidence hit.
+pub fn enrich_event_topics(event: &mut Event, topics: &[NormalizedTopic]) {
+    if topics.is_empty() {
+        return;
+    }
+    let mut matches = match_topics_normalized(&event.title, topics);
+    if let Some(desc) = event.description.as_ref()
+        && !desc.is_empty()
+    {
+        let desc_matches = match_topics_normalized(desc, topics);
+        for m in desc_matches {
+            if let Some(existing) = matches.iter_mut().find(|e| e.topic_id == m.topic_id) {
+                if m.confidence > existing.confidence {
+                    *existing = m;
+                }
+            } else {
+                matches.push(m);
+            }
+        }
+    }
+    // Merge: start from adapter topics, then fold in registry matches.
+    let mut merged = std::mem::take(&mut event.topics);
+    for m in matches {
+        if let Some(existing) = merged.iter_mut().find(|e| e.topic_id == m.topic_id) {
+            if m.confidence > existing.confidence {
+                *existing = m;
+            }
+        } else {
+            merged.push(m);
+        }
+    }
+    event.topics = merged;
 }
 
 /// Wrapper for the `topics.toml` document shape: a top-level `[[topics]]` array.

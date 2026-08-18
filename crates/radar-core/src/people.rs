@@ -3,6 +3,7 @@
 //! Role protection (§P-2, §6.2): a name in body text can yield at most
 //! `TitleMention` / `Unknown`. Structured person fields or strong
 //! name-in-context evidence are required for `Speaker` / `Organizer` / etc.
+use crate::model::Event;
 use crate::normalize::{contains_phrase, normalize_name, word_boundaries};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -43,6 +44,52 @@ pub struct ScholarRecord {
     pub aliases: Vec<String>,
     #[serde(default)]
     pub tags: Vec<String>,
+}
+
+/// Pre-normalized scholar representation: canonical name and every candidate
+/// (canonical + aliases) already run through [`normalize_name`]. Built once
+/// per scan via [`normalize_scholars`] and reused across every event by
+/// [`match_scholars_normalized`] and [`enrich_event_scholars`], so the
+/// per-event hot path skips the normalization it would otherwise repeat for
+/// each candidate.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NormalizedScholar {
+    pub id: String,
+    pub canonical_name: String,
+    pub tags: Vec<String>,
+    /// (original surface form, normalized form). Canonical name is first so
+    /// ties prefer it; final selection uses max length for `matched_text`.
+    candidates: Vec<(String, String)>,
+}
+
+impl NormalizedScholar {
+    /// The normalized form of the canonical name, for exact-match lookup
+    /// (used by [`enrich_event_scholars`] pass 1).
+    pub fn normalized_canonical(&self) -> &str {
+        &self.candidates[0].1
+    }
+}
+
+/// Pre-normalize `scholars` once per scan so the per-event matching path no
+/// longer re-normalizes each candidate. The returned [`Vec<NormalizedScholar>`]
+/// is fed to [`match_scholars_normalized`] and [`enrich_event_scholars`].
+pub fn normalize_scholars(scholars: &[ScholarRecord]) -> Vec<NormalizedScholar> {
+    scholars
+        .iter()
+        .map(|s| {
+            let mut candidates = Vec::with_capacity(s.aliases.len() + 1);
+            candidates.push((s.canonical_name.clone(), normalize_name(&s.canonical_name)));
+            for alias in &s.aliases {
+                candidates.push((alias.clone(), normalize_name(alias)));
+            }
+            NormalizedScholar {
+                id: s.id.clone(),
+                canonical_name: s.canonical_name.clone(),
+                tags: s.tags.clone(),
+                candidates,
+            }
+        })
+        .collect()
 }
 
 /// Wrapper for the `scholars.toml` document shape: a top-level
@@ -88,18 +135,17 @@ pub enum MatchContext {
 /// requires ≥2 tokens of the canonical name to also appear in the text.
 const AMBIGUOUS_SURNAMES: &[&str] = &["li", "wang", "tao", "yau", "gross", "wei", "wu"];
 
-/// Match `scholars` against `text` under the given [`MatchContext`] (§6.2).
+/// Match pre-normalized `scholars` against `text` under the given
+/// [`MatchContext`] (§6.2). This is the hot path used per event during a
+/// scan; callers build `scholars` once via [`normalize_scholars`].
 ///
-/// Pipeline: normalize text → for each scholar, normalize canonical name and
-/// aliases → match single-token candidates with word-boundary semantics and
-/// multi-word candidates as substrings → assign role per context, applying the
-/// ambiguous-surname guard in [`MatchContext::BodyText`]. Returns one
-/// [`PersonHit`] per matching scholar; when multiple candidates match, the
-/// longest surface form is kept as `matched_text` (most distinctive form, e.g.
-/// "Don B. Zagier" beats "Zagier").
-pub fn match_scholars(
+/// Each scholar contributes at most one hit; when multiple candidates match,
+/// the longest surface form is kept as `matched_text` (most distinctive form).
+/// See [`match_scholars`] for the full semantics; this variant only skips
+/// per-call normalization of the scholar candidates.
+pub fn match_scholars_normalized(
     text: &str,
-    scholars: &[ScholarRecord],
+    scholars: &[NormalizedScholar],
     context: MatchContext,
 ) -> Vec<PersonHit> {
     let norm_text = normalize_name(text);
@@ -112,19 +158,12 @@ pub fn match_scholars(
 
     let mut hits = Vec::new();
     for scholar in scholars {
-        let norm_canonical = normalize_name(&scholar.canonical_name);
-
-        // Candidates: (original surface form, normalized form). Canonical name
-        // is first so ties prefer it; final selection below uses max length.
-        let mut candidates: Vec<(&str, String)> =
-            vec![(&scholar.canonical_name, norm_canonical.clone())];
-        for alias in &scholar.aliases {
-            candidates.push((alias, normalize_name(alias)));
-        }
+        // Candidates are pre-normalized: (surface form, normalized form).
+        let norm_canonical = &scholar.candidates[0].1;
 
         // Collect every candidate whose normalized form matches the text.
         let mut matched: Vec<&str> = Vec::new();
-        for (original, normalized) in &candidates {
+        for (original, normalized) in &scholar.candidates {
             if normalized.is_empty() {
                 continue;
             }
@@ -187,6 +226,70 @@ pub fn match_scholars(
         });
     }
     hits
+}
+
+/// Match `scholars` against `text` under the given [`MatchContext`] (§6.2).
+/// Convenience wrapper that pre-normalizes `scholars` on each call; for scan
+/// hot paths prefer building a [`NormalizedScholar`] list once via
+/// [`normalize_scholars`] and calling [`match_scholars_normalized`] per event.
+pub fn match_scholars(
+    text: &str,
+    scholars: &[ScholarRecord],
+    context: MatchContext,
+) -> Vec<PersonHit> {
+    let normalized = normalize_scholars(scholars);
+    match_scholars_normalized(text, &normalized, context)
+}
+
+/// CORE-12: enrich the event's people list with scholar tags from the curated
+/// registry and add title-mentioned scholars that adapters did not surface.
+/// Adapters construct `PersonHit`s from parsed speaker fields but set
+/// `scholar_tags: Vec::new()`; without this step the people component can
+/// never exceed the 3-point baseline for a non-TitleMention role, so
+/// important laureates (Fields/Abel/Wolf/Crafoord) are never recognized.
+///
+/// Two passes:
+/// 1. For each adapter-found person, look up the scholar by normalized
+///    canonical name (using the pre-normalized [`NormalizedScholar`] list).
+///    On a hit, back-fill `scholar_tags` and correct the `canonical_name` to
+///    the registry's canonical form (adapters may use a variant surface form).
+/// 2. Run [`match_scholars_normalized`] on the title under `TitleText` context
+///    to find important scholars mentioned only in the title. Add any not
+///    already present (by normalized canonical name) as `TitleMention` so the
+///    people component can still recognize them for ranking.
+pub fn enrich_event_scholars(event: &mut Event, scholars: &[NormalizedScholar]) {
+    if scholars.is_empty() {
+        return;
+    }
+
+    // Pass 1: back-fill scholar_tags on adapter-found people.
+    for person in &mut event.people {
+        if !person.scholar_tags.is_empty() {
+            continue;
+        }
+        let norm_name = normalize_name(&person.canonical_name);
+        if let Some(scholar) = scholars
+            .iter()
+            .find(|s| s.normalized_canonical() == norm_name)
+        {
+            person.scholar_tags = scholar.tags.clone();
+            person.canonical_name = scholar.canonical_name.clone();
+        }
+    }
+
+    // Pass 2: add title-mentioned scholars not already present.
+    let title_hits =
+        match_scholars_normalized(&event.title, scholars, MatchContext::TitleText);
+    for hit in title_hits {
+        let norm_canonical = normalize_name(&hit.canonical_name);
+        let already_present = event
+            .people
+            .iter()
+            .any(|p| normalize_name(&p.canonical_name) == norm_canonical);
+        if !already_present {
+            event.people.push(hit);
+        }
+    }
 }
 
 #[cfg(test)]
