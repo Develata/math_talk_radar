@@ -37,6 +37,59 @@ dynamic = false
 enabled = true
 fixture = "sites/ihes-list.xml"
 
+# --- Media Plane: YouTube channel RSS (§20) ---
+#
+# Three YouTube channels from institutions already covered in the Event Plane,
+# providing two-plane coverage per §20. Each video becomes a recorded-talk
+# Event with a Video MediaResource. media_strategy = "youtube_channel" routes
+# to RssAdapter::enrich_youtube (no detail-page fetch; the RSS entry carries
+# all metadata).
+
+[[sources]]
+id = "ihes-media"
+name = "IHES YouTube"
+tier = "a"
+kind = "media_archive"
+adapter = "rss"
+entrypoint = "https://www.youtube.com/feeds/videos.xml?channel_id=UC4R1IsRVKs_qlWKTm9pT82Q"
+allowed_hosts = ["www.youtube.com", "youtube.com"]
+max_depth = 1
+request_budget = 20
+media_strategy = "youtube_channel"
+dynamic = false
+enabled = true
+fixture = "sites/ihes-media-list.xml"
+
+[[sources]]
+id = "ini-media"
+name = "Isaac Newton Institute YouTube"
+tier = "a"
+kind = "media_archive"
+adapter = "rss"
+entrypoint = "https://www.youtube.com/feeds/videos.xml?channel_id=UCrIzp-iUXd7YL4PacS2Qt4A"
+allowed_hosts = ["www.youtube.com", "youtube.com"]
+max_depth = 1
+request_budget = 20
+media_strategy = "youtube_channel"
+dynamic = false
+enabled = true
+fixture = "sites/ini-media-list.xml"
+
+[[sources]]
+id = "fields-media"
+name = "Fields Institute YouTube"
+tier = "a"
+kind = "media_archive"
+adapter = "rss"
+entrypoint = "https://www.youtube.com/feeds/videos.xml?channel_id=UCSzx-qTK2639JBWgrb6mTmw"
+allowed_hosts = ["www.youtube.com", "youtube.com"]
+max_depth = 1
+request_budget = 20
+media_strategy = "youtube_channel"
+dynamic = false
+enabled = true
+fixture = "sites/fields-media-list.xml"
+
 # --- JSON-LD (1) ---
 
 [[sources]]

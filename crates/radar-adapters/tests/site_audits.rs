@@ -16,6 +16,9 @@ use url::Url;
 
 const CLAY_FEED: &str = include_str!("fixtures/sites/clay-list.xml");
 const IHES_FEED: &str = include_str!("fixtures/sites/ihes-list.xml");
+const IHES_MEDIA_FEED: &str = include_str!("fixtures/sites/ihes-media-list.xml");
+const INI_MEDIA_FEED: &str = include_str!("fixtures/sites/ini-media-list.xml");
+const FIELDS_MEDIA_FEED: &str = include_str!("fixtures/sites/fields-media-list.xml");
 const STANFORD_HTML: &str = include_str!("fixtures/sites/stanford-math-list.html");
 
 fn make_doc(body: &str, content_type: &str, url: &str) -> FetchedDocument {
@@ -41,6 +44,25 @@ fn make_source(id: &str, adapter: AdapterKind) -> SourceSpec {
         max_depth: 2,
         request_budget: 20,
         media_strategy: None,
+        dynamic: false,
+        enabled: true,
+        fixture: None,
+        selectors: None,
+    }
+}
+
+fn make_youtube_source(id: &str, entrypoint: &str) -> SourceSpec {
+    SourceSpec {
+        id: id.to_string(),
+        name: id.to_string(),
+        tier: SourceTier::A,
+        kind: SourceKind::MediaArchive,
+        adapter: AdapterKind::Rss,
+        entrypoint: Some(Url::parse(entrypoint).unwrap()),
+        allowed_hosts: vec!["www.youtube.com".to_string()],
+        max_depth: 1,
+        request_budget: 20,
+        media_strategy: Some("youtube_channel".to_string()),
         dynamic: false,
         enabled: true,
         fixture: None,
@@ -766,4 +788,146 @@ fn site_icm_html_config_enrich_extracts_detail() {
     );
     assert_dated("icm", &c);
     assert_has_video("icm", &c);
+}
+
+// ===========================================================================
+// §20 Media Plane: YouTube channel RSS golden tests (§18 coverage baseline).
+// Each channel's RSS (Atom 1.0 with media extensions) must discover video
+// stubs, and enrich_youtube must build an Event with a Video MediaResource
+// (platform = "youtube", public_access = Open, online = RecordingAvailable).
+// No detail-page fetch occurs — plan_enrichment returns empty for
+// youtube_channel strategy.
+// ===========================================================================
+
+fn discover_youtube_stubs(feed: &str, source: &SourceSpec) -> Vec<EventStub> {
+    let doc = make_doc(feed, "application/atom+xml", source.entrypoint.as_ref().unwrap().as_str());
+    RssAdapter
+        .discover(&doc, source)
+        .unwrap_or_else(|e| panic!("{}: YouTube RSS must parse, got {e:?}", source.id))
+}
+
+fn enrich_youtube_first_stub(feed: &str, source: &SourceSpec) -> radar_core::EventCandidate {
+    let stubs = discover_youtube_stubs(feed, source);
+    let stub = stubs
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| panic!("{}: YouTube feed must yield ≥1 stub", source.id));
+    RssAdapter
+        .enrich(stub, &[], source)
+        .unwrap_or_else(|e| panic!("{}: enrich_youtube must not error, got {e:?}", source.id))
+}
+
+fn assert_youtube_media(id: &str, candidate: &radar_core::EventCandidate) {
+    assert!(
+        candidate.event.media.iter().any(|m| {
+            m.media_type == radar_core::MediaType::Video
+                && m.platform.as_deref() == Some("youtube")
+                && m.public_access == radar_core::PublicAccess::Open
+        }),
+        "{id}: enrich must produce an Open YouTube Video MediaResource, got {:?}",
+        candidate.event.media
+    );
+    assert_eq!(
+        candidate.event.access.online,
+        radar_core::OnlineAvailability::RecordingAvailable,
+        "{id}: YouTube event must have online = RecordingAvailable"
+    );
+    assert_eq!(
+        candidate.event.access.access,
+        radar_core::PublicAccess::Open,
+        "{id}: YouTube event must have access = Open"
+    );
+}
+
+#[test]
+fn site_ihes_media_youtube_discovers_videos() {
+    let source = make_youtube_source(
+        "ihes-media",
+        "https://www.youtube.com/feeds/videos.xml?channel_id=UC4R1IsRVKs_qlWKTm9pT82Q",
+    );
+    let stubs = discover_youtube_stubs(IHES_MEDIA_FEED, &source);
+    assert!(
+        stubs.len() >= 3,
+        "ihes-media: expected >=3 stubs, got {}",
+        stubs.len()
+    );
+    assert!(
+        stubs.iter().all(|s| s
+            .url
+            .as_str()
+            .starts_with("https://www.youtube.com/watch?v=")),
+        "ihes-media: all stub URLs must be YouTube watch URLs"
+    );
+}
+
+#[test]
+fn site_ihes_media_youtube_enrich_extracts_media() {
+    let source = make_youtube_source(
+        "ihes-media",
+        "https://www.youtube.com/feeds/videos.xml?channel_id=UC4R1IsRVKs_qlWKTm9pT82Q",
+    );
+    let c = enrich_youtube_first_stub(IHES_MEDIA_FEED, &source);
+    assert_youtube_media("ihes-media", &c);
+}
+
+#[test]
+fn site_ini_media_youtube_discovers_videos() {
+    let source = make_youtube_source(
+        "ini-media",
+        "https://www.youtube.com/feeds/videos.xml?channel_id=UCrIzp-iUXd7YL4PacS2Qt4A",
+    );
+    let stubs = discover_youtube_stubs(INI_MEDIA_FEED, &source);
+    assert!(
+        stubs.len() >= 3,
+        "ini-media: expected >=3 stubs, got {}",
+        stubs.len()
+    );
+    assert!(
+        stubs.iter().all(|s| s
+            .url
+            .as_str()
+            .starts_with("https://www.youtube.com/watch?v=")),
+        "ini-media: all stub URLs must be YouTube watch URLs"
+    );
+}
+
+#[test]
+fn site_ini_media_youtube_enrich_extracts_media() {
+    let source = make_youtube_source(
+        "ini-media",
+        "https://www.youtube.com/feeds/videos.xml?channel_id=UCrIzp-iUXd7YL4PacS2Qt4A",
+    );
+    let c = enrich_youtube_first_stub(INI_MEDIA_FEED, &source);
+    assert_youtube_media("ini-media", &c);
+}
+
+#[test]
+fn site_fields_media_youtube_discovers_videos() {
+    let source = make_youtube_source(
+        "fields-media",
+        "https://www.youtube.com/feeds/videos.xml?channel_id=UCSzx-qTK2639JBWgrb6mTmw",
+    );
+    let stubs = discover_youtube_stubs(FIELDS_MEDIA_FEED, &source);
+    assert!(
+        stubs.len() >= 3,
+        "fields-media: expected >=3 stubs, got {}",
+        stubs.len()
+    );
+    assert!(
+        stubs.iter().all(|s| s
+            .url
+            .as_str()
+            .starts_with("https://www.youtube.com/watch?v=")),
+        "fields-media: all stub URLs must be YouTube watch URLs"
+    );
+}
+
+#[test]
+fn site_fields_media_youtube_enrich_extracts_media() {
+    let source = make_youtube_source(
+        "fields-media",
+        "https://www.youtube.com/feeds/videos.xml?channel_id=UCSzx-qTK2639JBWgrb6mTmw",
+    );
+    let c = enrich_youtube_first_stub(FIELDS_MEDIA_FEED, &source);
+    assert_youtube_media("fields-media", &c);
 }

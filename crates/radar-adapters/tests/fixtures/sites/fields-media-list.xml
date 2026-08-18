@@ -1,0 +1,143 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns:yt="http://www.youtube.com/xml/schemas/2015" xmlns:media="http://search.yahoo.com/mrss/" xmlns="http://www.w3.org/2005/Atom">
+ <link rel="self" href="http://www.youtube.com/feeds/videos.xml?channel_id=UCSzx-qTK2639JBWgrb6mTmw"/>
+ <id>yt:channel:Szx-qTK2639JBWgrb6mTmw</id>
+ <yt:channelId>Szx-qTK2639JBWgrb6mTmw</yt:channelId>
+ <title>Fields Institute</title>
+ <link rel="alternate" href="https://www.youtube.com/channel/UCSzx-qTK2639JBWgrb6mTmw"/>
+ <author>
+  <name>Fields Institute</name>
+  <uri>https://www.youtube.com/channel/UCSzx-qTK2639JBWgrb6mTmw</uri>
+ </author>
+ <published>2014-09-25T15:40:53+00:00</published>
+ <entry>
+  <id>yt:video:u_IsAHgjR90</id>
+  <yt:videoId>u_IsAHgjR90</yt:videoId>
+  <yt:channelId>UCSzx-qTK2639JBWgrb6mTmw</yt:channelId>
+  <title>Ultrametric skeletons</title>
+  <link rel="alternate" href="https://www.youtube.com/watch?v=u_IsAHgjR90"/>
+  <author>
+   <name>Fields Institute</name>
+   <uri>https://www.youtube.com/channel/UCSzx-qTK2639JBWgrb6mTmw</uri>
+  </author>
+  <published>2026-08-10T15:26:02+00:00</published>
+  <updated>2026-08-15T00:32:08+00:00</updated>
+  <media:group>
+   <media:title>Ultrametric skeletons</media:title>
+   <media:content url="https://www.youtube.com/v/u_IsAHgjR90?version=3" type="application/x-shockwave-flash" width="640" height="390"/>
+   <media:thumbnail url="https://i2.ytimg.com/vi/u_IsAHgjR90/hqdefault.jpg" width="480" height="360"/>
+   <media:description>Speaker: Manor Mendel (UofT St George)
+Date: August 7, 2026
+
+Seminar: http://www.fields.utoronto.ca/activities/26-27/mathai27</media:description>
+   <media:community>
+    <media:starRating count="4" average="5.00" min="1" max="5"/>
+    <media:statistics views="106"/>
+   </media:community>
+  </media:group>
+ </entry>
+<entry>
+  <id>yt:video:Ltmr4pDPVEg</id>
+  <yt:videoId>Ltmr4pDPVEg</yt:videoId>
+  <yt:channelId>UCSzx-qTK2639JBWgrb6mTmw</yt:channelId>
+  <title>The Galactic Sidekick: Quantifying the LMC’s Disruption of Stellar Streams in the FIRE Simulations</title>
+  <link rel="alternate" href="https://www.youtube.com/watch?v=Ltmr4pDPVEg"/>
+  <author>
+   <name>Fields Institute</name>
+   <uri>https://www.youtube.com/channel/UCSzx-qTK2639JBWgrb6mTmw</uri>
+  </author>
+  <published>2026-08-06T18:33:21+00:00</published>
+  <updated>2026-08-12T01:30:17+00:00</updated>
+  <media:group>
+   <media:title>The Galactic Sidekick: Quantifying the LMC’s Disruption of Stellar Streams in the FIRE Simulations</media:title>
+   <media:content url="https://www.youtube.com/v/Ltmr4pDPVEg?version=3" type="application/x-shockwave-flash" width="640" height="390"/>
+   <media:thumbnail url="https://i1.ytimg.com/vi/Ltmr4pDPVEg/hqdefault.jpg" width="480" height="360"/>
+   <media:description>Speaker: Adriana Dropulic (Niels Bohr Institute)
+Date: July 21, 2026
+
+Near Field Cosmology in the Era of Big Data: Local Group and Beyond: http://www.fields.utoronto.ca/activities/26-27/Nearfieldcosmology</media:description>
+   <media:community>
+    <media:starRating count="0" average="0.00" min="1" max="5"/>
+    <media:statistics views="36"/>
+   </media:community>
+  </media:group>
+ </entry>
+<entry>
+  <id>yt:video:kh-Z6enDyJg</id>
+  <yt:videoId>kh-Z6enDyJg</yt:videoId>
+  <yt:channelId>UCSzx-qTK2639JBWgrb6mTmw</yt:channelId>
+  <title>Characterizing the Andromeda Dark Matter Halo with Stellar Streams Observed by DESI</title>
+  <link rel="alternate" href="https://www.youtube.com/watch?v=kh-Z6enDyJg"/>
+  <author>
+   <name>Fields Institute</name>
+   <uri>https://www.youtube.com/channel/UCSzx-qTK2639JBWgrb6mTmw</uri>
+  </author>
+  <published>2026-08-06T18:32:32+00:00</published>
+  <updated>2026-08-10T01:08:17+00:00</updated>
+  <media:group>
+   <media:title>Characterizing the Andromeda Dark Matter Halo with Stellar Streams Observed by DESI</media:title>
+   <media:content url="https://www.youtube.com/v/kh-Z6enDyJg?version=3" type="application/x-shockwave-flash" width="640" height="390"/>
+   <media:thumbnail url="https://i4.ytimg.com/vi/kh-Z6enDyJg/hqdefault.jpg" width="480" height="360"/>
+   <media:description>Speaker: Sergey Koposov (University of Edinburgh)
+Date: July 21, 2026
+
+Near Field Cosmology in the Era of Big Data: Local Group and Beyond: http://www.fields.utoronto.ca/activities/26-27/Nearfieldcosmology</media:description>
+   <media:community>
+    <media:starRating count="4" average="5.00" min="1" max="5"/>
+    <media:statistics views="112"/>
+   </media:community>
+  </media:group>
+ </entry>
+<entry>
+  <id>yt:video:HW7CGHKPNrw</id>
+  <yt:videoId>HW7CGHKPNrw</yt:videoId>
+  <yt:channelId>UCSzx-qTK2639JBWgrb6mTmw</yt:channelId>
+  <title>Near-field Cosmology from Faint Milky Way Satellites to the Magellanic Clouds</title>
+  <link rel="alternate" href="https://www.youtube.com/watch?v=HW7CGHKPNrw"/>
+  <author>
+   <name>Fields Institute</name>
+   <uri>https://www.youtube.com/channel/UCSzx-qTK2639JBWgrb6mTmw</uri>
+  </author>
+  <published>2026-08-06T18:32:09+00:00</published>
+  <updated>2026-08-10T01:10:54+00:00</updated>
+  <media:group>
+   <media:title>Near-field Cosmology from Faint Milky Way Satellites to the Magellanic Clouds</media:title>
+   <media:content url="https://www.youtube.com/v/HW7CGHKPNrw?version=3" type="application/x-shockwave-flash" width="640" height="390"/>
+   <media:thumbnail url="https://i1.ytimg.com/vi/HW7CGHKPNrw/hqdefault.jpg" width="480" height="360"/>
+   <media:description>Speaker: Guilherme Limberg (University of Chicago)
+Date: July 22, 2026
+
+Near Field Cosmology in the Era of Big Data: Local Group and Beyond: http://www.fields.utoronto.ca/activities/26-27/Nearfieldcosmology</media:description>
+   <media:community>
+    <media:starRating count="1" average="5.00" min="1" max="5"/>
+    <media:statistics views="42"/>
+   </media:community>
+  </media:group>
+ </entry>
+<entry>
+  <id>yt:video:lOx0VUOvWp8</id>
+  <yt:videoId>lOx0VUOvWp8</yt:videoId>
+  <yt:channelId>UCSzx-qTK2639JBWgrb6mTmw</yt:channelId>
+  <title>Review Talk -- Beyond the Local Group</title>
+  <link rel="alternate" href="https://www.youtube.com/watch?v=lOx0VUOvWp8"/>
+  <author>
+   <name>Fields Institute</name>
+   <uri>https://www.youtube.com/channel/UCSzx-qTK2639JBWgrb6mTmw</uri>
+  </author>
+  <published>2026-08-05T19:46:14+00:00</published>
+  <updated>2026-08-10T01:07:50+00:00</updated>
+  <media:group>
+   <media:title>Review Talk -- Beyond the Local Group</media:title>
+   <media:content url="https://www.youtube.com/v/lOx0VUOvWp8?version=3" type="application/x-shockwave-flash" width="640" height="390"/>
+   <media:thumbnail url="https://i1.ytimg.com/vi/lOx0VUOvWp8/hqdefault.jpg" width="480" height="360"/>
+   <media:description>Speaker: Annette Ferguson (University of Edinburgh)
+Date: July 24, 2026
+
+Near Field Cosmology in the Era of Big Data: Local Group and Beyond: http://www.fields.utoronto.ca/activities/26-27/Nearfieldcosmology</media:description>
+   <media:community>
+    <media:starRating count="1" average="5.00" min="1" max="5"/>
+    <media:statistics views="37"/>
+   </media:community>
+  </media:group>
+ </entry>
+</feed>

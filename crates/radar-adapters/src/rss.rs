@@ -12,8 +12,8 @@ use url::Url;
 use radar_core::date::parse_date;
 use radar_core::{
     AccessInfo, AdapterError, Event, EventCandidate, EventDate, EventStatus, EventStub, FetchPlan,
-    FetchedDocument, Location, OnlineAvailability, PublicAccess, ScoreComponents, SourceAdapter,
-    SourceEvidence, SourceSpec, event_id,
+    FetchedDocument, Location, MediaId, MediaResource, MediaType, OnlineAvailability, PublicAccess,
+    ScoreComponents, SourceAdapter, SourceEvidence, SourceSpec, deterministic_id, event_id,
 };
 
 use crate::helpers;
@@ -61,7 +61,10 @@ impl SourceAdapter for RssAdapter {
         Ok(stubs)
     }
 
-    fn plan_enrichment(&self, event: &EventStub, _source: &SourceSpec) -> Vec<FetchPlan> {
+    fn plan_enrichment(&self, event: &EventStub, source: &SourceSpec) -> Vec<FetchPlan> {
+        if source.media_strategy.as_deref() == Some("youtube_channel") {
+            return Vec::new();
+        }
         vec![FetchPlan {
             url: event.url.clone(),
             depth: 1,
@@ -75,6 +78,10 @@ impl SourceAdapter for RssAdapter {
         documents: &[FetchedDocument],
         source: &SourceSpec,
     ) -> Result<EventCandidate, AdapterError> {
+        if source.media_strategy.as_deref() == Some("youtube_channel") {
+            return Self::enrich_youtube(stub);
+        }
+
         let (fields, media, access) = match documents.first() {
             Some(doc)
                 if doc
@@ -123,6 +130,59 @@ impl SourceAdapter for RssAdapter {
             access: AccessInfo {
                 access,
                 online: OnlineAvailability::Unknown,
+            },
+            sources: vec![stub.source.clone()],
+            score: 0.0,
+            score_components: ScoreComponents::default(),
+            rank_reasons: Vec::new(),
+            first_seen_at: None,
+            last_seen_at: None,
+        };
+
+        Ok(EventCandidate { event, stub })
+    }
+}
+
+impl RssAdapter {
+    /// §20 Media Plane: build an Event from a YouTube RSS stub without fetching
+    /// a detail page. Each video becomes a recorded-talk Event carrying one
+    /// `MediaResource { media_type: Video, platform: "youtube" }`. The RSS
+    /// entry already provides title, watch URL, and publication date; no
+    /// enrichment fetch is needed (`plan_enrichment` returns empty for
+    /// `youtube_channel`).
+    fn enrich_youtube(stub: EventStub) -> Result<EventCandidate, AdapterError> {
+        let date = stub
+            .date_hint
+            .clone()
+            .unwrap_or_else(|| EventDate::unknown(String::new()));
+
+        let media = MediaResource {
+            id: MediaId(deterministic_id(&[stub.url.as_str()])),
+            media_type: MediaType::Video,
+            title: Some(stub.title.clone()),
+            url: stub.url.clone(),
+            platform: Some("youtube".to_string()),
+            public_access: PublicAccess::Open,
+            published_at: None,
+            source: stub.source.clone(),
+        };
+
+        let event = Event {
+            id: event_id(&stub.title, stub.url.as_str()),
+            title: stub.title.clone(),
+            url: Some(stub.url.clone()),
+            event_type: helpers::detect_event_type(&stub.title),
+            status: EventStatus::Unknown,
+            date,
+            location: None,
+            description: None,
+            topics: Vec::new(),
+            people: Vec::new(),
+            talks: Vec::new(),
+            media: vec![media],
+            access: AccessInfo {
+                access: PublicAccess::Open,
+                online: OnlineAvailability::RecordingAvailable,
             },
             sources: vec![stub.source.clone()],
             score: 0.0,

@@ -498,7 +498,9 @@ fn validate_source_registry(root: &Path) -> Vec<String> {
                         "source-registry row {i} ({id}): detail_fixture '{detail}' not found on disk"
                     ));
                 }
-            } else if ADAPTERS_WITH_DETAIL.contains(&cell(i_adapter)) {
+            } else if ADAPTERS_WITH_DETAIL.contains(&cell(i_adapter))
+                && cell(i_media) != "youtube_channel"
+            {
                 errors.push(format!(
                     "source-registry row {i} ({id}): enabled source with adapter '{}' requires detail_fixture (§45)",
                     cell(i_adapter)
