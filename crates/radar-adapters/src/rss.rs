@@ -38,12 +38,17 @@ impl SourceAdapter for RssAdapter {
             .into_iter()
             .filter_map(|entry| {
                 let title = entry.title?.content;
-                let link = entry.links.first()?;
+                let link = entry
+                    .links
+                    .iter()
+                    .find(|l| l.rel.as_deref().map_or(true, |r| r == "alternate"))
+                    .or_else(|| entry.links.first())?;
                 let url = Url::parse(&link.href).ok()?;
                 let date_hint = entry.published.or(entry.updated).map(|dt| {
                     parse_date(&dt.date_naive().to_string())
                         .unwrap_or_else(|_| EventDate::unknown(String::new()))
                 });
+                let native_id = (!entry.id.is_empty()).then_some(entry.id);
                 Some(EventStub {
                     title,
                     url,
@@ -53,7 +58,7 @@ impl SourceAdapter for RssAdapter {
                         source_url: document.final_url.clone(),
                         evidence: None,
                         captured_at: Some(document.fetched_at),
-                        native_id: None,
+                        native_id,
                     },
                 })
             })
