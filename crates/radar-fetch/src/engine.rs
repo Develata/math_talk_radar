@@ -531,17 +531,15 @@ pub async fn fetch_source(
         }
         // ADAP M-2 / H6: the entrypoint-document fallback must fire ONLY when
         // plan_enrichment emitted zero fetches (e.g. a JSON-LD Event whose url
-        // equals the listing page). The previous `if docs.is_empty()` conflated
-        // that case with "plans existed but every detail fetch failed" — in
-        // the latter, substituting the list page as a detail document fed the
-        // adapter stale/wrong data and silently masked a total enrichment
-        // failure. When plans were emitted but all failed, pass `docs` as-is
-        // (empty) and let `enrich` decide: it can still extract from the stub
-        // alone or return Err, which the loop counts as a failure.
-        if plans.is_empty() {
-            docs.push(doc.clone());
-        }
-        match adapter.enrich(stub, &docs, source) {
+        // equals the listing page, or a YouTube RSS stub that needs no detail
+        // fetch). When plans were emitted but all failed, pass `docs` as-is
+        // (empty) and let `enrich` decide.
+        let docs_ref: &[FetchedDocument] = if plans.is_empty() {
+            std::slice::from_ref(&doc)
+        } else {
+            &docs
+        };
+        match adapter.enrich(stub, docs_ref, source) {
             Ok(candidate) => candidates.push(candidate),
             Err(_) => {
                 enrichment_failures += 1;

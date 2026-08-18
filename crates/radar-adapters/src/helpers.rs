@@ -183,7 +183,7 @@ fn select_first_text(document: &Html, selector_str: &'static str) -> Option<Stri
 
 fn select_meta_content(document: &Html, attr: &str, value: &str) -> Option<String> {
     let selector_str = format!("meta[{}=\"{}\"]", attr, value);
-    let selector = Selector::parse(&selector_str).ok()?;
+    let selector = cached_selector_runtime(&selector_str).ok()?;
     let content = document.select(&selector).next()?.attr("content")?;
     let cleaned = clean_text(content);
     if cleaned.is_empty() {
