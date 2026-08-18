@@ -135,10 +135,12 @@ pub async fn run_scan(args: ScanArgs) -> Result<ScanOutput, CliError> {
         return Err(CliError::zero_sources());
     }
 
-    let mut events: Vec<Event> = results
-        .iter()
-        .flat_map(|r| r.candidates.iter().map(|c| c.event.clone()))
-        .collect();
+    let mut source_health: Vec<SourceHealth> = Vec::with_capacity(results.len());
+    let mut events: Vec<Event> = Vec::new();
+    for r in results.into_iter() {
+        source_health.push(r.health);
+        events.extend(r.candidates.into_iter().map(|c| c.event));
+    }
 
     // R9-H10 (completed): global candidate cap. The per-source cap
     // (MAX_STUBS_PER_SOURCE = 2000) bounds each source, but with N enabled
@@ -198,10 +200,8 @@ pub async fn run_scan(args: ScanArgs) -> Result<ScanOutput, CliError> {
     // (CLI-10: regression from ST-1 wiring that ran store_scan after the cap).
     let now = Utc::now();
 
-    // ADR-0011 §6: collect source_health before the state write and stamp
-    // recorded_at so store_scan_bundle can persist per-scan history. The same
-    // vector is reused for the output ScanOutput below.
-    let mut source_health: Vec<SourceHealth> = results.iter().map(|r| r.health.clone()).collect();
+    // ADR-0011 §6: stamp recorded_at before store_scan_bundle persists
+    // per-scan history.
     for h in &mut source_health {
         h.recorded_at = Some(now);
     }
