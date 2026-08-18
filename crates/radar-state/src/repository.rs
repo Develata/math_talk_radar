@@ -321,12 +321,26 @@ impl Repository {
 
             // ADR-0011 §3 (R9-H08): persist change records to CHANGE_LOG so
             // media history and change signals survive a restart (§65).
+            //
+            // Key shape: `{detected_at}\x00{event_id}\x00{kind}\x00{detail}`.
+            // `detail` is appended so multiple same-kind records on the same
+            // event in one scan (e.g. several MediaAdded URLs, several
+            // ScheduleAdded talks, several SpeakerAdded names) do not collide
+            // and overwrite each other. `detected_at` remains the lex-leading
+            // field so `list_changes(since)` and the retention purge can still
+            // range-scan by timestamp prefix. `detail` is sanitized of NUL
+            // (which would otherwise split the key) — URLs, talk ids, and
+            // speaker names are all NUL-free in practice, but the sanitization
+            // is defensive against malformed input.
             for record in &changes {
+                let detail = record.detail.as_deref().unwrap_or("");
+                let detail_sanitized = detail.replace('\u{0}', "");
                 let key = format!(
-                    "{}\u{0}{}\u{0}{}",
+                    "{}\u{0}{}\u{0}{}\u{0}{}",
                     record.detected_at.to_rfc3339(),
                     record.event_id.0,
-                    record.kind.as_str()
+                    record.kind.as_str(),
+                    detail_sanitized
                 );
                 let bytes = serde_json::to_vec(record)?;
                 change_log.insert(key.as_str(), bytes.as_slice())?;

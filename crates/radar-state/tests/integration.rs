@@ -800,6 +800,55 @@ fn change_log_persists_media_added_across_reopen() {
     );
 }
 
+/// Regression: multiple same-kind change records on the same event in one
+/// scan must all survive — the composite CHANGE_LOG key includes `detail`
+/// (the URL/talk-id/speaker-name) so records do not collide and overwrite
+/// each other. Before the fix, two MediaAdded on the same event in one scan
+/// shared an identical key and only the last survived.
+#[test]
+fn change_log_preserves_multiple_same_kind_records() {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let db_path = dir.path().join("state.redb");
+    {
+        let repo = Repository::open(&db_path).expect("open");
+        let event = base_event("e1", vec![]);
+        repo.store_scan_bundle(std::slice::from_ref(&event), &[], t0())
+            .expect("seed");
+        let event_with_two_videos = base_event(
+            "e1",
+            vec![
+                video("https://youtube.com/v/1"),
+                video("https://youtube.com/v/2"),
+            ],
+        );
+        repo.store_scan_bundle(std::slice::from_ref(&event_with_two_videos), &[], t1())
+            .expect("add two videos in one scan");
+    }
+
+    let repo2 = Repository::open(&db_path).expect("reopen");
+    let changes = repo2
+        .list_changes(DateTime::from_timestamp(0, 0).unwrap())
+        .expect("list changes");
+    let media_added: Vec<_> = changes
+        .iter()
+        .filter(|c| c.kind == ChangeKind::MediaAdded)
+        .collect();
+    assert_eq!(
+        media_added.len(),
+        2,
+        "both MediaAdded records must survive (one per URL), got: {media_added:?}"
+    );
+    let details: Vec<_> = media_added
+        .iter()
+        .map(|c| c.detail.as_deref().unwrap_or(""))
+        .collect();
+    assert!(
+        details.contains(&"https://youtube.com/v/1")
+            && details.contains(&"https://youtube.com/v/2"),
+        "both URLs must be present as detail, got: {details:?}"
+    );
+}
+
 /// ADR-0011 §7: retention purge. Health records and change records older
 /// than RETENTION_DAYS (90) are purged during store_scan_bundle. After
 /// advancing time 91 days, the old records must be gone.
