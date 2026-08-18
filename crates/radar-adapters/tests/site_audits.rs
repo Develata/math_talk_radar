@@ -800,7 +800,11 @@ fn site_icm_html_config_enrich_extracts_detail() {
 // ===========================================================================
 
 fn discover_youtube_stubs(feed: &str, source: &SourceSpec) -> Vec<EventStub> {
-    let doc = make_doc(feed, "application/atom+xml", source.entrypoint.as_ref().unwrap().as_str());
+    let doc = make_doc(
+        feed,
+        "application/atom+xml",
+        source.entrypoint.as_ref().unwrap().as_str(),
+    );
     RssAdapter
         .discover(&doc, source)
         .unwrap_or_else(|e| panic!("{}: YouTube RSS must parse, got {e:?}", source.id))
