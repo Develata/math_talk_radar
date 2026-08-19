@@ -57,27 +57,59 @@ fn mode_enum_schema(_gen: &mut schemars::r#gen::SchemaGenerator) -> schemars::sc
     .unwrap_or(schemars::schema::Schema::Bool(true))
 }
 
-/// Render a `ScanOutput` to the requested format and detail level (§31).
+/// Render a `ScanOutput` to the requested format and detail level (§31) and
+/// stream it to `out` without buffering the full serialization in memory.
 /// `Json` pretty-prints the full envelope; `Jsonl` emits one JSON object per
 /// event. Detail level truncates long text fields in place: compact ≤1200
 /// chars, full ≤8000. Takes `output` by value so truncation mutates in place
 /// without cloning the (potentially large) event vector.
-pub fn render(
+///
+/// A `BrokenPipe` on `out` is the normal Unix signal that the downstream
+/// consumer (e.g. `| head`) is done; per CLI-23 / §32 it is treated as
+/// success (exit 0), not a §32 exit 6. Any other I/O or serialization error
+/// surfaces as `CliError::serialization`.
+pub fn render_to<W: std::io::Write>(
     mut output: ScanOutput,
     format: crate::cli::OutputFormat,
     detail: crate::cli::DetailLevel,
-) -> anyhow::Result<String> {
+    out: &mut W,
+) -> Result<(), crate::runtime::CliError> {
     truncate_for_detail(&mut output, detail);
     match format {
-        crate::cli::OutputFormat::Json => Ok(serde_json::to_string_pretty(&output)?),
-        crate::cli::OutputFormat::Jsonl => Ok(render_jsonl(&output)?),
+        crate::cli::OutputFormat::Json => {
+            serde_json::to_writer_pretty(&mut *out, &output).or_else(ser_to_cli)?;
+            out.write_all(b"\n").or_else(io_to_cli)?;
+        }
+        crate::cli::OutputFormat::Jsonl => render_jsonl_to(&output, &mut *out)?,
+    }
+    out.flush().or_else(io_to_cli)?;
+    Ok(())
+}
+
+fn ser_to_cli(e: serde_json::Error) -> Result<(), crate::runtime::CliError> {
+    if e.io_error_kind() == Some(std::io::ErrorKind::BrokenPipe) {
+        Ok(())
+    } else {
+        Err(crate::runtime::CliError::serialization(format!(
+            "encode output: {e}"
+        )))
     }
 }
 
-/// §31 JSONL: one JSON object per line — the envelope metadata first, then one
-/// line per event.
-fn render_jsonl(output: &ScanOutput) -> anyhow::Result<String> {
-    let mut out = String::new();
+fn io_to_cli(e: std::io::Error) -> Result<(), crate::runtime::CliError> {
+    if e.kind() == std::io::ErrorKind::BrokenPipe {
+        Ok(())
+    } else {
+        Err(crate::runtime::CliError::serialization(format!(
+            "write stdout: {e}"
+        )))
+    }
+}
+
+fn render_jsonl_to<W: std::io::Write>(
+    output: &ScanOutput,
+    out: &mut W,
+) -> Result<(), crate::runtime::CliError> {
     let envelope = serde_json::json!({
         "kind": "scan",
         "schema_version": output.schema_version,
@@ -86,13 +118,13 @@ fn render_jsonl(output: &ScanOutput) -> anyhow::Result<String> {
         "source_health": output.source_health,
         "changes": output.changes,
     });
-    out.push_str(&envelope.to_string());
-    out.push('\n');
+    serde_json::to_writer(&mut *out, &envelope).or_else(ser_to_cli)?;
+    out.write_all(b"\n").or_else(io_to_cli)?;
     for event in &output.events {
-        out.push_str(&serde_json::to_string(event)?);
-        out.push('\n');
+        serde_json::to_writer(&mut *out, event).or_else(ser_to_cli)?;
+        out.write_all(b"\n").or_else(io_to_cli)?;
     }
-    Ok(out)
+    Ok(())
 }
 
 fn truncate_for_detail(output: &mut ScanOutput, detail: crate::cli::DetailLevel) {
