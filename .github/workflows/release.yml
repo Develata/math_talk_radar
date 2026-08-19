@@ -11,20 +11,104 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
 
+# P0-08: a release must not ship unless every CI quality gate on the tagged
+# commit is green. `needs:` chains the four CI jobs (quality, acceptance,
+# forbid-unsafe, supply-chain) so a tag push on red CI aborts the release.
+# Each CI job runs on `push: tags` as well (its trigger is `push: branches:
+# [main]` only), so this workflow re-runs the gates itself rather than
+# depending on the CI workflow's separate run.
 jobs:
+  quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install Rust toolchain
+        run: |
+          rustup show
+          rustup component add rustfmt clippy
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+
+      - name: fmt
+        run: cargo fmt --check
+
+      - name: clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+      - name: test
+        run: cargo test --workspace
+
+  acceptance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install Rust toolchain
+        run: rustup show
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+
+      - name: check
+        run: cargo xtask check
+
+      - name: check-matrix
+        run: cargo xtask check-matrix
+
+  forbid-unsafe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install Rust toolchain
+        run: rustup show
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+
+      - name: Verify forbid(unsafe_code) in every crate
+        run: |
+          for f in crates/*/src/lib.rs apps/cli/src/lib.rs; do
+            grep -q "forbid(unsafe_code)" "$f" || {
+              echo "Missing #![forbid(unsafe_code)] in $f" >&2
+              exit 1
+            }
+          done
+
+  supply-chain:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install Rust toolchain
+        run: rustup show
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --locked || cargo install cargo-deny --locked --version 0.20.2
+
+      - name: cargo deny check
+        run: cargo deny check
+
   build-musl:
+    needs: [quality, acceptance, forbid-unsafe, supply-chain]
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Install Rust toolchain + musl target
         run: |
           rustup show
           rustup target add x86_64-unknown-linux-musl
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
 
       - name: Verify tag version matches Cargo.toml (§53)
         run: |
@@ -79,13 +163,13 @@ jobs:
           sha256sum math_talk_radar-x86_64-unknown-linux-musl > math_talk_radar-x86_64-unknown-linux-musl.sha256
 
       - name: Attest build provenance (RELS-003)
-        uses: actions/attest-build-provenance@v1
+        uses: actions/attest-build-provenance@ef244123eb79f2f7a7e75d99086184180e6d0018 # v1
         with:
           subject-path: |
             target/x86_64-unknown-linux-musl/release/math_talk_radar-x86_64-unknown-linux-musl
             target/x86_64-unknown-linux-musl/release/math_talk_radar-x86_64-unknown-linux-musl.sha256
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: math_talk_radar-musl
           path: |
@@ -97,15 +181,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: math_talk_radar-musl
           path: release-assets
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3
         with:
           generate_release_notes: true
           files: |
