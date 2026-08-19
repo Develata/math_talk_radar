@@ -96,22 +96,31 @@ pub fn canonicalize_url(url: &Url) -> String {
 pub fn normalize_text(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
     let mut prev_space = true;
-    for ch in input.chars() {
-        if ch.is_whitespace() {
-            if !prev_space {
-                out.push(' ');
-            }
-            prev_space = true;
-        } else {
-            for lc in ch.to_lowercase() {
-                out.push(lc);
-            }
-            prev_space = false;
-        }
-    }
+    normalize_text_to_buf(input, &mut out, &mut prev_space);
     let trim_len = out.trim_end().len();
     out.truncate(trim_len);
     out
+}
+
+/// Core of [`normalize_text`]: lowercase + collapse internal whitespace into
+/// `buf`, threading `prev_space` across calls so multiple fragments can be
+/// concatenated into one normalized buffer in a single pass without
+/// allocating a String per fragment. `prev_space` starts `true` to trim
+/// leading whitespace.
+pub fn normalize_text_to_buf(s: &str, buf: &mut String, prev_space: &mut bool) {
+    for ch in s.chars() {
+        if ch.is_whitespace() {
+            if !*prev_space {
+                buf.push(' ');
+            }
+            *prev_space = true;
+        } else {
+            for lc in ch.to_lowercase() {
+                buf.push(lc);
+            }
+            *prev_space = false;
+        }
+    }
 }
 
 /// NFC-normalize `text`, then apply [`normalize_text`] (lowercase + whitespace

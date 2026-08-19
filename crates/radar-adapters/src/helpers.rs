@@ -553,24 +553,11 @@ fn make_source_evidence(base_url: &Url, source_id: &str) -> SourceEvidence {
 
 /// Stream `s` into `buf` lowercased with internal whitespace collapsed to
 /// single spaces. `prev_space` tracks whether the last emitted char was a
-/// space (start `true` to trim leading whitespace). Mirrors `normalize_text`
-/// semantics but appends into an existing buffer so the access classifier can
-/// build one lowercase-collapsed buffer in a single pass instead of allocating
-/// a full-body String and re-normalizing it.
+/// space (start `true` to trim leading whitespace). Delegates to
+/// [`radar_core::normalize::normalize_text_to_buf`] so the lowercase +
+/// whitespace-collapse logic has one source of truth in radar-core.
 fn push_lower_collapsed(s: &str, buf: &mut String, prev_space: &mut bool) {
-    for ch in s.chars() {
-        if ch.is_whitespace() {
-            if !*prev_space {
-                buf.push(' ');
-            }
-            *prev_space = true;
-        } else {
-            for lc in ch.to_lowercase() {
-                buf.push(lc);
-            }
-            *prev_space = false;
-        }
-    }
+    radar_core::normalize::normalize_text_to_buf(s, buf, prev_space);
 }
 
 /// Conservatively classify the public access level from an HTML document's
