@@ -278,8 +278,7 @@ pub fn enrich_event_scholars(event: &mut Event, scholars: &[NormalizedScholar]) 
     }
 
     // Pass 2: add title-mentioned scholars not already present.
-    let title_hits =
-        match_scholars_normalized(&event.title, scholars, MatchContext::TitleText);
+    let title_hits = match_scholars_normalized(&event.title, scholars, MatchContext::TitleText);
     for hit in title_hits {
         let norm_canonical = normalize_name(&hit.canonical_name);
         let already_present = event

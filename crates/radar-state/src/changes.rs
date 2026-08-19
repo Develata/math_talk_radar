@@ -235,8 +235,7 @@ fn new_speakers(prev: &Event, curr: &Event) -> Vec<String> {
     }
     for t in &curr.talks {
         for s in &t.speaker {
-            if !prev_names.contains(&s.canonical_name)
-                && added_set.insert(s.canonical_name.clone())
+            if !prev_names.contains(&s.canonical_name) && added_set.insert(s.canonical_name.clone())
             {
                 added.push(s.canonical_name.clone());
             }
@@ -485,7 +484,10 @@ mod tests {
     #[test]
     fn speaker_moving_between_people_and_talks_emits_no_speaker_added() {
         let prev = vec![event_with_people("e1", vec![speaker("Terence Tao")])];
-        let curr = vec![event_with_talks("e1", vec![talk("t1", Some("Terence Tao"))])];
+        let curr = vec![event_with_talks(
+            "e1",
+            vec![talk("t1", Some("Terence Tao"))],
+        )];
         let records = detect_changes(&prev, &curr, now());
         assert!(
             records.iter().all(|r| r.kind != ChangeKind::SpeakerAdded),
