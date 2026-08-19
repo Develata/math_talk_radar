@@ -68,6 +68,15 @@ impl NormalizedScholar {
     pub fn normalized_canonical(&self) -> &str {
         &self.candidates[0].1
     }
+
+    /// True if any candidate (canonical name or alias) normalizes to `name`.
+    /// Used by [`enrich_event_scholars`] pass 1 to back-fill `scholar_tags`
+    /// when an adapter surfaced a speaker under an alias surface form (e.g.
+    /// "Zagier" instead of the canonical "Don Zagier") — without this the
+    /// laureate ranking boost never attaches.
+    pub fn matches_normalized(&self, name: &str) -> bool {
+        self.candidates.iter().any(|(_, n)| n == name)
+    }
 }
 
 /// Pre-normalize `scholars` once per scan so the per-event matching path no
@@ -263,15 +272,15 @@ pub fn enrich_event_scholars(event: &mut Event, scholars: &[NormalizedScholar]) 
     }
 
     // Pass 1: back-fill scholar_tags on adapter-found people.
+    // Match against any candidate (canonical name OR alias) so a speaker
+    // surfaced under an alias form (e.g. "Zagier") still attaches the
+    // laureate tags of the canonical scholar ("Don Zagier").
     for person in &mut event.people {
         if !person.scholar_tags.is_empty() {
             continue;
         }
         let norm_name = normalize_name(&person.canonical_name);
-        if let Some(scholar) = scholars
-            .iter()
-            .find(|s| s.normalized_canonical() == norm_name)
-        {
+        if let Some(scholar) = scholars.iter().find(|s| s.matches_normalized(&norm_name)) {
             person.scholar_tags = scholar.tags.clone();
             person.canonical_name = scholar.canonical_name.clone();
         }
@@ -438,5 +447,95 @@ mod tests {
         assert_eq!(hits[0].canonical_name, "Terence Tao");
         assert_eq!(hits[0].role, PersonRole::TitleMention);
         assert!((hits[0].confidence - 0.5).abs() < f32::EPSILON);
+    }
+
+    // BUG-3: enrich_event_scholars pass 1 previously matched only the
+    // canonical name, so a Speaker surfaced under an alias (e.g. "Zagier")
+    // never received scholar_tags and the canonical_name was not corrected.
+    // A laureate (wolf tag) recognized by alias would then lose the ranking
+    // boost entirely.
+    #[test]
+    fn per_004_enrich_attaches_tags_for_alias_speaker() {
+        let z = zagier();
+        let normalized = normalize_scholars(std::slice::from_ref(&z));
+
+        let mut event = Event {
+            people: vec![PersonHit {
+                canonical_name: "Zagier".into(),
+                matched_text: "Zagier".into(),
+                role: PersonRole::Speaker,
+                evidence: None,
+                confidence: 1.0,
+                scholar_tags: Vec::new(),
+            }],
+            ..empty_event()
+        };
+
+        enrich_event_scholars(&mut event, &normalized);
+
+        assert_eq!(event.people.len(), 1);
+        let p = &event.people[0];
+        assert_eq!(p.canonical_name, "Don Zagier");
+        assert!(p.scholar_tags.contains(&"wolf".to_string()));
+        assert!(p.scholar_tags.contains(&"curated".to_string()));
+    }
+
+    #[test]
+    fn per_004_enrich_attaches_tags_for_canonical_speaker() {
+        let z = zagier();
+        let normalized = normalize_scholars(std::slice::from_ref(&z));
+
+        let mut event = Event {
+            people: vec![PersonHit {
+                canonical_name: "Don Zagier".into(),
+                matched_text: "Don Zagier".into(),
+                role: PersonRole::Speaker,
+                evidence: None,
+                confidence: 1.0,
+                scholar_tags: Vec::new(),
+            }],
+            ..empty_event()
+        };
+
+        enrich_event_scholars(&mut event, &normalized);
+
+        assert_eq!(event.people.len(), 1);
+        let p = &event.people[0];
+        assert_eq!(p.canonical_name, "Don Zagier");
+        assert!(p.scholar_tags.contains(&"wolf".to_string()));
+    }
+
+    fn empty_event() -> Event {
+        use crate::model::{AccessInfo, EventStatus, EventType, OnlineAvailability, PublicAccess};
+        Event {
+            id: crate::model::EventId(String::new()),
+            title: String::new(),
+            url: None,
+            event_type: EventType::Unknown,
+            status: EventStatus::Unknown,
+            date: crate::date::EventDate {
+                start: None,
+                end: None,
+                timezone: None,
+                original_text: String::new(),
+                precision: crate::date::DatePrecision::Unknown,
+            },
+            location: None,
+            description: None,
+            topics: Vec::new(),
+            people: Vec::new(),
+            talks: Vec::new(),
+            media: Vec::new(),
+            access: AccessInfo {
+                access: PublicAccess::Unknown,
+                online: OnlineAvailability::Unknown,
+            },
+            sources: Vec::new(),
+            score: 0.0,
+            score_components: crate::ranking::ScoreComponents::default(),
+            rank_reasons: Vec::new(),
+            first_seen_at: None,
+            last_seen_at: None,
+        }
     }
 }
