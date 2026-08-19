@@ -248,8 +248,8 @@ fn parse_ics_date_range(
     } else if let Some(dur_val) = duration
         && let Some(days) = parse_ics_duration_days(dur_val)
         && let Some(start_date) = ed.start_date()
+        && let Some(end_date) = start_date.checked_add_signed(chrono::Duration::days(days))
     {
-        let end_date = start_date + chrono::Duration::days(days);
         ed.end = Some(DateTimeOrDate::Date(end_date));
         ed.original_text = format!("{dtstart_val}/{dur_val}");
     }
@@ -783,5 +783,31 @@ END:VCALENDAR
         assert_eq!(parse_ics_duration_days("X1D"), None);
         assert_eq!(parse_ics_duration_days("+P1D"), Some(1));
         assert_eq!(parse_ics_duration_days("-P1D"), Some(1));
+    }
+
+    // §66: parser must not panic on untrusted input. A crafted DURATION with
+    // an oversized day count overflows NaiveDate's valid range; the parser must
+    // leave end unset rather than panic.
+    #[test]
+    fn discover_duration_overflow_does_not_panic() {
+        let ics = "\
+BEGIN:VCALENDAR
+VERSION:2.0
+BEGIN:VEVENT
+UID:conf-overflow
+SUMMARY:Oversized Duration
+URL:https://example.com/overflow
+DTSTART:20260810
+DURATION:P200000000D
+END:VEVENT
+END:VCALENDAR
+";
+        let doc = make_doc(ics.as_bytes());
+        let source = make_source();
+        let stubs = IcsAdapter.discover(&doc, &source).expect("parse ok");
+        assert_eq!(stubs.len(), 1);
+        let dh = stubs[0].date_hint.as_ref().expect("date hint present");
+        assert!(dh.start.is_some(), "start must still be populated");
+        assert!(dh.end.is_none(), "overflow DURATION must leave end unset");
     }
 }
