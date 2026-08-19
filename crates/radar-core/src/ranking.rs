@@ -274,7 +274,7 @@ fn is_important_scholar(scholar_tags: &[String]) -> bool {
     const MARKERS: [&str; 4] = ["fields", "abel", "wolf", "crafoord"];
     scholar_tags
         .iter()
-        .any(|tag| MARKERS.iter().any(|m| tag.to_lowercase() == *m))
+        .any(|tag| MARKERS.iter().any(|m| tag.eq_ignore_ascii_case(m)))
 }
 
 /// People signal: important Speaker/Lecturer → 10, important Organizer/Panelist
