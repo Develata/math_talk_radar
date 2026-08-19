@@ -40,11 +40,11 @@ impl SourceAdapter for JsonLdAdapter {
                 let url = ev
                     .get("url")
                     .and_then(|v| v.as_str())
-                    .and_then(|s| Url::parse(s).ok())
+                    .and_then(|s| Url::parse(s).ok().filter(crate::helpers::is_http_url))
                     .or_else(|| {
                         ev.get("@id")
                             .and_then(|v| v.as_str())
-                            .and_then(|s| Url::parse(s).ok())
+                            .and_then(|s| Url::parse(s).ok().filter(crate::helpers::is_http_url))
                     })
                     .unwrap_or_else(|| {
                         // ADAP-12: query param (not fragment) so canonicalize_url

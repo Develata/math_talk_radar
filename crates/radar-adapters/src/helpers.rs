@@ -434,6 +434,15 @@ fn is_pdf(url: &Url) -> bool {
     url.path().to_lowercase().ends_with(".pdf")
 }
 
+/// True if `url` uses HTTP or HTTPS — the only schemes safe to store as an
+/// event URL and eligible for fetch enrichment. Rejects `javascript:`,
+/// `file:`, `data:`, `blob:`, `mailto:` etc. that can appear in untrusted
+/// feed/page input and would otherwise be persisted in the state DB and
+/// emitted in the public JSON output.
+pub(crate) fn is_http_url(url: &Url) -> bool {
+    matches!(url.scheme(), "http" | "https")
+}
+
 /// ADAP-18: classify direct links to raw audio/video files by extension.
 /// A `<a href="talk.mp4">` link is a recording just as much as a `<video>` tag.
 fn classify_raw_media(url: &Url) -> Option<MediaType> {

@@ -217,6 +217,9 @@ impl SourceAdapter for HtmlGenericAdapter {
             let Ok(resolved) = base_url.join(href) else {
                 continue;
             };
+            if !crate::helpers::is_http_url(&resolved) {
+                continue;
+            }
             let evidence = text.clone();
             stubs.push(EventStub {
                 title: text,

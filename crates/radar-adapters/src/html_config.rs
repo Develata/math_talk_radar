@@ -54,6 +54,9 @@ impl SourceAdapter for HtmlConfigAdapter {
                     Ok(u) => u,
                     Err(_) => continue,
                 };
+                if !crate::helpers::is_http_url(&url) {
+                    continue;
+                }
                 let title = match &title_selector {
                     Some(sel) => match first_text_in(&container, sel) {
                         Some(t) => t,

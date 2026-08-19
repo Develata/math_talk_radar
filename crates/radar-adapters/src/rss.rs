@@ -43,7 +43,9 @@ impl SourceAdapter for RssAdapter {
                     .iter()
                     .find(|l| l.rel.as_deref().is_none_or(|r| r == "alternate"))
                     .or_else(|| entry.links.first())?;
-                let url = Url::parse(&link.href).ok()?;
+                let url = Url::parse(&link.href)
+                    .ok()
+                    .filter(crate::helpers::is_http_url)?;
                 let date_hint = entry.published.or(entry.updated).map(|dt| {
                     let date_text = dt.date_naive().to_string();
                     parse_date(&date_text).unwrap_or_else(|_| EventDate::unknown(date_text))

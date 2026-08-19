@@ -85,6 +85,9 @@ impl SourceAdapter for IcsAdapter {
             let Ok(url) = Url::parse(&url_str) else {
                 continue;
             };
+            if !crate::helpers::is_http_url(&url) {
+                continue;
+            }
 
             let date_hint =
                 parse_ics_date_range(dtstart.as_deref(), dtend.as_deref(), duration.as_deref());
