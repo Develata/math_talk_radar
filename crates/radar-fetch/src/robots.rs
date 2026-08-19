@@ -322,11 +322,19 @@ fn host_key(url: &Url) -> String {
     }
 }
 
-/// RFC 9309 §2.2.1: robots path matching operates on the percent-decoded
-/// target (path + query). `Url::path()` returns the encoded form, so we decode
-/// `%XX` sequences (including multi-byte UTF-8) before matching against rule
-/// patterns.
+/// RFC 9309 §2.2.2: matching operates on the percent-decoded URI path and
+/// query, but only `%XX` sequences encoding ASCII **unreserved** characters
+/// (RFC 3986 §2.3: `A-Za-z0-9-._~`) are decoded. Reserved characters
+/// (`/?#[]@!$&'()*+,;=:`) and non-ASCII bytes stay percent-encoded — decoding
+/// them would let `%2F` collapse to `/` and match a literal slash in a rule,
+/// which the RFC explicitly forbids. `Url::path()` returns the encoded form,
+/// so we selectively decode here.
+///
+/// RFC 3986 unreserved = ALPHA / DIGIT / "-" / "." / "_" / "~".
 fn percent_decode_target(input: &str) -> String {
+    fn is_unreserved(b: u8) -> bool {
+        matches!(b, b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~')
+    }
     let bytes = input.as_bytes();
     let mut out = Vec::with_capacity(input.len());
     let mut i = 0;
@@ -335,7 +343,18 @@ fn percent_decode_target(input: &str) -> String {
             let h = hex_digit(bytes[i + 1]);
             let l = hex_digit(bytes[i + 2]);
             if let (Some(h), Some(l)) = (h, l) {
-                out.push((h << 4) | l);
+                let decoded = (h << 4) | l;
+                if is_unreserved(decoded) {
+                    out.push(decoded);
+                    i += 3;
+                    continue;
+                }
+                // Reserved or non-ASCII: keep the original %XX uppercase so
+                // the comparison target matches rules that also use uppercase
+                // hex (RFC 3986 §2.1: percent-encoding normalization).
+                out.extend_from_slice(b"%");
+                out.push(bytes[i + 1].to_ascii_uppercase());
+                out.push(bytes[i + 2].to_ascii_uppercase());
                 i += 3;
                 continue;
             }
@@ -442,16 +461,50 @@ mod robots_tests {
         assert!(!rules.is_allowed(&Url::parse("https://example.com/robots.txt").unwrap()));
     }
 
-    // FETCH-8: RFC 9309 §2.2.1 requires matching against the percent-decoded
-    // path. A disallow rule for /café must block the encoded form /caf%C3%A9.
+    // FETCH-8: RFC 9309 §2.2.2 requires matching against the percent-decoded
+    // path, but only ASCII-unreserved `%XX` are decoded. A literal non-ASCII
+    // byte in a rule is itself out of spec (the RFC mandates percent-encoding
+    // of non-ASCII before comparison), so the rule must use the encoded form
+    // to match an encoded target.
     #[test]
-    fn percent_encoded_path_matches_decoded_rule() {
-        let txt = "User-agent: *\nDisallow: /café\n";
+    fn percent_encoded_path_matches_encoded_rule() {
+        let txt = "User-agent: *\nDisallow: /caf%C3%A9\n";
         let rules = parse_robots(txt);
         let u = Url::parse("https://example.com/caf%C3%A9").unwrap();
         assert!(
             !rules.is_allowed(&u),
-            "percent-encoded path must match decoded rule"
+            "percent-encoded non-ASCII must match the same encoded rule"
+        );
+    }
+
+    // P1-08: RFC 9309 §2.2.2 — reserved `%XX` MUST NOT be decoded. A rule
+    // `/a/b` must not match the encoded target `/a%2Fb` (the `%2F` is a slash
+    // in encoded form and must stay encoded so it does not collapse into a
+    // path separator).
+    #[test]
+    fn reserved_percent_encoding_not_decoded() {
+        let txt = "User-agent: *\nDisallow: /a/b\n";
+        let rules = parse_robots(txt);
+        // %2F is reserved ('/'); stays encoded → target is /a%2Fb, which is
+        // NOT a prefix of the rule pattern /a/b.
+        let u = Url::parse("https://example.com/a%2Fb").unwrap();
+        assert!(
+            rules.is_allowed(&u),
+            "encoded reserved char %2F must not collapse to / for matching"
+        );
+    }
+
+    // P1-08: ASCII-unreserved `%XX` (e.g. %62 = 'b') MUST be decoded so an
+    // encoded unreserved char matches the literal in the rule.
+    #[test]
+    fn unreserved_percent_encoding_decoded() {
+        // %62%61%7A = "baz"; RFC 3986 Figure 4 last row mandates decoding.
+        let txt = "User-agent: *\nDisallow: /foo/bar/baz\n";
+        let rules = parse_robots(txt);
+        let u = Url::parse("https://example.com/foo/bar/%62%61%7A").unwrap();
+        assert!(
+            !rules.is_allowed(&u),
+            "encoded unreserved chars must decode to match the literal rule"
         );
     }
 
