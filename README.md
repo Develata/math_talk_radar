@@ -40,7 +40,7 @@ math_talk_radar uninstall --keep-data --dry-run
 User config lives under `$XDG_CONFIG_HOME/math_talk_radar/` (default
 `~/.config/math_talk_radar/`). See `config/` for examples:
 
-- `sources.toml` — source definitions (13 audited sources enabled: 2 RSS,
+- `sources.toml` — source definitions (16 audited sources enabled: 5 RSS,
   11 HTML-config).
 - `scholars.toml` — scholar aliases (decoupled from any parser).
 - `topics.toml` — canonical topics + aliases.

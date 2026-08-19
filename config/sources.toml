@@ -3,9 +3,9 @@
 # The authoritative audit registry — including pending_audit entries and
 # per-source health — lives in docs/registry/source-registry.tsv and is
 # validated by `cargo xtask check`. This file is the embedded default
-# (CFG-001): the 15 audited, fixture-backed, enabled sources promoted after
-# the M6 live audit. Disabled / dynamic_unsupported / audited-no-fixture
-# sources remain in the registry TSV only.
+# (CFG-001): the 16 audited, fixture-backed, enabled sources promoted after
+# the M6 live audit (5 RSS + 11 HTML-config). Disabled / dynamic_unsupported
+# / audited-no-fixture sources remain in the registry TSV only.
 
 # --- RSS (2) ---
 
