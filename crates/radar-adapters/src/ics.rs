@@ -235,6 +235,16 @@ fn parse_ics_dtstart(value: &str) -> Option<EventDate> {
 /// DTEND is preferred over DURATION per RFC 5545 §3.6.1 (they are mutually
 /// exclusive in a VEVENT). At date precision (this parser drops time/timezone),
 /// sub-day DURATION components (PT2H etc.) produce `end == start`.
+///
+/// P1-07: `EventDate.end` is the **inclusive** last day throughout this
+/// codebase (the HTML range parsers treat "3–7 August" as end=Aug 7; the
+/// `interval_overlap` filter treats `end` as inclusive). RFC 5545 §3.8.2.2
+/// DATE-valued `DTEND` is **non-inclusive** (a 1-day event is
+/// `DTSTART:20260808;DTEND:20260809`), so a DATE DTEND is decremented by one
+/// day on storage. DATETIME-valued DTEND is left as-is at date precision: a
+/// DTSTART/DTEND of `T100000`/`T120000Z` next-day spans onto the end date,
+/// which is already the inclusive last day. DURATION is elapsed time, so
+/// `end = start + days - 1` (inclusive last day).
 fn parse_ics_date_range(
     dtstart: Option<&str>,
     dtend: Option<&str>,
@@ -245,17 +255,42 @@ fn parse_ics_date_range(
 
     if let Some(dtend_val) = dtend
         && let Some(end_ed) = parse_ics_dtstart(dtend_val)
-        && end_ed
-            .start_date()
-            .is_some_and(|end| ed.start_date().is_some_and(|start| end >= start))
+        && let Some(end_date) = end_ed.start_date()
+        && ed.start_date().is_some_and(|start| end_date >= start)
     {
-        ed.end = end_ed.start;
-        ed.original_text = format!("{dtstart_val}/{dtend_val}");
+        // P1-07: only DATE-valued DTEND (exactly 8 chars, no 'T') is
+        // non-inclusive per RFC 5545 §3.8.2.2. DATETIME DTEND carries an
+        // explicit instant that already lands on the inclusive last day at
+        // date precision.
+        let final_end = if is_date_valued(dtend_val) {
+            end_date.checked_add_signed(chrono::Duration::days(-1))
+        } else {
+            Some(end_date)
+        };
+        // Re-check the inclusive invariant after the -1 day adjustment:
+        // DTEND:20260808 / DTSTART:20260808 (a zero-day DATE range) would
+        // underflow to end < start; treat that as a single-day event by
+        // clamping end to start.
+        let final_end = final_end
+            .and_then(|e| {
+                ed.start_date().map(|s| if e < s { s } else { e })
+            });
+        if let Some(final_end) = final_end {
+            ed.end = Some(DateTimeOrDate::Date(final_end));
+            ed.original_text = format!("{dtstart_val}/{dtend_val}");
+        }
     } else if let Some(dur_val) = duration
         && let Some(days) = parse_ics_duration_days(dur_val)
         && let Some(start_date) = ed.start_date()
-        && let Some(end_date) = start_date.checked_add_signed(chrono::Duration::days(days))
+        && days > 0
+        && let Some(end_date) = start_date
+            .checked_add_signed(chrono::Duration::days(days - 1))
     {
+        // P1-07: DURATION is elapsed time. A P3D event starting Aug 10 spans
+        // Aug 10–12 (inclusive last day = start + days - 1). A negative or
+        // zero DURATION is rejected (RFC 5545 requires positive DURATION);
+        // `parse_ics_duration_days` now preserves the sign and returns None
+        // for negatives.
         ed.end = Some(DateTimeOrDate::Date(end_date));
         ed.original_text = format!("{dtstart_val}/{dur_val}");
     }
@@ -263,12 +298,28 @@ fn parse_ics_date_range(
     Some(ed)
 }
 
+/// P1-07: an ICS value is DATE-valued (RFC 5545 §3.8.2.1) when it is exactly
+/// `YYYYMMDD` (8 digits, no time component). A DATETIME value is
+/// `YYYYMMDDTHHMMSS[Z]` (15+ chars with a `T` separator). The distinction
+/// governs whether DTEND is treated as non-inclusive (DATE) or as an instant
+/// landing on the inclusive last day (DATETIME).
+fn is_date_valued(value: &str) -> bool {
+    value.len() == 8 && value.bytes().all(|b| b.is_ascii_digit())
+}
+
 /// Parse the day-precision component of an RFC 5545 DURATION value
 /// (`PnWnDTnHnMnS`). Returns total days (weeks converted to days). Sub-day
 /// components (T...) produce 0 — the end date equals the start date at date
-/// precision. Returns `None` for unparseable values.
+/// precision. Returns `None` for unparseable values or negative DURATIONs
+/// (P1-07: RFC 5545 §3.3.6 requires the DURATION of a VEVENT to be positive;
+/// a leading `-` is rejected rather than stripped).
 fn parse_ics_duration_days(value: &str) -> Option<i64> {
-    let s = value.strip_prefix(['+', '-']).unwrap_or(value);
+    // P1-07: reject negative DURATION. RFC 5545 §3.3.6 allows a leading sign
+    // syntactically, but §3.6.1 requires VEVENT DURATION to be positive.
+    if value.starts_with('-') {
+        return None;
+    }
+    let s = value.strip_prefix('+').unwrap_or(value);
     if !s.starts_with('P') {
         return None;
     }
@@ -697,6 +748,8 @@ END:VCALENDAR
     }
 
     // R9-H06: DTEND must populate the end date for multi-day conferences.
+    // P1-07: DATE-valued DTEND is non-inclusive per RFC 5545 §3.8.2.2, so the
+    // stored end is the inclusive last day (DTEND - 1).
     #[test]
     fn discover_dtend_populates_end_date() {
         let ics = "\
@@ -718,9 +771,23 @@ END:VCALENDAR
         let dh = stubs[0].date_hint.as_ref().expect("date hint present");
         assert!(dh.start.is_some());
         assert!(dh.end.is_some(), "DTEND must populate end date");
+        // DTEND 20260812 (exclusive) → inclusive last day 20260811.
+        let start = dh.start_date().expect("start present");
+        let end = dh
+            .end
+            .as_ref()
+            .and_then(|e| match e {
+                DateTimeOrDate::Date(d) => Some(*d),
+                DateTimeOrDate::DateTime(_) => None,
+            })
+            .expect("end present as Date");
+        assert_eq!(start, chrono::NaiveDate::from_ymd_opt(2026, 8, 8).unwrap());
+        assert_eq!(end, chrono::NaiveDate::from_ymd_opt(2026, 8, 11).unwrap());
     }
 
     // R9-H06: DURATION must populate the end date when DTEND is absent.
+    // P1-07: DURATION is elapsed time; inclusive last day = start + days - 1.
+    // A P3D event starting 20260810 spans Aug 10–12 (inclusive last day Aug 12).
     #[test]
     fn discover_duration_populates_end_date() {
         let ics = "\
@@ -741,9 +808,22 @@ END:VCALENDAR
         assert_eq!(stubs.len(), 1);
         let dh = stubs[0].date_hint.as_ref().expect("date hint present");
         assert!(dh.end.is_some(), "DURATION must populate end date");
+        let start = dh.start_date().expect("start present");
+        let end = dh
+            .end
+            .as_ref()
+            .and_then(|e| match e {
+                DateTimeOrDate::Date(d) => Some(*d),
+                DateTimeOrDate::DateTime(_) => None,
+            })
+            .expect("end present as Date");
+        assert_eq!(start, chrono::NaiveDate::from_ymd_opt(2026, 8, 10).unwrap());
+        assert_eq!(end, chrono::NaiveDate::from_ymd_opt(2026, 8, 12).unwrap());
     }
 
     // R9-H06: DTEND takes precedence over DURATION per RFC 5545 §3.6.1.
+    // P1-07: with inclusive-end semantics, a 1-day event DTSTART:20260808 /
+    // DTEND:20260809 has inclusive last day = start (single day).
     #[test]
     fn discover_dtend_preferred_over_duration() {
         let ics = "\
@@ -763,7 +843,7 @@ END:VCALENDAR
         let source = make_source();
         let stubs = IcsAdapter.discover(&doc, &source).expect("parse ok");
         let dh = stubs[0].date_hint.as_ref().expect("date hint present");
-        // DTEND (2026-08-09) wins; end is 1 day after start, not 5.
+        // DTEND (2026-08-09, exclusive) wins; inclusive last day = start.
         let start = dh.start_date().expect("start present");
         let end = dh
             .end
@@ -773,7 +853,73 @@ END:VCALENDAR
                 DateTimeOrDate::DateTime(_) => None,
             })
             .expect("end present as Date");
-        assert_eq!(end, start + chrono::Duration::days(1));
+        assert_eq!(end, start, "1-day DATE DTEND range collapses to start");
+    }
+
+    // P1-07: a DATE DTEND equal to DTSTART (zero elapsed days) is a degenerate
+    // zero-day range under RFC 5545, but producers emit it for instantaneous
+    // or same-day events. Clamp end to start so the inclusive invariant holds.
+    #[test]
+    fn discover_dtend_equal_to_dtstart_clamps_to_start() {
+        let ics = "\
+BEGIN:VCALENDAR
+VERSION:2.0
+BEGIN:VEVENT
+UID:conf-same-day
+SUMMARY:Same-day Event
+URL:https://example.com/same
+DTSTART:20260808
+DTEND:20260808
+END:VEVENT
+END:VCALENDAR
+";
+        let doc = make_doc(ics.as_bytes());
+        let source = make_source();
+        let stubs = IcsAdapter.discover(&doc, &source).expect("parse ok");
+        let dh = stubs[0].date_hint.as_ref().expect("date hint present");
+        let start = dh.start_date().expect("start present");
+        let end = dh
+            .end
+            .as_ref()
+            .and_then(|e| match e {
+                DateTimeOrDate::Date(d) => Some(*d),
+                DateTimeOrDate::DateTime(_) => None,
+            })
+            .expect("end present as Date");
+        assert_eq!(end, start, "zero-day DATE DTEND must clamp to start");
+    }
+
+    // P1-07: DATETIME-valued DTEND is an instant that already lands on the
+    // inclusive last day at date precision — no -1 day adjustment.
+    #[test]
+    fn discover_datetime_dtend_kept_verbatim() {
+        let ics = "\
+BEGIN:VCALENDAR
+VERSION:2.0
+BEGIN:VEVENT
+UID:conf-datetime
+SUMMARY:Overnight Event
+URL:https://example.com/overnight
+DTSTART:20260808T100000Z
+DTEND:20260809T120000Z
+END:VEVENT
+END:VCALENDAR
+";
+        let doc = make_doc(ics.as_bytes());
+        let source = make_source();
+        let stubs = IcsAdapter.discover(&doc, &source).expect("parse ok");
+        let dh = stubs[0].date_hint.as_ref().expect("date hint present");
+        let start = dh.start_date().expect("start present");
+        let end = dh
+            .end
+            .as_ref()
+            .and_then(|e| match e {
+                DateTimeOrDate::Date(d) => Some(*d),
+                DateTimeOrDate::DateTime(_) => None,
+            })
+            .expect("end present as Date");
+        assert_eq!(start, chrono::NaiveDate::from_ymd_opt(2026, 8, 8).unwrap());
+        assert_eq!(end, chrono::NaiveDate::from_ymd_opt(2026, 8, 9).unwrap());
     }
 
     #[test]
@@ -788,7 +934,10 @@ END:VCALENDAR
         assert_eq!(parse_ics_duration_days("P"), None);
         assert_eq!(parse_ics_duration_days("X1D"), None);
         assert_eq!(parse_ics_duration_days("+P1D"), Some(1));
-        assert_eq!(parse_ics_duration_days("-P1D"), Some(1));
+        // P1-07: negative DURATION is rejected (RFC 5545 §3.6.1 requires
+        // positive DURATION in a VEVENT). Previously the sign was stripped
+        // and `-P1D` returned Some(1).
+        assert_eq!(parse_ics_duration_days("-P1D"), None);
     }
 
     // §66: parser must not panic on untrusted input. A crafted DURATION with
