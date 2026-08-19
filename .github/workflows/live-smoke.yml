@@ -31,14 +31,18 @@ jobs:
         run: cargo build --release
 
       - name: Live smoke (advisory)
+        # `sources check` is the ADR-0009 stub (post-v0.1); `doctor` has no
+        # network flag (CLI-25). Both are real local commands here. LIVE-003
+        # keeps this advisory: non-zero exits are absorbed by
+        # `continue-on-error: true` on the job.
         run: |
-          ./target/release/math_talk_radar sources check --json > live-smoke.json || true
-          ./target/release/math_talk_radar doctor --network --json > doctor.json || true
+          ./target/release/math_talk_radar sources list > sources-list.txt || true
+          ./target/release/math_talk_radar doctor --json > doctor.json || true
 
       - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: live-smoke-results
           path: |
-            live-smoke.json
+            sources-list.txt
             doctor.json
