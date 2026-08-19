@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
-use radar_core::{Event, EventId, SourceHealth};
+use radar_core::{Event, EventId, SourceHealth, SourceStatus};
 use redb::ReadableTable;
 use serde::{Deserialize, Serialize};
 
@@ -224,6 +224,10 @@ impl Repository {
     /// 3. Upserts each current event, preserving `first_seen_at` (INV-1) and
     ///    restoring from tombstones within the retention window (INV-2).
     /// 4. Prunes absent events: writes tombstones, removes event rows (INV-4).
+    ///    **Skipped when any `source_health` entry has a terminal failure
+    ///    status** (ADR-0012): absent events are presumed missing due to the
+    ///    failed source, not cancelled. `EventCancelled` change records are
+    ///    suppressed in the same case.
     /// 5. Appends each `ChangeRecord` to `CHANGE_LOG` (R9-H08).
     /// 6. Appends each `source_health` record to `SOURCE_HEALTH` under
     ///    composite key `"{source}\x00{recorded_at}"` (R9-M06/B06). Defensive:
@@ -276,7 +280,26 @@ impl Repository {
                     tombstone_first_seen.insert(key.value().to_string(), t.first_seen_at);
                 }
             }
-            let changes = detect_changes(&prev_events, events, now);
+            // ADR-0012 (P0-03): the prune step treats events absent from the
+            // current scan as cancelled (writes a tombstone, removes the row,
+            // emits EventCancelled). That inference is only sound when every
+            // enabled source reached at least `Ok`/`Partial` — a terminal
+            // failure on one source means its events are simply missing from
+            // this scan, NOT cancelled. Pruning them would lose live events
+            // and produce spurious cancellation signals every time a source
+            // has a transient outage.
+            //
+            // `all_healthy` gates both the prune loop and the EventCancelled
+            // records from `detect_changes` (suppressed below). An empty
+            // health slice (the `store_scan` path) is vacuously healthy, so
+            // the legacy behavior is preserved.
+            let all_healthy = source_health
+                .iter()
+                .all(|h| matches!(h.status, SourceStatus::Ok | SourceStatus::Partial));
+            let mut changes = detect_changes(&prev_events, events, now);
+            if !all_healthy {
+                changes.retain(|c| c.kind != crate::changes::ChangeKind::EventCancelled);
+            }
             let current_ids: std::collections::HashSet<&str> =
                 events.iter().map(|e| e.id.0.as_str()).collect();
             let mut stored = Vec::with_capacity(events.len());
@@ -301,17 +324,26 @@ impl Repository {
             // are absent from the current one (the cancelled set). Write a
             // tombstone preserving `first_seen_at` so a future reappearance
             // restores it instead of resetting to the reappearance scan time.
-            for prev in &prev_events {
-                if !current_ids.contains(prev.id.0.as_str()) {
-                    if let Some(first_seen) = prev.first_seen_at {
-                        let tombstone = CancelledEventTombstone {
-                            first_seen_at: first_seen,
-                            cancelled_at: now,
-                        };
-                        let bytes = serde_json::to_vec(&tombstone)?;
-                        tombstones.insert(prev.id.0.as_str(), bytes.as_slice())?;
+            //
+            // ADR-0012 (P0-03): skip prune entirely when any enabled source
+            // had a terminal failure — absent events are presumed missing due
+            // to the failed source, not genuinely cancelled. The events stay
+            // in the table; `last_seen_at` is NOT advanced for them here (it
+            // is only advanced for events present in the current scan), so
+            // their `last_seen_at` will lag until the failed source recovers.
+            if all_healthy {
+                for prev in &prev_events {
+                    if !current_ids.contains(prev.id.0.as_str()) {
+                        if let Some(first_seen) = prev.first_seen_at {
+                            let tombstone = CancelledEventTombstone {
+                                first_seen_at: first_seen,
+                                cancelled_at: now,
+                            };
+                            let bytes = serde_json::to_vec(&tombstone)?;
+                            tombstones.insert(prev.id.0.as_str(), bytes.as_slice())?;
+                        }
+                        table.remove(prev.id.0.as_str())?;
                     }
-                    table.remove(prev.id.0.as_str())?;
                 }
             }
             // INV-4: purge expired tombstones collected during the read pass.

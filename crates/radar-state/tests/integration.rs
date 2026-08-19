@@ -468,6 +468,101 @@ fn store_scan_tombstone_expired_after_retention() {
     assert_ne!(s3[0].first_seen_at, Some(original_first_seen));
 }
 
+/// ADR-0012 (P0-03): when any enabled source has a terminal failure status,
+/// the prune step is skipped and EventCancelled change records are suppressed.
+/// A scan that returns no events must NOT cancel previously-seen events if the
+/// absence is due to a failed source rather than genuine cancellation.
+#[test]
+fn store_scan_bundle_skips_prune_on_partial_failure() {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let db_path = dir.path().join("state.redb");
+    let repo = Repository::open(&db_path).expect("open repo");
+
+    // scan 1: seed an event from a healthy source.
+    let event = base_event("e1", vec![]);
+    let h_ok = health("s1", SourceStatus::Ok, t0());
+    repo.store_scan_bundle(
+        std::slice::from_ref(&event),
+        std::slice::from_ref(&h_ok),
+        t0(),
+    )
+    .expect("scan 1: seed");
+
+    // scan 2: the source now returns HttpError — no events, and the health
+    // slice records the failure. The event must survive (not pruned) and no
+    // EventCancelled must be emitted.
+    let h_err = health("s1", SourceStatus::HttpError, t1());
+    let (stored, changes) = repo
+        .store_scan_bundle(&[], std::slice::from_ref(&h_err), t1())
+        .expect("scan 2: partial failure");
+    assert!(stored.is_empty(), "no events stored this scan");
+    assert!(
+        changes.iter().all(|c| c.kind != ChangeKind::EventCancelled),
+        "ADR-0012: EventCancelled must be suppressed on partial failure, got: {changes:?}"
+    );
+
+    // The event must still be in the DB.
+    assert!(
+        repo.get_event(&event.id).expect("get").is_some(),
+        "ADR-0012: event must NOT be pruned when a source had a terminal failure"
+    );
+
+    // scan 3: the source recovers (Ok) and re-emits the event. No EventAdded
+    // should fire (it is the same event id), and first_seen_at must be
+    // preserved from scan 1 — proving the tombstone was NOT written in scan 2.
+    let h_ok2 = health("s1", SourceStatus::Ok, t2());
+    let (stored3, changes3) = repo
+        .store_scan_bundle(
+            std::slice::from_ref(&event),
+            std::slice::from_ref(&h_ok2),
+            t2(),
+        )
+        .expect("scan 3: recovery");
+    assert_eq!(stored3.len(), 1);
+    assert!(
+        changes3.iter().all(|c| c.kind != ChangeKind::EventAdded),
+        "ADR-0012: recovering event must not be re-added (no tombstone was written): {changes3:?}"
+    );
+    assert_eq!(
+        stored3[0].first_seen_at,
+        Some(t0()),
+        "ADR-0012: first_seen_at must be preserved across the failed scan (no tombstone)"
+    );
+}
+
+/// ADR-0012 (P0-03) complement: when all sources are healthy, the prune step
+/// runs as before and EventCancelled is emitted. This guards against the guard
+/// being accidentally inverted.
+#[test]
+fn store_scan_bundle_prunes_when_all_healthy() {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let db_path = dir.path().join("state.redb");
+    let repo = Repository::open(&db_path).expect("open repo");
+
+    let event = base_event("e1", vec![]);
+    let h_ok = health("s1", SourceStatus::Ok, t0());
+    repo.store_scan_bundle(
+        std::slice::from_ref(&event),
+        std::slice::from_ref(&h_ok),
+        t0(),
+    )
+    .expect("scan 1: seed");
+
+    // All healthy + empty events → genuine cancel.
+    let h_ok2 = health("s1", SourceStatus::Ok, t1());
+    let (_, changes) = repo
+        .store_scan_bundle(&[], std::slice::from_ref(&h_ok2), t1())
+        .expect("scan 2: all healthy, no events");
+    assert!(
+        changes.iter().any(|c| c.kind == ChangeKind::EventCancelled),
+        "ADR-0012: EventCancelled must fire when all sources are healthy, got: {changes:?}"
+    );
+    assert!(
+        repo.get_event(&event.id).expect("get").is_none(),
+        "ADR-0012: event must be pruned when all sources are healthy"
+    );
+}
+
 /// store_scan detects EventUpdated on a title change.
 #[test]
 fn store_scan_event_updated() {
