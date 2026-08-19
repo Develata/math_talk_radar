@@ -431,7 +431,10 @@ fn classify_video_platform(url: &Url) -> Option<&'static str> {
 }
 
 fn is_pdf(url: &Url) -> bool {
-    url.path().to_lowercase().ends_with(".pdf")
+    url.path()
+        .rsplit('.')
+        .next()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("pdf"))
 }
 
 /// True if `url` uses HTTP or HTTPS — the only schemes safe to store as an
@@ -446,13 +449,27 @@ pub(crate) fn is_http_url(url: &Url) -> bool {
 /// ADAP-18: classify direct links to raw audio/video files by extension.
 /// A `<a href="talk.mp4">` link is a recording just as much as a `<video>` tag.
 fn classify_raw_media(url: &Url) -> Option<MediaType> {
-    let path = url.path().to_lowercase();
-    let ext = path.rsplit('.').next()?;
-    match ext {
-        "mp4" | "webm" | "mkv" | "mov" | "avi" | "m4v" => Some(MediaType::Video),
-        "mp3" | "ogg" | "opus" | "wav" | "m4a" | "aac" | "flac" => Some(MediaType::Audio),
-        _ => None,
+    let ext = url.path().rsplit('.').next()?;
+    if ext.eq_ignore_ascii_case("mp4")
+        || ext.eq_ignore_ascii_case("webm")
+        || ext.eq_ignore_ascii_case("mkv")
+        || ext.eq_ignore_ascii_case("mov")
+        || ext.eq_ignore_ascii_case("avi")
+        || ext.eq_ignore_ascii_case("m4v")
+    {
+        return Some(MediaType::Video);
     }
+    if ext.eq_ignore_ascii_case("mp3")
+        || ext.eq_ignore_ascii_case("ogg")
+        || ext.eq_ignore_ascii_case("opus")
+        || ext.eq_ignore_ascii_case("wav")
+        || ext.eq_ignore_ascii_case("m4a")
+        || ext.eq_ignore_ascii_case("aac")
+        || ext.eq_ignore_ascii_case("flac")
+    {
+        return Some(MediaType::Audio);
+    }
+    None
 }
 
 /// ADAP-19: canonicalize a YouTube URL to its watch form so the same video
