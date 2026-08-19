@@ -415,13 +415,19 @@ fn classify_video_platform(url: &Url) -> Option<&'static str> {
             return Some("youtube");
         }
     }
-    if url.as_str().contains("vimeo.com/") {
-        Some("vimeo")
-    } else if url.as_str().contains("bilibili.com/video/") {
-        Some("bilibili")
-    } else {
-        None
+    let is_vimeo = host == "vimeo.com"
+        || host == "www.vimeo.com"
+        || host.ends_with(".vimeo.com");
+    if is_vimeo {
+        return Some("vimeo");
     }
+    let is_bilibili = host == "bilibili.com"
+        || host == "www.bilibili.com"
+        || host.ends_with(".bilibili.com");
+    if is_bilibili && url.path().contains("/video/") {
+        return Some("bilibili");
+    }
+    None
 }
 
 fn is_pdf(url: &Url) -> bool {
