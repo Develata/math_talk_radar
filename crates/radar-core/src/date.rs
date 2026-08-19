@@ -3,7 +3,7 @@
 //! The full date parser (range formats, cross-month ranges, US vs UK ordering,
 //! interval-overlap filtering) lands in M1. This module establishes the
 //! canonical [`EventDate`] shape and the clock-injection surface used by tests.
-use chrono::{DateTime, NaiveDate, Utc};
+use chrono::{DateTime, Datelike, NaiveDate, Utc};
 use regex::Regex;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -275,6 +275,49 @@ pub fn parse_date(text: &str) -> Result<EventDate, DateError> {
 /// from a system clock inside `radar-core`.
 pub fn parse_date_with_year_hint(text: &str, year_hint: i32) -> Result<EventDate, DateError> {
     parse_date_inner(text, Some(year_hint))
+}
+
+/// Parse a free-text date string with a calendar reference for year-less
+/// patterns.
+///
+/// Like [`parse_date_with_year_hint`], but uses a full [`NaiveDate`] (typically
+/// `FetchedDocument::fetched_at.date_naive()`) as the year reference and
+/// applies a **next-occurrence rollover**: if the parsed date's latest day
+/// (the range end, or the single day for a Day-precision date) falls strictly
+/// before `ref_date`, the year is advanced by one and the text is re-parsed.
+/// This handles the common case where a page fetched in December advertises
+/// "January 15" — the event is next January, not last January.
+///
+/// Rollover is suppressed when:
+/// - The text carries an explicit year (re-parsing yields the same date).
+/// - The parsed date is `Unknown` precision (no date to roll).
+/// - The parsed date is a range whose end is on or after `ref_date` (an
+///   in-progress or future event must not be rolled forward).
+///
+/// The crate remains clock-free: `ref_date` is supplied by the caller, not
+/// read from a system clock inside `radar-core`.
+pub fn parse_date_with_reference(text: &str, ref_date: NaiveDate) -> Result<EventDate, DateError> {
+    let first = parse_date_inner(text, Some(ref_date.year()))?;
+    if first.precision == DatePrecision::Unknown {
+        return Ok(first);
+    }
+    let latest = match (&first.end, &first.start) {
+        (Some(e), _) => Some(to_naive_date(e)),
+        (None, Some(s)) => Some(to_naive_date(s)),
+        (None, None) => None,
+    };
+    let Some(latest) = latest else {
+        return Ok(first);
+    };
+    if latest >= ref_date {
+        return Ok(first);
+    }
+    let rolled = parse_date_inner(text, Some(ref_date.year() + 1))?;
+    if rolled.precision != DatePrecision::Unknown && rolled != first {
+        Ok(rolled)
+    } else {
+        Ok(first)
+    }
 }
 
 fn parse_date_inner(text: &str, year_hint: Option<i32>) -> Result<EventDate, DateError> {
@@ -977,6 +1020,140 @@ mod tests {
             assert!(
                 parse_date_with_year_hint(c, 2024).is_ok(),
                 "parse_date_with_year_hint({c:?}) should be Ok"
+            );
+        }
+    }
+
+    // --- parse_date_with_reference (P1-12: next-occurrence rollover) ---------
+
+    #[test]
+    fn ref_rolls_single_day_forward_when_strictly_before_ref() {
+        // Page fetched Dec 15, 2026 advertises "Jan 15" — next occurrence is
+        // Jan 15, 2027, not Jan 15, 2026 (which is in the past).
+        let ed = parse_date_with_reference("Jan 15", d(2026, 12, 15)).unwrap();
+        assert_eq!(ed.precision, DatePrecision::Day);
+        assert_eq!(start_date(&ed), d(2027, 1, 15));
+    }
+
+    #[test]
+    fn ref_does_not_roll_when_on_or_after_ref() {
+        // "Jan 15" fetched on Jan 15, 2026 — same year, no roll.
+        let ed = parse_date_with_reference("Jan 15", d(2026, 1, 15)).unwrap();
+        assert_eq!(start_date(&ed), d(2026, 1, 15));
+        // "Jan 15" fetched on Jan 1, 2026 — still current year (Jan 15 ≥ Jan 1).
+        let ed = parse_date_with_reference("Jan 15", d(2026, 1, 1)).unwrap();
+        assert_eq!(start_date(&ed), d(2026, 1, 15));
+    }
+
+    #[test]
+    fn ref_rolls_same_month_range_forward() {
+        // "Jan 10–15" fetched Dec 20, 2026 — entire range is in the past
+        // relative to ref, roll forward to 2027.
+        let ed = parse_date_with_reference("Jan 10–15", d(2026, 12, 20)).unwrap();
+        assert_eq!(ed.precision, DatePrecision::Range);
+        assert_eq!(start_date(&ed), d(2027, 1, 10));
+        assert_eq!(end_date(&ed), d(2027, 1, 15));
+    }
+
+    #[test]
+    fn ref_does_not_roll_in_progress_range() {
+        // "Nov 21 – Dec 30" fetched Dec 15, 2026 — the range end (Dec 30) is
+        // on or after ref (Dec 15), so the event is in-progress and must NOT
+        // be rolled forward.
+        let ed = parse_date_with_reference("Nov 21 – Dec 30", d(2026, 12, 15)).unwrap();
+        assert_eq!(ed.precision, DatePrecision::Range);
+        assert_eq!(start_date(&ed), d(2026, 11, 21));
+        assert_eq!(end_date(&ed), d(2026, 12, 30));
+    }
+
+    #[test]
+    fn ref_does_not_roll_future_range() {
+        // "Aug 3–7" fetched Jan 10, 2026 — end (Aug 7) is after ref (Jan 10),
+        // no roll.
+        let ed = parse_date_with_reference("Aug 3–7", d(2026, 1, 10)).unwrap();
+        assert_eq!(ed.precision, DatePrecision::Range);
+        assert_eq!(start_date(&ed), d(2026, 8, 3));
+        assert_eq!(end_date(&ed), d(2026, 8, 7));
+    }
+
+    #[test]
+    fn ref_rolls_cross_month_range_when_end_before_ref() {
+        // "Dec 30 – Jan 02" fetched Mar 15, 2026 — the range end (Jan 02 2026)
+        // is before ref (Mar 15 2026), so roll forward: Dec 30 2026 – Jan 02 2027.
+        let ed = parse_date_with_reference("Dec 30 – Jan 02", d(2026, 3, 15)).unwrap();
+        assert_eq!(ed.precision, DatePrecision::Range);
+        assert_eq!(start_date(&ed), d(2026, 12, 30));
+        assert_eq!(end_date(&ed), d(2027, 1, 2));
+    }
+
+    #[test]
+    fn ref_does_not_roll_cross_month_range_when_end_after_ref() {
+        // "Dec 30 – Jan 02" fetched Nov 10, 2026 — end (Jan 02 2027) is after
+        // ref (Nov 10 2026), no roll. The cross-month end-year logic in
+        // try_cross_month_range_no_year already advances end to year+1.
+        let ed = parse_date_with_reference("Dec 30 – Jan 02", d(2026, 11, 10)).unwrap();
+        assert_eq!(ed.precision, DatePrecision::Range);
+        assert_eq!(start_date(&ed), d(2026, 12, 30));
+        assert_eq!(end_date(&ed), d(2027, 1, 2));
+    }
+
+    #[test]
+    fn ref_explicit_year_not_overridden_by_rollover() {
+        // Explicit year "August 3, 2026" fetched in 2099 — the explicit year
+        // wins; re-parsing with year+1 yields a different date, but the
+        // explicit year must stand.
+        let ed = parse_date_with_reference("August 3, 2026", d(2099, 1, 1)).unwrap();
+        assert_eq!(ed.precision, DatePrecision::Day);
+        assert_eq!(start_date(&ed), d(2026, 8, 3));
+    }
+
+    #[test]
+    fn ref_iso_date_not_rolled() {
+        // ISO "2026-08-08" fetched in 2099 — explicit year, no roll.
+        let ed = parse_date_with_reference("2026-08-08", d(2099, 1, 1)).unwrap();
+        assert_eq!(ed.precision, DatePrecision::Day);
+        assert_eq!(start_date(&ed), d(2026, 8, 8));
+    }
+
+    #[test]
+    fn ref_unparseable_stays_unknown() {
+        let ed = parse_date_with_reference("not a date", d(2026, 1, 1)).unwrap();
+        assert_eq!(ed.precision, DatePrecision::Unknown);
+        assert!(ed.start.is_none());
+    }
+
+    #[test]
+    fn ref_never_errors() {
+        let cases = ["", "   ", "2026", "August", "13–14", "garbage!@#"];
+        for c in cases {
+            assert!(
+                parse_date_with_reference(c, d(2026, 6, 15)).is_ok(),
+                "parse_date_with_reference({c:?}) should be Ok"
+            );
+        }
+    }
+
+    #[test]
+    fn ref_matches_year_hint_at_january_first_ref() {
+        // Sanity: ref_date = Jan 1 means every (month, day) ≥ (1, 1), so the
+        // rollover never fires. parse_date_with_reference must then agree
+        // exactly with parse_date_with_year_hint(text, ref_date.year()).
+        let cases = [
+            "Jan 1",
+            "Mar 15",
+            "Dec 31",
+            "3–7 August",
+            "Nov 21 – Dec 30",
+            "Dec 30 – Jan 02",
+            "August 3, 2026",
+        ];
+        let ref_jan1 = d(2026, 1, 1);
+        for c in cases {
+            let with_ref = parse_date_with_reference(c, ref_jan1).unwrap();
+            let with_hint = parse_date_with_year_hint(c, ref_jan1.year()).unwrap();
+            assert_eq!(
+                with_ref, with_hint,
+                "ref=Jan 1 must match year_hint for {c:?}: got {with_ref:?} vs {with_hint:?}"
             );
         }
     }

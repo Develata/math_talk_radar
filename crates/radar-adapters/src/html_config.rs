@@ -6,10 +6,10 @@
 //! (Metis D5: no automatic fallback to the generic HTML adapter).
 use scraper::{ElementRef, Html, Node, Selector};
 
-use chrono::Datelike;
+use chrono::NaiveDate;
 
 use radar_core::config::HtmlSelectors;
-use radar_core::date::{DatePrecision, EventDate, parse_date, parse_date_with_year_hint};
+use radar_core::date::{DatePrecision, EventDate, parse_date, parse_date_with_reference};
 use radar_core::{
     AccessInfo, AdapterError, Event, EventCandidate, EventStatus, EventStub, FetchPlan,
     FetchedDocument, Location, OnlineAvailability, PersonHit, PersonRole, PublicAccess,
@@ -71,9 +71,9 @@ impl SourceAdapter for HtmlConfigAdapter {
                 if title.is_empty() {
                     continue;
                 }
-                let date_hint = date_selector
-                    .as_ref()
-                    .and_then(|sel| first_date_in(&container, sel, document.fetched_at.year()));
+                let date_hint = date_selector.as_ref().and_then(|sel| {
+                    first_date_in(&container, sel, document.fetched_at.date_naive())
+                });
                 stubs.push(EventStub {
                     title,
                     url,
@@ -290,7 +290,11 @@ fn first_text_in(scope: &ElementRef, selector: &Selector) -> Option<String> {
     if text.is_empty() { None } else { Some(text) }
 }
 
-fn first_date_in(scope: &ElementRef, selector: &Selector, year_hint: i32) -> Option<EventDate> {
+fn first_date_in(
+    scope: &ElementRef,
+    selector: &Selector,
+    ref_date: NaiveDate,
+) -> Option<EventDate> {
     let element = scope.select(selector).next()?;
     if let Some(dt) = element.attr("datetime")
         && let Ok(d) = parse_date(dt)
@@ -300,7 +304,7 @@ fn first_date_in(scope: &ElementRef, selector: &Selector, year_hint: i32) -> Opt
     }
     let direct = crate::helpers::clean_text(&direct_text(&element));
     if !direct.is_empty()
-        && let Ok(d) = parse_date_with_year_hint(&direct, year_hint)
+        && let Ok(d) = parse_date_with_reference(&direct, ref_date)
         && d.precision != DatePrecision::Unknown
     {
         return Some(d);
@@ -309,7 +313,7 @@ fn first_date_in(scope: &ElementRef, selector: &Selector, year_hint: i32) -> Opt
     if text.is_empty() {
         return None;
     }
-    let d = parse_date_with_year_hint(&text, year_hint).ok()?;
+    let d = parse_date_with_reference(&text, ref_date).ok()?;
     (d.precision != DatePrecision::Unknown).then_some(d)
 }
 
