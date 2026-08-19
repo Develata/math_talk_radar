@@ -403,17 +403,21 @@ fn make_audio(url: &Url, base_url: &Url, source_id: &str) -> MediaResource {
 }
 
 fn classify_video_platform(url: &Url) -> Option<&'static str> {
-    let s = url.as_str();
-    if s.contains("youtube.com/watch")
-        || s.contains("youtu.be/")
-        || s.contains("youtube.com/embed")
-        || s.contains("youtube-nocookie.com/embed")
-        || s.contains("youtube.com/shorts")
-    {
-        Some("youtube")
-    } else if s.contains("vimeo.com/") {
+    let host = url.host_str().unwrap_or("");
+    if is_youtube_host(host) {
+        let path = url.path();
+        let is_youtube_path = host == "youtu.be"
+            || path == "/watch"
+            || path.starts_with("/watch/")
+            || path.contains("/embed/")
+            || path.contains("/shorts/");
+        if is_youtube_path {
+            return Some("youtube");
+        }
+    }
+    if url.as_str().contains("vimeo.com/") {
         Some("vimeo")
-    } else if s.contains("bilibili.com/video/") {
+    } else if url.as_str().contains("bilibili.com/video/") {
         Some("bilibili")
     } else {
         None
