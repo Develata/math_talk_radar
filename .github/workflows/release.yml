@@ -163,7 +163,7 @@ jobs:
           sha256sum math_talk_radar-x86_64-unknown-linux-musl > math_talk_radar-x86_64-unknown-linux-musl.sha256
 
       - name: Attest build provenance (RELS-003)
-        uses: actions/attest-build-provenance@ef244123eb79f2f7a7e75d99086184180e6d0018 # v1
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: |
             target/x86_64-unknown-linux-musl/release/math_talk_radar-x86_64-unknown-linux-musl
