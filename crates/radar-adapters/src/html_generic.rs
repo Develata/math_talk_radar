@@ -267,7 +267,7 @@ impl SourceAdapter for HtmlGenericAdapter {
 
                 // Date: prefer detail page, fall back to stub hint, else Unknown.
                 let date = match fields.date_text.as_deref() {
-                    Some(t) => parse_date(t).unwrap_or_else(|_| EventDate::unknown(String::new())),
+                    Some(t) => parse_date(t).unwrap_or_else(|_| EventDate::unknown(t.to_string())),
                     None => stub
                         .date_hint
                         .clone()

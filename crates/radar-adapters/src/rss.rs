@@ -45,8 +45,8 @@ impl SourceAdapter for RssAdapter {
                     .or_else(|| entry.links.first())?;
                 let url = Url::parse(&link.href).ok()?;
                 let date_hint = entry.published.or(entry.updated).map(|dt| {
-                    parse_date(&dt.date_naive().to_string())
-                        .unwrap_or_else(|_| EventDate::unknown(String::new()))
+                    let date_text = dt.date_naive().to_string();
+                    parse_date(&date_text).unwrap_or_else(|_| EventDate::unknown(date_text))
                 });
                 let native_id = (!entry.id.is_empty()).then_some(entry.id);
                 Some(EventStub {
