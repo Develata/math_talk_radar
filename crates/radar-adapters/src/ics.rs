@@ -245,6 +245,9 @@ fn parse_ics_date_range(
 
     if let Some(dtend_val) = dtend
         && let Some(end_ed) = parse_ics_dtstart(dtend_val)
+        && end_ed
+            .start_date()
+            .is_some_and(|end| ed.start_date().is_some_and(|start| end >= start))
     {
         ed.end = end_ed.start;
         ed.original_text = format!("{dtstart_val}/{dtend_val}");
@@ -812,5 +815,34 @@ END:VCALENDAR
         let dh = stubs[0].date_hint.as_ref().expect("date hint present");
         assert!(dh.start.is_some(), "start must still be populated");
         assert!(dh.end.is_none(), "overflow DURATION must leave end unset");
+    }
+
+    // BUG-4: a malformed feed with DTEND < DTSTART would previously set end
+    // before start, violating the start <= end invariant that interval_overlap
+    // and downstream rendering rely on. The parser must drop the bogus DTEND.
+    #[test]
+    fn discover_dtend_before_dtstart_is_dropped() {
+        let ics = "\
+BEGIN:VCALENDAR
+VERSION:2.0
+BEGIN:VEVENT
+UID:conf-inverted
+SUMMARY:Inverted Range
+URL:https://example.com/inverted
+DTSTART:20260810
+DTEND:20260805
+END:VEVENT
+END:VCALENDAR
+";
+        let doc = make_doc(ics.as_bytes());
+        let source = make_source();
+        let stubs = IcsAdapter.discover(&doc, &source).expect("parse ok");
+        assert_eq!(stubs.len(), 1);
+        let dh = stubs[0].date_hint.as_ref().expect("date hint present");
+        assert!(dh.start.is_some(), "start must still be populated");
+        assert!(
+            dh.end.is_none(),
+            "DTEND before DTSTART must be dropped, not stored inverted"
+        );
     }
 }
