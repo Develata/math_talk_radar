@@ -111,9 +111,17 @@ impl SourceAdapter for RssAdapter {
             ),
         };
 
-        let date = stub
-            .date_hint
-            .clone()
+        // P0-07: prefer the on-page event date over the feed pubDate. The
+        // feed `published`/`updated` is the article's publication timestamp,
+        // not the conference date; the HTML detail page carries the real
+        // event date (e.g. a `<time datetime="2024-03-15">` element that
+        // `extract_html_fields` surfaces as `date_text`). Fall back to the
+        // feed date only when the detail page has no parseable date.
+        let date = fields
+            .date_text
+            .as_deref()
+            .and_then(|t| parse_date(t).ok())
+            .or_else(|| stub.date_hint.clone())
             .unwrap_or_else(|| EventDate::unknown(String::new()));
 
         let event = helpers::build_event_from_stub(
@@ -390,5 +398,100 @@ mod tests {
         );
         assert_eq!(candidate.event.media.len(), 1);
         assert_eq!(candidate.event.media[0].media_type, MediaType::Slides);
+        // P0-07: the on-page <time datetime="2024-03-15"> drives the event
+        // date, not the (absent here) feed pubDate.
+        let start = candidate
+            .event
+            .date
+            .start_date()
+            .expect("detail-page date should populate start");
+        assert_eq!(
+            start,
+            chrono::NaiveDate::from_ymd_opt(2024, 3, 15).unwrap()
+        );
+    }
+
+    // P0-07: when the HTML detail page carries an event date, it must override
+    // the feed pubDate — the pubDate is the article's publication timestamp,
+    // not the conference date.
+    #[test]
+    fn enrich_prefers_detail_date_over_feed_pubdate() {
+        // Feed pubDate = 2024-01-01; detail page event date = 2024-03-15.
+        let stub = EventStub {
+            title: "Conference on Algebra".to_string(),
+            url: Url::parse("https://example.com/talks/1").unwrap(),
+            date_hint: Some(EventDate::unknown("2024-01-01".to_string())),
+            source: SourceEvidence {
+                source_id: "test-rss".to_string(),
+                source_url: Url::parse("https://example.com/feed.xml").unwrap(),
+                evidence: None,
+                captured_at: None,
+                native_id: None,
+            },
+        };
+        let html = r#"<!DOCTYPE html>
+<html><body>
+<h1>Conference on Algebra</h1>
+<time datetime="2024-03-15">March 15, 2024</time>
+</body></html>"#;
+        let doc = make_doc(html, "text/html; charset=utf-8");
+        let source = test_source();
+        let candidate = RssAdapter
+            .enrich(stub, std::slice::from_ref(&doc), &source)
+            .expect("enrich should succeed");
+        let start = candidate
+            .event
+            .date
+            .start_date()
+            .expect("event date should be populated");
+        assert_eq!(
+            start,
+            chrono::NaiveDate::from_ymd_opt(2024, 3, 15).unwrap(),
+            "detail-page date must override the feed pubDate"
+        );
+    }
+
+    // P0-07: when the detail page has no parseable date, fall back to the
+    // feed pubDate (the previous behavior).
+    #[test]
+    fn enrich_falls_back_to_feed_pubdate_without_detail_date() {
+        let stub = EventStub {
+            title: "Workshop on Graph Theory".to_string(),
+            url: Url::parse("https://example.com/talks/2").unwrap(),
+            date_hint: Some(EventDate {
+                start: Some(radar_core::DateTimeOrDate::Date(
+                    chrono::NaiveDate::from_ymd_opt(2024, 1, 2).unwrap(),
+                )),
+                end: None,
+                timezone: None,
+                original_text: "2024-01-02".to_string(),
+                precision: radar_core::DatePrecision::Day,
+            }),
+            source: SourceEvidence {
+                source_id: "test-rss".to_string(),
+                source_url: Url::parse("https://example.com/feed.xml").unwrap(),
+                evidence: None,
+                captured_at: None,
+                native_id: None,
+            },
+        };
+        // No <time> element → fields.date_text is None → fall back to pubDate.
+        let html = r#"<!DOCTYPE html>
+<html><body><h1>Workshop on Graph Theory</h1></body></html>"#;
+        let doc = make_doc(html, "text/html; charset=utf-8");
+        let source = test_source();
+        let candidate = RssAdapter
+            .enrich(stub, std::slice::from_ref(&doc), &source)
+            .expect("enrich should succeed");
+        let start = candidate
+            .event
+            .date
+            .start_date()
+            .expect("feed pubDate should populate start as fallback");
+        assert_eq!(
+            start,
+            chrono::NaiveDate::from_ymd_opt(2024, 1, 2).unwrap(),
+            "feed pubDate must be used when the detail page has no date"
+        );
     }
 }
