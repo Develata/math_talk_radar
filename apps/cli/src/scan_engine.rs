@@ -150,8 +150,25 @@ pub async fn run_scan(args: ScanArgs) -> Result<ScanOutput, CliError> {
     // legitimate scans (15 sources × ~600 real events ≈ 9000) while
     // preventing pathological accumulation.
     const MAX_GLOBAL_CANDIDATES: usize = 10_000;
-    if events.len() > MAX_GLOBAL_CANDIDATES {
+    let capped = events.len() > MAX_GLOBAL_CANDIDATES;
+    if capped {
         events.truncate(MAX_GLOBAL_CANDIDATES);
+        // P0-04(b): SourceHealth.events was populated in fetch_source as
+        // candidates.len() at fetch time (the pre-cap count). When the global
+        // cap drops later-sorted sources' events entirely, the persisted
+        // health reported the original count while state held the capped set
+        // — an inconsistency that made source_health misleading. Recount
+        // per-source survivors so health reflects the events actually
+        // carried forward into the pipeline and persisted state.
+        let mut survivors: HashMap<String, u32> = HashMap::new();
+        for ev in &events {
+            for s in &ev.sources {
+                *survivors.entry(s.source_id.clone()).or_default() += 1;
+            }
+        }
+        for h in &mut source_health {
+            h.events = survivors.get(&h.source).copied().unwrap_or(0);
+        }
     }
 
     // CORE-11/CORE-12: enrich each event before the first scoring pass so the
