@@ -415,15 +415,12 @@ fn classify_video_platform(url: &Url) -> Option<&'static str> {
             return Some("youtube");
         }
     }
-    let is_vimeo = host == "vimeo.com"
-        || host == "www.vimeo.com"
-        || host.ends_with(".vimeo.com");
+    let is_vimeo = host == "vimeo.com" || host == "www.vimeo.com" || host.ends_with(".vimeo.com");
     if is_vimeo {
         return Some("vimeo");
     }
-    let is_bilibili = host == "bilibili.com"
-        || host == "www.bilibili.com"
-        || host.ends_with(".bilibili.com");
+    let is_bilibili =
+        host == "bilibili.com" || host == "www.bilibili.com" || host.ends_with(".bilibili.com");
     if is_bilibili && url.path().contains("/video/") {
         return Some("bilibili");
     }

@@ -18,11 +18,7 @@ pub async fn run(args: SourcesArgs) -> Result<(), CliError> {
             for s in &config.sources {
                 write_stdout(&format!(
                     "{:<24} {:<32} {:<6} {:<10} {}",
-                    s.id,
-                    s.name,
-                    s.tier,
-                    s.adapter,
-                    s.enabled
+                    s.id, s.name, s.tier, s.adapter, s.enabled
                 ))?;
             }
             Ok(())
