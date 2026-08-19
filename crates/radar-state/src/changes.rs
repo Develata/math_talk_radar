@@ -215,6 +215,12 @@ fn new_speakers(prev: &Event, curr: &Event) -> Vec<String> {
         .iter()
         .filter(|p| p.role == radar_core::PersonRole::Speaker)
         .map(|p| p.canonical_name.clone())
+        .chain(
+            prev.talks
+                .iter()
+                .flat_map(|t| t.speaker.iter())
+                .map(|s| s.canonical_name.clone()),
+        )
         .collect();
     let mut added: Vec<String> = Vec::new();
     let mut added_set: HashSet<String> = HashSet::new();
@@ -227,15 +233,9 @@ fn new_speakers(prev: &Event, curr: &Event) -> Vec<String> {
             added.push(p.canonical_name.clone());
         }
     }
-    let prev_talk_speakers: HashSet<String> = prev
-        .talks
-        .iter()
-        .flat_map(|t| t.speaker.iter())
-        .map(|s| s.canonical_name.clone())
-        .collect();
     for t in &curr.talks {
         for s in &t.speaker {
-            if !prev_talk_speakers.contains(&s.canonical_name)
+            if !prev_names.contains(&s.canonical_name)
                 && added_set.insert(s.canonical_name.clone())
             {
                 added.push(s.canonical_name.clone());
@@ -478,6 +478,19 @@ mod tests {
         let curr = vec![event_with_people("e1", vec![speaker("Terence Tao")])];
         let records = detect_changes(&prev, &curr, now());
         assert!(records.is_empty());
+    }
+
+    // COUPL-3: a speaker present in prev.people who moves to curr.talks[*].speaker
+    // (or vice versa) is the same person, not a new speaker.
+    #[test]
+    fn speaker_moving_between_people_and_talks_emits_no_speaker_added() {
+        let prev = vec![event_with_people("e1", vec![speaker("Terence Tao")])];
+        let curr = vec![event_with_talks("e1", vec![talk("t1", Some("Terence Tao"))])];
+        let records = detect_changes(&prev, &curr, now());
+        assert!(
+            records.iter().all(|r| r.kind != ChangeKind::SpeakerAdded),
+            "speaker moving from people to talks must not emit SpeakerAdded: {records:?}"
+        );
     }
 
     #[test]
