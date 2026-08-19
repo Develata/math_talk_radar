@@ -9,10 +9,9 @@
 //! unlike a name in body text or a title).
 use radar_core::date::parse_date;
 use radar_core::{
-    AccessInfo, AdapterError, Event, EventCandidate, EventDate, EventStatus, EventStub, FetchPlan,
+    AccessInfo, AdapterError, EventCandidate, EventDate, EventStatus, EventStub, FetchPlan,
     FetchedDocument, Location, OnlineAvailability, PersonHit, PersonRole, PublicAccess,
-    ScoreComponents, SourceAdapter, SourceEvidence, SourceSpec, Talk, TalkId, deterministic_id,
-    event_id,
+    SourceAdapter, SourceEvidence, SourceSpec, Talk, TalkId, deterministic_id,
 };
 use scraper::Html;
 use url::Url;
@@ -207,30 +206,23 @@ impl SourceAdapter for JsonLdAdapter {
             .clone()
             .unwrap_or_else(|| EventDate::unknown(String::new()));
 
-        let event = Event {
-            id: event_id(&stub.title, stub.url.as_str()),
-            title: stub.title.clone(),
-            url: Some(stub.url.clone()),
-            event_type: helpers::detect_event_type(&stub.title),
-            status: EventStatus::Unknown,
+        let event = helpers::build_event_from_stub(
+            &stub.title,
+            &stub.url,
+            &stub.source,
+            helpers::detect_event_type(&stub.title),
+            EventStatus::Unknown,
             date,
             location,
             description,
-            topics: Vec::new(),
-            people: Vec::new(),
+            Vec::new(),
             talks,
-            media: Vec::new(),
-            access: AccessInfo {
+            Vec::new(),
+            AccessInfo {
                 access,
                 online: OnlineAvailability::Unknown,
             },
-            sources: vec![stub.source.clone()],
-            score: 0.0,
-            score_components: ScoreComponents::default(),
-            rank_reasons: Vec::new(),
-            first_seen_at: None,
-            last_seen_at: None,
-        };
+        );
 
         Ok(EventCandidate { event, stub })
     }
@@ -428,6 +420,7 @@ fn make_talk(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use radar_core::event_id;
     use radar_core::{AdapterKind, SourceKind, SourceTier};
 
     fn make_spec() -> SourceSpec {

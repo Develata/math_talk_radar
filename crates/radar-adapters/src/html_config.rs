@@ -13,8 +13,7 @@ use radar_core::date::{DatePrecision, EventDate, parse_date, parse_date_with_yea
 use radar_core::{
     AccessInfo, AdapterError, Event, EventCandidate, EventStatus, EventStub, FetchPlan,
     FetchedDocument, Location, OnlineAvailability, PersonHit, PersonRole, PublicAccess,
-    ScoreComponents, SourceAdapter, SourceEvidence, SourceSpec, Talk, TalkId, deterministic_id,
-    event_id,
+    SourceAdapter, SourceEvidence, SourceSpec, Talk, TalkId, deterministic_id,
 };
 
 use crate::helpers::{classify_access, detect_event_type, detect_media};
@@ -176,31 +175,23 @@ impl SourceAdapter for HtmlConfigAdapter {
         let access = classify_access(&html);
 
         let event_type = detect_event_type(&title);
-        let id = event_id(&title, stub_url.as_str());
-        let enriched = Event {
-            id,
-            title,
-            url: Some(stub_url.clone()),
+        let enriched = crate::helpers::build_event_from_stub(
+            &title,
+            &stub_url,
+            &stub_source,
             event_type,
-            status: EventStatus::Unknown,
-            date: event_date,
+            EventStatus::Unknown,
+            event_date,
             location,
             description,
-            topics: Vec::new(),
             people,
             talks,
             media,
-            access: AccessInfo {
+            AccessInfo {
                 access,
                 online: OnlineAvailability::Unknown,
             },
-            sources: vec![stub_source],
-            score: 0.0,
-            score_components: ScoreComponents::default(),
-            rank_reasons: Vec::new(),
-            first_seen_at: None,
-            last_seen_at: None,
-        };
+        );
         Ok(EventCandidate {
             event: enriched,
             stub: event,
@@ -371,33 +362,27 @@ fn speaker_hit(name: &str) -> PersonHit {
 }
 
 fn build_minimal_event(stub: &EventStub) -> Event {
-    Event {
-        id: event_id(&stub.title, stub.url.as_str()),
-        title: stub.title.clone(),
-        url: Some(stub.url.clone()),
-        event_type: detect_event_type(&stub.title),
-        status: EventStatus::Unknown,
-        date: stub
-            .date_hint
-            .clone()
-            .unwrap_or_else(|| parse_or_unknown("")),
-        location: None,
-        description: None,
-        topics: Vec::new(),
-        people: Vec::new(),
-        talks: Vec::new(),
-        media: Vec::new(),
-        access: AccessInfo {
+    let date = stub
+        .date_hint
+        .clone()
+        .unwrap_or_else(|| parse_or_unknown(""));
+    crate::helpers::build_event_from_stub(
+        &stub.title,
+        &stub.url,
+        &stub.source,
+        detect_event_type(&stub.title),
+        EventStatus::Unknown,
+        date,
+        None,
+        None,
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        AccessInfo {
             access: PublicAccess::Unknown,
             online: OnlineAvailability::Unknown,
         },
-        sources: vec![stub.source.clone()],
-        score: 0.0,
-        score_components: ScoreComponents::default(),
-        rank_reasons: Vec::new(),
-        first_seen_at: None,
-        last_seen_at: None,
-    }
+    )
 }
 
 #[cfg(test)]

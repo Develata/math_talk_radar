@@ -6,9 +6,9 @@
 //! parser. The guard tracks actual BEGIN/END nesting depth (not flat component
 //! count) so legitimate calendars with many flat VEVENTs are not rejected.
 use radar_core::{
-    AccessInfo, AdapterError, DateTimeOrDate, Event, EventCandidate, EventDate, EventStatus,
-    EventStub, FetchPlan, FetchedDocument, Location, OnlineAvailability, PublicAccess,
-    ScoreComponents, SourceAdapter, SourceEvidence, SourceSpec, event_id,
+    AccessInfo, AdapterError, DateTimeOrDate, EventCandidate, EventDate, EventStatus, EventStub,
+    FetchPlan, FetchedDocument, Location, OnlineAvailability, PublicAccess, SourceAdapter,
+    SourceEvidence, SourceSpec,
 };
 use url::Url;
 
@@ -145,31 +145,23 @@ impl SourceAdapter for IcsAdapter {
             }
         }
 
-        let id = event_id(&event.title, event.url.as_str());
-        let full_event = Event {
-            id,
-            title: event.title.clone(),
-            url: Some(event.url.clone()),
+        let full_event = crate::helpers::build_event_from_stub(
+            &event.title,
+            &event.url,
+            &event.source,
             event_type,
-            status: EventStatus::Announced,
+            EventStatus::Announced,
             date,
             location,
             description,
-            topics: Vec::new(),
-            people: Vec::new(),
-            talks: Vec::new(),
-            media: Vec::new(),
-            access: AccessInfo {
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            AccessInfo {
                 access: PublicAccess::Unknown,
                 online: OnlineAvailability::Unknown,
             },
-            sources: vec![event.source.clone()],
-            score: 0.0,
-            score_components: ScoreComponents::default(),
-            rank_reasons: Vec::new(),
-            first_seen_at: None,
-            last_seen_at: None,
-        };
+        );
 
         Ok(EventCandidate {
             event: full_event,

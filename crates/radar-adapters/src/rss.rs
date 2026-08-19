@@ -11,9 +11,9 @@ use url::Url;
 
 use radar_core::date::parse_date;
 use radar_core::{
-    AccessInfo, AdapterError, Event, EventCandidate, EventDate, EventStatus, EventStub, FetchPlan,
+    AccessInfo, AdapterError, EventCandidate, EventDate, EventStatus, EventStub, FetchPlan,
     FetchedDocument, Location, MediaId, MediaResource, MediaType, OnlineAvailability, PublicAccess,
-    ScoreComponents, SourceAdapter, SourceEvidence, SourceSpec, deterministic_id, event_id,
+    SourceAdapter, SourceEvidence, SourceSpec, deterministic_id,
 };
 
 use crate::helpers;
@@ -41,7 +41,7 @@ impl SourceAdapter for RssAdapter {
                 let link = entry
                     .links
                     .iter()
-                    .find(|l| l.rel.as_deref().map_or(true, |r| r == "alternate"))
+                    .find(|l| l.rel.as_deref().is_none_or(|r| r == "alternate"))
                     .or_else(|| entry.links.first())?;
                 let url = Url::parse(&link.href).ok()?;
                 let date_hint = entry.published.or(entry.updated).map(|dt| {
@@ -114,35 +114,28 @@ impl SourceAdapter for RssAdapter {
             .clone()
             .unwrap_or_else(|| EventDate::unknown(String::new()));
 
-        let event = Event {
-            id: event_id(&stub.title, stub.url.as_str()),
-            title: stub.title.clone(),
-            url: Some(stub.url.clone()),
-            event_type: helpers::detect_event_type(&stub.title),
-            status: EventStatus::Unknown,
+        let event = helpers::build_event_from_stub(
+            &stub.title,
+            &stub.url,
+            &stub.source,
+            helpers::detect_event_type(&stub.title),
+            EventStatus::Unknown,
             date,
-            location: fields.location_text.map(|name| Location {
+            fields.location_text.map(|name| Location {
                 name,
                 city: None,
                 country: None,
                 venue: None,
             }),
-            description: fields.description,
-            topics: Vec::new(),
-            people: Vec::new(),
-            talks: Vec::new(),
+            fields.description,
+            Vec::new(),
+            Vec::new(),
             media,
-            access: AccessInfo {
+            AccessInfo {
                 access,
                 online: OnlineAvailability::Unknown,
             },
-            sources: vec![stub.source.clone()],
-            score: 0.0,
-            score_components: ScoreComponents::default(),
-            rank_reasons: Vec::new(),
-            first_seen_at: None,
-            last_seen_at: None,
-        };
+        );
 
         Ok(EventCandidate { event, stub })
     }
@@ -172,30 +165,23 @@ impl RssAdapter {
             source: stub.source.clone(),
         };
 
-        let event = Event {
-            id: event_id(&stub.title, stub.url.as_str()),
-            title: stub.title.clone(),
-            url: Some(stub.url.clone()),
-            event_type: helpers::detect_event_type(&stub.title),
-            status: EventStatus::Unknown,
+        let event = helpers::build_event_from_stub(
+            &stub.title,
+            &stub.url,
+            &stub.source,
+            helpers::detect_event_type(&stub.title),
+            EventStatus::Unknown,
             date,
-            location: None,
-            description: None,
-            topics: Vec::new(),
-            people: Vec::new(),
-            talks: Vec::new(),
-            media: vec![media],
-            access: AccessInfo {
+            None,
+            None,
+            Vec::new(),
+            Vec::new(),
+            vec![media],
+            AccessInfo {
                 access: PublicAccess::Open,
                 online: OnlineAvailability::RecordingAvailable,
             },
-            sources: vec![stub.source.clone()],
-            score: 0.0,
-            score_components: ScoreComponents::default(),
-            rank_reasons: Vec::new(),
-            first_seen_at: None,
-            last_seen_at: None,
-        };
+        );
 
         Ok(EventCandidate { event, stub })
     }

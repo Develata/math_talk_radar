@@ -59,8 +59,9 @@ pub(crate) fn cached_selector_runtime(selector_str: &str) -> Result<Selector, St
 }
 
 use radar_core::{
-    EventType, MediaId, MediaResource, MediaType, PublicAccess, SourceEvidence, contains_phrase,
-    deterministic_id, normalize_text,
+    AccessInfo, Event, EventDate, EventStatus, EventType, Location, MediaId, MediaResource,
+    MediaType, PersonHit, PublicAccess, ScoreComponents, SourceEvidence, Talk, contains_phrase,
+    deterministic_id, event_id, normalize_text,
 };
 
 /// Decode a document body as UTF-8 with U+FFFD replacement for invalid bytes.
@@ -689,6 +690,51 @@ pub fn detect_event_type(text: &str) -> EventType {
         return EventType::Conference;
     }
     EventType::Unknown
+}
+
+/// Build an [`Event`] from adapter-extracted fields, filling the fixed
+/// scaffolding (id from `title+url`, empty `topics`, zero `score`, default
+/// `score_components`, empty `rank_reasons`, `None` first/last_seen) that
+/// every adapter sets identically. Pass the extracted `title`/`url`/`source`
+/// (may differ from the stub when the detail page corrected them) and the
+/// per-adapter fields. `topics` is always empty here; the scan pipeline
+/// enriches topics later via `radar_core::enrich_event_topics`.
+#[allow(clippy::too_many_arguments)] // Event has 17 fields; 5 are fixed scaffolding, 12 are per-adapter
+pub(crate) fn build_event_from_stub(
+    title: &str,
+    url: &Url,
+    source: &SourceEvidence,
+    event_type: EventType,
+    status: EventStatus,
+    date: EventDate,
+    location: Option<Location>,
+    description: Option<String>,
+    people: Vec<PersonHit>,
+    talks: Vec<Talk>,
+    media: Vec<MediaResource>,
+    access: AccessInfo,
+) -> Event {
+    Event {
+        id: event_id(title, url.as_str()),
+        title: title.to_string(),
+        url: Some(url.clone()),
+        event_type,
+        status,
+        date,
+        location,
+        description,
+        topics: Vec::new(),
+        people,
+        talks,
+        media,
+        access,
+        sources: vec![source.clone()],
+        score: 0.0,
+        score_components: ScoreComponents::default(),
+        rank_reasons: Vec::new(),
+        first_seen_at: None,
+        last_seen_at: None,
+    }
 }
 
 #[cfg(test)]
