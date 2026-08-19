@@ -405,10 +405,7 @@ mod tests {
             .date
             .start_date()
             .expect("detail-page date should populate start");
-        assert_eq!(
-            start,
-            chrono::NaiveDate::from_ymd_opt(2024, 3, 15).unwrap()
-        );
+        assert_eq!(start, chrono::NaiveDate::from_ymd_opt(2024, 3, 15).unwrap());
     }
 
     // P0-07: when the HTML detail page carries an event date, it must override

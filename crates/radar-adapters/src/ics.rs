@@ -271,10 +271,7 @@ fn parse_ics_date_range(
         // DTEND:20260808 / DTSTART:20260808 (a zero-day DATE range) would
         // underflow to end < start; treat that as a single-day event by
         // clamping end to start.
-        let final_end = final_end
-            .and_then(|e| {
-                ed.start_date().map(|s| if e < s { s } else { e })
-            });
+        let final_end = final_end.and_then(|e| ed.start_date().map(|s| if e < s { s } else { e }));
         if let Some(final_end) = final_end {
             ed.end = Some(DateTimeOrDate::Date(final_end));
             ed.original_text = format!("{dtstart_val}/{dtend_val}");
@@ -283,8 +280,7 @@ fn parse_ics_date_range(
         && let Some(days) = parse_ics_duration_days(dur_val)
         && let Some(start_date) = ed.start_date()
         && days > 0
-        && let Some(end_date) = start_date
-            .checked_add_signed(chrono::Duration::days(days - 1))
+        && let Some(end_date) = start_date.checked_add_signed(chrono::Duration::days(days - 1))
     {
         // P1-07: DURATION is elapsed time. A P3D event starting Aug 10 spans
         // Aug 10–12 (inclusive last day = start + days - 1). A negative or
