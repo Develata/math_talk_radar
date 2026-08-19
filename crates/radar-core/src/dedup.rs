@@ -279,35 +279,45 @@ pub fn duplicate_signal(a: &Event, b: &Event) -> Option<DedupSignal> {
 /// The returned event keeps the earliest `first_seen_at` and the latest
 /// `last_seen_at`.
 pub fn merge_events(primary: Event, secondary: Event) -> Event {
-    let (mut keep, other) = if primary.score >= secondary.score {
-        (primary, secondary)
-    } else {
-        (secondary, primary)
-    };
-
-    keep.sources = union_sources(keep.sources, other.sources);
-    keep.media = union_media(keep.media, other.media);
-    keep.talks = union_talks(keep.talks, other.talks);
-    keep.people = union_people(keep.people, other.people);
-    keep.topics = union_topics(keep.topics, other.topics);
-
-    if keep.url.is_none() {
-        keep.url = other.url;
-    }
-    if keep.location.is_none() {
-        keep.location = other.location;
-    }
-    if keep.description.is_none() {
-        keep.description = other.description;
-    }
-    if keep.date.start.is_none() && other.date.start.is_some() {
-        keep.date = other.date;
-    }
-
-    keep.first_seen_at = earliest(keep.first_seen_at, other.first_seen_at);
-    keep.last_seen_at = latest(keep.last_seen_at, other.last_seen_at);
-
+    let mut keep = primary;
+    merge_into(&mut keep, secondary);
     keep
+}
+
+/// Merge `secondary` into `primary` in place. The higher-score event becomes
+/// the keep (its scalar fields are preserved); the lower-score event fills
+/// gaps and unions into the collection fields. Equal scores keep `primary`
+/// (stable, matching the old `primary.score >= secondary.score` tiebreak).
+/// Used by `dedup_events` to avoid cloning the cluster representative on every
+/// merge: the caller holds `rep: &mut Event` and folds `remaining` into it
+/// directly.
+fn merge_into(primary: &mut Event, secondary: Event) {
+    let mut other = secondary;
+    if other.score > primary.score {
+        std::mem::swap(primary, &mut other);
+    }
+
+    primary.sources = union_sources(std::mem::take(&mut primary.sources), other.sources);
+    primary.media = union_media(std::mem::take(&mut primary.media), other.media);
+    primary.talks = union_talks(std::mem::take(&mut primary.talks), other.talks);
+    primary.people = union_people(std::mem::take(&mut primary.people), other.people);
+    primary.topics = union_topics(std::mem::take(&mut primary.topics), other.topics);
+
+    if primary.url.is_none() {
+        primary.url = other.url;
+    }
+    if primary.location.is_none() {
+        primary.location = other.location;
+    }
+    if primary.description.is_none() {
+        primary.description = other.description;
+    }
+    if primary.date.start.is_none() && other.date.start.is_some() {
+        primary.date = other.date;
+    }
+
+    primary.first_seen_at = earliest(primary.first_seen_at, other.first_seen_at);
+    primary.last_seen_at = latest(primary.last_seen_at, other.last_seen_at);
 }
 
 fn union_sources(a: Vec<SourceEvidence>, b: Vec<SourceEvidence>) -> Vec<SourceEvidence> {
@@ -444,8 +454,7 @@ pub fn dedup_events(events: Vec<Event>) -> Vec<Event> {
                 break;
             };
             if rep_keys.duplicate_signal(&remaining_keys).is_some() {
-                let old = rep.clone();
-                *rep = merge_events(old, remaining);
+                merge_into(rep, remaining);
                 *rep_keys = DedupKeys::from_event(rep);
             } else {
                 current = Some((remaining, remaining_keys));
