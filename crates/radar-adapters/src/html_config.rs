@@ -44,6 +44,7 @@ impl SourceAdapter for HtmlConfigAdapter {
             .transpose()?;
 
         let mut stubs = Vec::new();
+        let mut seen: std::collections::HashSet<url::Url> = std::collections::HashSet::new();
         for container in html.select(&list_selector) {
             for link in container.select(&link_selector) {
                 let href = match link.attr("href") {
@@ -55,6 +56,9 @@ impl SourceAdapter for HtmlConfigAdapter {
                     Err(_) => continue,
                 };
                 if !crate::helpers::is_http_url(&url) {
+                    continue;
+                }
+                if !seen.insert(url.clone()) {
                     continue;
                 }
                 let title = match &title_selector {
@@ -533,6 +537,36 @@ mod tests {
             .expect("discover ok");
         assert_eq!(stubs.len(), 1);
         assert_eq!(stubs[0].title, "Real Talk");
+    }
+
+    // BUG-6: when the list selector matches nested elements (e.g. an outer
+    // wrapper and an inner container both carrying .event-list), the outer
+    // container's `select(a)` descends into the inner container's links too,
+    // emitting duplicate stubs for the same URL. The seen-URL guard must
+    // dedup them so each event appears once.
+    #[test]
+    fn discover_dedups_nested_containers() {
+        let html = r#"<html><body>
+          <div class="event-list">
+            <div class="event-list">
+              <a href="/e1">Talk One</a>
+              <a href="/e2">Talk Two</a>
+            </div>
+          </div>
+        </body></html>"#;
+        let document = make_doc("https://example.com/events", html);
+        let source = make_source("test", Some(test_selectors()));
+        let stubs = HtmlConfigAdapter
+            .discover(&document, &source)
+            .expect("discover ok");
+        let urls: Vec<&str> = stubs.iter().map(|s| s.url.as_str()).collect();
+        assert_eq!(
+            stubs.len(),
+            2,
+            "nested containers must not double-emit: {urls:?}"
+        );
+        assert!(urls.contains(&"https://example.com/e1"));
+        assert!(urls.contains(&"https://example.com/e2"));
     }
 
     #[test]

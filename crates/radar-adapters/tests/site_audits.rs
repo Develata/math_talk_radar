@@ -252,7 +252,7 @@ fn site_ams_calendar_html_config_discovers_real_events() {
         "ams-calendar",
         "tests/fixtures/sites/ams-calendar-list.html",
     );
-    assert_real_events("ams-calendar", &stubs, 90);
+    assert_real_events("ams-calendar", &stubs, 89);
     assert!(
         stubs
             .iter()
