@@ -355,7 +355,7 @@ fn union_talks(a: Vec<Talk>, b: Vec<Talk>) -> Vec<Talk> {
         .collect();
     for t in b {
         if let Some(&pos) = index.get(&t.id.0) {
-            out[pos] = merge_talk(out[pos].clone(), t);
+            merge_talk_into(&mut out[pos], t);
         } else {
             index.insert(t.id.0.clone(), out.len());
             out.push(t);
@@ -364,23 +364,22 @@ fn union_talks(a: Vec<Talk>, b: Vec<Talk>) -> Vec<Talk> {
     out
 }
 
-/// Merge two talks sharing the same ID. The primary carries scalar fields;
-/// the secondary fills gaps and unions collection fields (speakers, media,
-/// topics). H07: previously `union_talks` dropped the secondary entirely on
-/// ID collision, losing its speakers/media/abstract when the primary lacked
-/// them.
-fn merge_talk(primary: Talk, secondary: Talk) -> Talk {
-    let mut keep = primary;
-    keep.speaker = union_people(keep.speaker, secondary.speaker);
-    keep.media = union_media(keep.media, secondary.media);
-    keep.topics = union_topics(keep.topics, secondary.topics);
-    if keep.date_time.is_none() {
-        keep.date_time = secondary.date_time;
+/// Merge `secondary` into `primary` in place. The primary carries scalar
+/// fields; the secondary fills gaps and unions collection fields (speakers,
+/// media, topics). H07: previously `union_talks` dropped the secondary
+/// entirely on ID collision, losing its speakers/media/abstract when the
+/// primary lacked them.
+fn merge_talk_into(primary: &mut Talk, secondary: Talk) {
+    let other = secondary;
+    primary.speaker = union_people(std::mem::take(&mut primary.speaker), other.speaker);
+    primary.media = union_media(std::mem::take(&mut primary.media), other.media);
+    primary.topics = union_topics(std::mem::take(&mut primary.topics), other.topics);
+    if primary.date_time.is_none() {
+        primary.date_time = other.date_time;
     }
-    if keep.abstract_text.is_none() {
-        keep.abstract_text = secondary.abstract_text;
+    if primary.abstract_text.is_none() {
+        primary.abstract_text = other.abstract_text;
     }
-    keep
 }
 
 fn union_people(a: Vec<PersonHit>, b: Vec<PersonHit>) -> Vec<PersonHit> {
