@@ -170,21 +170,11 @@ pub async fn run_scan(args: ScanArgs) -> Result<ScanOutput, CliError> {
         .iter()
         .map(|s| (s.id.clone(), s.tier))
         .collect();
-    for event in &mut events {
-        let (score, components, reasons) = score_event(event, &tiers, interests_ref);
-        event.score = score;
-        event.score_components = components;
-        event.rank_reasons = reasons;
-    }
+    apply_scores(&mut events, &tiers, interests_ref);
 
     events = dedup_events(events);
 
-    for event in &mut events {
-        let (score, components, reasons) = score_event(event, &tiers, interests_ref);
-        event.score = score;
-        event.score_components = components;
-        event.rank_reasons = reasons;
-    }
+    apply_scores(&mut events, &tiers, interests_ref);
 
     events.sort_by(|a, b| {
         b.score
@@ -282,6 +272,19 @@ pub async fn run_scan(args: ScanArgs) -> Result<ScanOutput, CliError> {
         source_health,
     };
     Ok(output)
+}
+
+fn apply_scores(
+    events: &mut [Event],
+    tiers: &HashMap<String, SourceTier>,
+    interests: Option<&InterestWeights>,
+) {
+    for event in events {
+        let (score, components, reasons) = score_event(event, tiers, interests);
+        event.score = score;
+        event.score_components = components;
+        event.rank_reasons = reasons;
+    }
 }
 
 fn default_state_db_path() -> Option<PathBuf> {
