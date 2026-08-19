@@ -337,11 +337,12 @@ fn is_event_type(value: &serde_json::Value) -> bool {
     let Some(t) = value.get("@type") else {
         return false;
     };
+    let matches = |s: &str| s == "Event" || s.ends_with("Event");
     match t {
-        serde_json::Value::String(s) => s.contains("Event"),
+        serde_json::Value::String(s) => matches(s),
         serde_json::Value::Array(arr) => arr
             .iter()
-            .any(|v| v.as_str().is_some_and(|s| s.contains("Event"))),
+            .any(|v| v.as_str().is_some_and(matches)),
         _ => false,
     }
 }
