@@ -15,6 +15,12 @@ or auth tokens.
 `event_added`, `event_updated`, `schedule_added`, `speaker_added`,
 `livestream_added`, `media_added`, `media_removed`, `event_cancelled`.
 
+`event_updated` fires when a persisted event's title, date, location,
+description, talk set, or people set changed. The talk-set and people-set
+checks ensure that removed talks/speakers — which have no dedicated
+`*Removed` change kind in this contract — are surfaced via `event_updated`
+rather than vanishing silently from the change log.
+
 Canonical baseline: first scan sees an event with `media=[]`; second scan sees
 the same event with a new video → must emit `media_added`.
 

@@ -75,7 +75,10 @@ impl ChangeKind {
 /// - [`ChangeKind::EventCancelled`] for events present in `previous` but not
 ///   `current`.
 /// - [`ChangeKind::EventUpdated`] when a persisted event's title, date,
-///   location, or description changed.
+///   location, description, talk set, or people set changed. The talk and
+///   people set checks (BUG-7) ensure that removed talks/speakers — which
+///   have no dedicated `*Removed` change kind in §23 — are still surfaced
+///   via `EventUpdated` rather than vanishing silently from the change log.
 /// - [`ChangeKind::ScheduleAdded`] when new talks appear that were not in the
 ///   previous scan.
 /// - [`ChangeKind::SpeakerAdded`] when new speakers (people or talk speakers)
@@ -189,6 +192,29 @@ fn is_event_updated(prev: &Event, curr: &Event) -> bool {
         || !dates_semantically_equal(&prev.date, &curr.date)
         || prev.location != curr.location
         || prev.description != curr.description
+        || talk_id_set(prev) != talk_id_set(curr)
+        || people_key_set(prev) != people_key_set(curr)
+}
+
+/// Collect talk ids as a set for `is_event_updated`. A talk added or removed
+/// between scans changes the set, firing `EventUpdated` so the schedule
+/// regression is visible in the change log (§23: `ScheduleAdded` only reports
+/// additions; removals had no signal before this check).
+fn talk_id_set(event: &Event) -> std::collections::HashSet<&str> {
+    event.talks.iter().map(|t| t.id.0.as_str()).collect()
+}
+
+/// Collect (canonical_name, role) pairs as a set for `is_event_updated`.
+/// A person added or removed between scans (speaker, organizer, panelist,
+/// etc.) changes the set, firing `EventUpdated`. `SpeakerAdded` only reports
+/// speaker additions; removals and non-speaker role changes had no signal
+/// before this check.
+fn people_key_set(event: &Event) -> std::collections::HashSet<(&str, radar_core::PersonRole)> {
+    event
+        .people
+        .iter()
+        .map(|p| (p.canonical_name.as_str(), p.role))
+        .collect()
 }
 
 /// Compare only the semantically meaningful fields of [`EventDate`].
@@ -438,9 +464,15 @@ mod tests {
         let prev = vec![event_with_talks("e1", vec![])];
         let curr = vec![event_with_talks("e1", vec![talk("t1", None)])];
         let records = detect_changes(&prev, &curr, now());
-        assert_eq!(records.len(), 1);
-        assert_eq!(records[0].kind, ChangeKind::ScheduleAdded);
-        assert_eq!(records[0].detail.as_deref(), Some("t1"));
+        let kinds: Vec<_> = records.iter().map(|r| r.kind).collect();
+        assert!(
+            kinds.contains(&ChangeKind::ScheduleAdded),
+            "new talk must emit ScheduleAdded: {kinds:?}"
+        );
+        assert!(
+            kinds.contains(&ChangeKind::EventUpdated),
+            "talk set change must emit EventUpdated: {kinds:?}"
+        );
     }
 
     #[test]
@@ -451,14 +483,43 @@ mod tests {
         assert!(records.is_empty());
     }
 
+    // BUG-7: a talk that disappears between scans must emit EventUpdated.
+    // §23 has no ScheduleRemoved variant; before this fix, a removed talk
+    // produced no change record at all — the schedule regression vanished
+    // from the change log silently.
+    #[test]
+    fn removed_talk_emits_event_updated() {
+        let prev = vec![event_with_talks(
+            "e1",
+            vec![talk("t1", None), talk("t2", None)],
+        )];
+        let curr = vec![event_with_talks("e1", vec![talk("t1", None)])];
+        let records = detect_changes(&prev, &curr, now());
+        let kinds: Vec<_> = records.iter().map(|r| r.kind).collect();
+        assert!(
+            kinds.contains(&ChangeKind::EventUpdated),
+            "removed talk must emit EventUpdated: {kinds:?}"
+        );
+        assert!(
+            !kinds.contains(&ChangeKind::ScheduleAdded),
+            "no talk was added: {kinds:?}"
+        );
+    }
+
     #[test]
     fn new_event_speaker_emits_speaker_added() {
         let prev = vec![event_with_people("e1", vec![])];
         let curr = vec![event_with_people("e1", vec![speaker("Terence Tao")])];
         let records = detect_changes(&prev, &curr, now());
-        assert_eq!(records.len(), 1);
-        assert_eq!(records[0].kind, ChangeKind::SpeakerAdded);
-        assert_eq!(records[0].detail.as_deref(), Some("Terence Tao"));
+        let kinds: Vec<_> = records.iter().map(|r| r.kind).collect();
+        assert!(
+            kinds.contains(&ChangeKind::SpeakerAdded),
+            "new speaker must emit SpeakerAdded: {kinds:?}"
+        );
+        assert!(
+            kinds.contains(&ChangeKind::EventUpdated),
+            "people set change must emit EventUpdated: {kinds:?}"
+        );
     }
 
     #[test]
@@ -477,6 +538,28 @@ mod tests {
         let curr = vec![event_with_people("e1", vec![speaker("Terence Tao")])];
         let records = detect_changes(&prev, &curr, now());
         assert!(records.is_empty());
+    }
+
+    // BUG-7: a speaker that disappears between scans must emit EventUpdated.
+    // §23 has no SpeakerRemoved variant; before this fix, a removed speaker
+    // produced no change record at all.
+    #[test]
+    fn removed_speaker_emits_event_updated() {
+        let prev = vec![event_with_people(
+            "e1",
+            vec![speaker("Terence Tao"), speaker("Don Zagier")],
+        )];
+        let curr = vec![event_with_people("e1", vec![speaker("Terence Tao")])];
+        let records = detect_changes(&prev, &curr, now());
+        let kinds: Vec<_> = records.iter().map(|r| r.kind).collect();
+        assert!(
+            kinds.contains(&ChangeKind::EventUpdated),
+            "removed speaker must emit EventUpdated: {kinds:?}"
+        );
+        assert!(
+            !kinds.contains(&ChangeKind::SpeakerAdded),
+            "no speaker was added: {kinds:?}"
+        );
     }
 
     // COUPL-3: a speaker present in prev.people who moves to curr.talks[*].speaker
