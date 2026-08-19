@@ -20,8 +20,8 @@ pub async fn run(args: SourcesArgs) -> Result<(), CliError> {
                     "{:<24} {:<32} {:<6} {:<10} {}",
                     s.id,
                     s.name,
-                    format!("{:?}", s.tier),
-                    format!("{:?}", s.adapter),
+                    s.tier,
+                    s.adapter,
                     s.enabled
                 ))?;
             }

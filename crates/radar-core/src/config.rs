@@ -69,6 +69,31 @@ pub enum AdapterKind {
     None,
 }
 
+impl std::fmt::Display for SourceTier {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::S => write!(f, "s"),
+            Self::A => write!(f, "a"),
+            Self::B => write!(f, "b"),
+            Self::Unknown => write!(f, "unknown"),
+        }
+    }
+}
+
+impl std::fmt::Display for AdapterKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Rss => write!(f, "rss"),
+            Self::Ics => write!(f, "ics"),
+            Self::JsonLd => write!(f, "json_ld"),
+            Self::Indico => write!(f, "indico"),
+            Self::HtmlConfig => write!(f, "html_config"),
+            Self::HtmlGeneric => write!(f, "html_generic"),
+            Self::None => write!(f, "none"),
+        }
+    }
+}
+
 /// CSS selectors for the configured HTML adapter (SRC-004, ADR-0005). Carried
 /// on `SourceSpec::selectors`; only consulted by `AdapterKind::HtmlConfig`.
 /// `list`/`list_link`/`detail_title`/`detail_date` are required when the
