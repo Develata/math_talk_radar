@@ -10,11 +10,14 @@ Binary: `math_talk_radar`.
 ```
 math_talk_radar scan        [options]   # discover + rank events (stdout: JSON)
 math_talk_radar sources list|check [id] # inspect the source registry
-math_talk_radar doctor      [--network] [--json]
-math_talk_radar update      [--check]
+math_talk_radar doctor      [--json]
+math_talk_radar update      [--check] [--force-unmanaged]
 math_talk_radar uninstall   [--dry-run] [--keep-data|--purge] [--yes] [--force-unmanaged]
 math_talk_radar schema                  # print the public JSON output schema
 ```
+
+> `sources check` is a deferred stub (ADR-0009, post-v0.1); it returns
+> `not_implemented` in v0.1. `doctor` has only `--json` (no `--network`).
 
 ## Global options
 
@@ -33,7 +36,7 @@ math_talk_radar schema                  # print the public JSON output schema
 | `--max-talks` | — | cap emitted talks |
 | `--timezone` | local IANA | override timezone |
 | `--today` | system clock | inject date (YYYY-MM-DD) for deterministic runs |
-| `--config/--sources/--scholars/--interests/--state` | XDG defaults | file paths |
+| `--sources/--scholars/--interests/--state` | XDG defaults | file path overrides |
 | `--no-state` | false | do not read or write state |
 | `--format` | `json` | `json` \| `jsonl` |
 | `--detail` | `compact` | `compact` \| `full` |

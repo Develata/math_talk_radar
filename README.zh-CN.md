@@ -48,7 +48,7 @@ math_talk_radar schema
 ```bash
 math_talk_radar update --check
 math_talk_radar update
-math_talk_radar uninstall --dry-run
+math_talk_radar uninstall --keep-data --dry-run
 math_talk_radar uninstall --keep-data --yes
 ```
 

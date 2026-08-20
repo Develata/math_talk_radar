@@ -29,25 +29,29 @@ Same fixture + config + `--today` → stable ordering, IDs, scores (§49).
 
 ```bash
 math_talk_radar sources list
-math_talk_radar sources check
-math_talk_radar sources check clay
 ```
+
+> `sources check` is a deferred stub (ADR-0009, post-v0.1). For live source
+> health, run `cargo xtask live-smoke` (LIVE-003, advisory).
 
 ## Diagnostics
 
 ```bash
 math_talk_radar doctor
-math_talk_radar doctor --network --json
+math_talk_radar doctor --json
 ```
+
+> `doctor` is local-only in v0.1 (no `--network` flag).
 
 ## Lifecycle
 
 ```bash
 math_talk_radar update --check
 math_talk_radar update
-math_talk_radar uninstall --dry-run
-math_talk_radar uninstall --keep-data --yes   # noninteractive
+math_talk_radar uninstall --keep-data --dry-run          # plan only, no mutation
+math_talk_radar uninstall --keep-data --yes              # noninteractive
 math_talk_radar uninstall --purge --yes
+# TTY without --yes: interactive three-way menu (§35.1)
 ```
 
 ## Source redesign workflow (§63)

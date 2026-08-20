@@ -12,13 +12,13 @@ declare `allowed_hosts`, `max_depth`, `request_budget` (§14).
 [[sources]]
 id = "clay"
 name = "Clay Mathematics Institute"
-tier = "S"
+tier = "a"
 kind = "conference_series"
 adapter = "rss"
-entrypoint = "https://www.claymath.org/events/rss"
+entrypoint = "https://www.claymath.org/events/feed/"
 allowed_hosts = ["www.claymath.org"]
 max_depth = 1
-request_budget = 30
+request_budget = 20
 media_strategy = ""
 dynamic = false
 enabled = true
@@ -30,13 +30,13 @@ enabled = true
 |---|---|---|---|---|
 | `id` | string | yes | — | unique identifier |
 | `name` | string | yes | — | human-readable name |
-| `tier` | `S`\|`A`\|`B`\|`unknown` | no | `unknown` | quality tier |
+| `tier` | `s`\|`a`\|`b`\|`unknown` | no | `unknown` | quality tier (snake_case) |
 | `kind` | enum | no | `other` | `institution_calendar`, `conference_series`, `rss_feed`, `ics_feed`, `indico`, `json_ld`, `media_archive`, `other` |
 | `adapter` | enum | no | `none` | `rss`, `ics`, `json_ld`, `indico`, `html_config`, `html_generic`, `none` |
 | `entrypoint` | URL | no | — | feed/list page URL |
 | `allowed_hosts` | string[] | no | `[]` | host allowlist for fetch redirects |
 | `max_depth` | u8 | no | `2` | max redirect/follow depth |
-| `request_budget` | u32 | no | `60` | per-source HTTP request cap |
+| `request_budget` | u32 | no | `20` | per-source HTTP request cap |
 | `media_strategy` | string | no | `""` | media detection strategy hint |
 | `dynamic` | bool | no | `false` | JS-rendered page flag |
 | `enabled` | bool | no | `false` | whether the source is active |
