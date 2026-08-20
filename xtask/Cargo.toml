@@ -12,3 +12,4 @@ publish = false
 unsafe_code = "forbid"
 
 [dependencies]
+serde_json.workspace = true

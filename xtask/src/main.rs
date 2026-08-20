@@ -5,6 +5,7 @@
 //!   cargo xtask check-matrix   — acceptance-matrix structural + doc-coverage validation
 //!   cargo xtask baseline       — functional/quality/perf baseline orchestration (M7/M8)
 //!   cargo xtask static-release <binary> — musl/static-link checks (M7)
+//!   cargo xtask live-smoke     — real fetch+adapter pipeline; per-source health + success ratio (LIVE-003, advisory)
 //!
 //! M0 ships `check` and `check-matrix`; M7 ships `baseline` and
 //! `static-release`.
@@ -22,6 +23,7 @@ fn main() -> ExitCode {
         "check" => run_check(&root),
         "check-matrix" => run_check_matrix(&root),
         "baseline" => run_baseline(&root),
+        "live-smoke" => run_live_smoke(&root),
         "static-release" => {
             let binary = args.get(1).map(Path::new);
             match binary {
@@ -31,7 +33,7 @@ fn main() -> ExitCode {
         }
         other => {
             eprintln!("unknown xtask command: {other}");
-            eprintln!("available: check | check-matrix | baseline | static-release");
+            eprintln!("available: check | check-matrix | baseline | static-release | live-smoke");
             return ExitCode::from(2);
         }
     };
@@ -725,4 +727,162 @@ fn validate_matrix(root: &Path) -> Vec<String> {
     }
 
     errors
+}
+
+/// R3-P1-01 / LIVE-003: run the real fetch+adapter pipeline against enabled
+/// sources and report per-source health + success ratio. Third-party source
+/// failures are advisory (never hard-fail); only instrumentation breakage
+/// (build failure, binary crash, unparseable output, config error) hard-fails.
+type SourceHealthRow = (String, String, u32, u64);
+type SmokeSummary = (usize, usize, Vec<SourceHealthRow>);
+fn run_live_smoke(root: &Path) -> Result<(), Vec<String>> {
+    use std::process::Command;
+
+    let build = Command::new("cargo")
+        .args(["build", "--release", "--bin", "math_talk_radar"])
+        .current_dir(root)
+        .output()
+        .map_err(|e| vec![format!("failed to run cargo build: {e}")])?;
+    if !build.status.success() {
+        return Err(vec![format!(
+            "cargo build failed (instrumentation):\n{}",
+            String::from_utf8_lossy(&build.stderr)
+        )]);
+    }
+
+    let binary = root.join("target/release/math_talk_radar");
+
+    let scan = Command::new(&binary)
+        .args(["scan", "--no-state", "--format", "json"])
+        .current_dir(root)
+        .output()
+        .map_err(|e| vec![format!("failed to execute scan: {e}")])?;
+
+    let exit_code = scan.status.code().unwrap_or(-1);
+
+    if !matches!(exit_code, 0 | 4) {
+        return Err(vec![format!(
+            "scan exited {exit_code} (instrumentation/config error):\n{}",
+            String::from_utf8_lossy(&scan.stderr).trim()
+        )]);
+    }
+
+    let (total, healthy, per_source) = if exit_code == 0 {
+        match parse_live_smoke_health(&scan.stdout) {
+            Ok(h) => h,
+            Err(e) => {
+                return Err(vec![format!(
+                    "could not parse scan output (instrumentation): {e}"
+                )]);
+            }
+        }
+    } else {
+        let count = count_enabled_sources(&binary);
+        (count, 0, Vec::new())
+    };
+
+    let ratio = if total > 0 {
+        healthy as f64 / total as f64 * 100.0
+    } else {
+        0.0
+    };
+
+    println!("live-smoke report");
+    println!("  total enabled:  {total}");
+    println!("  healthy (Ok|Partial): {healthy}");
+    println!("  success ratio:  {ratio:.1}%");
+    if !per_source.is_empty() {
+        println!();
+        println!(
+            "  {:<24} {:<16} {:>7} {:>10}",
+            "SOURCE", "STATUS", "EVENTS", "DURATION"
+        );
+        for (source, status, events, duration_ms) in &per_source {
+            println!(
+                "  {:<24} {:<16} {:>7} {:>9}ms",
+                source, status, events, duration_ms
+            );
+        }
+    } else if exit_code == 4 {
+        println!("  (all sources failed — possible network outage on runner)");
+    }
+
+    Ok(())
+}
+
+fn parse_live_smoke_health(stdout: &[u8]) -> Result<SmokeSummary, String> {
+    let v: serde_json::Value =
+        serde_json::from_slice(stdout).map_err(|e| format!("invalid JSON: {e}"))?;
+    let health = v
+        .get("source_health")
+        .ok_or("missing 'source_health' field")?
+        .as_array()
+        .ok_or("'source_health' is not an array")?;
+    let mut per_source = Vec::new();
+    let mut healthy = 0;
+    for h in health {
+        let source = h.get("source").and_then(|v| v.as_str()).unwrap_or("?");
+        let status = h.get("status").and_then(|v| v.as_str()).unwrap_or("?");
+        let events = h.get("events").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+        let duration_ms = h.get("duration_ms").and_then(|v| v.as_u64()).unwrap_or(0);
+        if matches!(status, "ok" | "partial") {
+            healthy += 1;
+        }
+        per_source.push((source.to_string(), status.to_string(), events, duration_ms));
+    }
+    Ok((health.len(), healthy, per_source))
+}
+
+fn count_enabled_sources(binary: &Path) -> usize {
+    let output = std::process::Command::new(binary)
+        .args(["sources", "list"])
+        .output();
+    match output {
+        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout)
+            .lines()
+            .filter(|l| l.ends_with("true"))
+            .count(),
+        _ => 0,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_source_health_array() {
+        let json = br#"{"source_health":[
+            {"source":"arxiv","status":"ok","duration_ms":120,"requests":2,"events":5},
+            {"source":"icm","status":"parse_error","duration_ms":80,"requests":1,"events":0},
+            {"source":"birs","status":"partial","duration_ms":200,"requests":3,"events":2}
+        ]}"#;
+        let (total, healthy, rows) = parse_live_smoke_health(json).expect("parse");
+        assert_eq!(total, 3);
+        assert_eq!(healthy, 2, "ok + partial count as healthy");
+        assert_eq!(rows[0].0, "arxiv");
+        assert_eq!(rows[1].1, "parse_error");
+        assert_eq!(rows[2].3, 200);
+    }
+
+    #[test]
+    fn missing_source_health_errors() {
+        let json = br#"{"events":[]}"#;
+        assert!(parse_live_smoke_health(json).is_err());
+    }
+
+    #[test]
+    fn non_array_source_health_errors() {
+        let json = br#"{"source_health":null}"#;
+        assert!(parse_live_smoke_health(json).is_err());
+    }
+
+    #[test]
+    fn unknown_status_not_counted_healthy() {
+        let json = br#"{"source_health":[
+            {"source":"a","status":"robots_denied","duration_ms":0,"requests":0,"events":0}
+        ]}"#;
+        let (_, healthy, _) = parse_live_smoke_health(json).expect("parse");
+        assert_eq!(healthy, 0);
+    }
 }

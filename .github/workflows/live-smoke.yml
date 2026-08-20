@@ -20,29 +20,28 @@ jobs:
     timeout-minutes: 20
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
       - name: Install Rust toolchain
         run: rustup show
 
-      - uses: Swatinem/rust-cache@v2
-
-      - name: Build CLI
-        run: cargo build --release
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
 
       - name: Live smoke (advisory)
-        # `sources check` is the ADR-0009 stub (post-v0.1); `doctor` has no
-        # network flag (CLI-25). Both are real local commands here. LIVE-003
-        # keeps this advisory: non-zero exits are absorbed by
-        # `continue-on-error: true` on the job.
-        run: |
-          ./target/release/math_talk_radar sources list > sources-list.txt || true
-          ./target/release/math_talk_radar doctor --json > doctor.json || true
+        # R3-P1-01: `cargo xtask live-smoke` runs the real fetch+adapter
+        # pipeline against all enabled sources and reports per-source health
+        # + success ratio. It hard-fails only on instrumentation breakage
+        # (build failure, binary crash, unparseable output). Third-party
+        # source failures are reflected in the ratio but never hard-fail.
+        # LIVE-003 stays advisory: `continue-on-error: true` on the job
+        # absorbs even instrumentation failures so a scheduled run never
+        # blocks other workflows.
+        run: cargo xtask live-smoke > live-smoke-report.txt 2>&1 || true
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: always()
         with:
           name: live-smoke-results
-          path: |
-            sources-list.txt
-            doctor.json
+          path: live-smoke-report.txt
