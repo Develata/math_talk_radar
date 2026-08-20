@@ -43,6 +43,8 @@ pub enum StateError {
     Io(#[from] std::io::Error),
     #[error("state schema mismatch: expected {expected}, found {found}")]
     Schema { expected: u32, found: u32 },
+    #[error("state migration error: {0}")]
+    Migration(String),
     #[error("state backend error: {0}")]
     Backend(Box<redb::Error>),
     #[error("state read-only: write attempted on a read-only repository")]
@@ -105,6 +107,9 @@ impl Repository {
         run_migrations(&db).map_err(|e| match e {
             crate::migrations::MigrateError::UnsupportedVersion { found, expected } => {
                 StateError::Schema { expected, found }
+            }
+            crate::migrations::MigrateError::MalformedLegacyRow { source_id, error } => {
+                StateError::Migration(format!("malformed legacy row for {source_id}: {error}"))
             }
             crate::migrations::MigrateError::Backend(e) => StateError::Backend(e),
         })?;

@@ -1088,3 +1088,62 @@ fn migrates_v2_to_v3_rekeys_legacy_source_health() {
     assert_eq!(history[0].source, "s1");
     assert_eq!(history[0].duration_ms, 50);
 }
+
+/// R3-P1-02: a malformed legacy SOURCE_HEALTH row must abort the migration
+/// without bumping the schema version. The previous code silently skipped
+/// malformed rows and still committed v3, making them unreachable (the v3
+/// read path skips non-composite keys).
+#[test]
+fn migrates_v2_to_v3_fails_on_malformed_legacy_row() {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let db_path = dir.path().join("state.redb");
+
+    {
+        use radar_state::schema::{CANCELLED_EVENTS, EVENTS, SCHEMA_VERSION, SOURCE_HEALTH};
+        let db = redb::Database::create(&db_path).expect("create v2 db");
+        let txn = db.begin_write().expect("v2 txn");
+        {
+            let mut vtable = txn.open_table(SCHEMA_VERSION).expect("v2 schema table");
+            vtable.insert("version", 2u32).expect("write v2 version");
+        }
+        let _ = txn.open_table(EVENTS).expect("v2 events table");
+        let _ = txn.open_table(SOURCE_HEALTH).expect("v2 health table");
+        let _ = txn
+            .open_table(CANCELLED_EVENTS)
+            .expect("v2 tombstone table");
+
+        // Insert a malformed row: bare key "s1", value is NOT valid JSON.
+        {
+            let mut health_table = txn.open_table(SOURCE_HEALTH).expect("health table");
+            health_table
+                .insert("s1", b"not valid json".as_slice())
+                .expect("insert malformed");
+        }
+        txn.commit().expect("v2 commit");
+    }
+
+    // Migration must fail — the malformed row cannot be deserialized.
+    let result = Repository::open(&db_path);
+    assert!(
+        result.is_err(),
+        "R3-P1-02: migration must fail on malformed legacy row"
+    );
+    let err = result.unwrap_err();
+    assert!(
+        matches!(err, StateError::Migration(ref msg) if msg.contains("malformed")),
+        "R3-P1-02: error must be StateError::Migration, got: {err:?}"
+    );
+
+    // The schema version must still be 2 — the transaction rolled back.
+    {
+        use radar_state::schema::SCHEMA_VERSION;
+        let db = redb::Database::open(&db_path).expect("reopen db");
+        let txn = db.begin_read().expect("read txn");
+        let vtable = txn.open_table(SCHEMA_VERSION).expect("schema table");
+        let version = vtable.get("version").expect("get version").unwrap().value();
+        assert_eq!(
+            version, 2,
+            "R3-P1-02: schema version must stay at 2 after failed migration"
+        );
+    }
+}
