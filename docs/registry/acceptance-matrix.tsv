@@ -11,7 +11,6 @@ DATE-003	US date format	docs/plan/02_domain_model.md	unit	cargo test -p radar-co
 DATE-004	interval overlap	docs/plan/02_domain_model.md	unit	cargo test -p radar-core	hard		pass
 DATE-005	unparsed date retained	docs/plan/02_domain_model.md	unit	cargo test -p radar-core	hard		pass
 SRC-001	RSS adapter	docs/plan/04_source_adapter_contract.md	fixture	cargo test -p radar-adapters --test adapters	hard		pass
-
 SRC-002	ICS adapter	docs/plan/04_source_adapter_contract.md	fixture	cargo test -p radar-adapters --test adapters	hard		pass
 SRC-003	JSON-LD adapter	docs/plan/04_source_adapter_contract.md	fixture	cargo test -p radar-adapters --test adapters	hard		pass
 SRC-004	configured HTML adapter	docs/plan/04_source_adapter_contract.md	fixture	cargo test -p radar-adapters --test adapters	hard		pass

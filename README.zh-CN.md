@@ -7,7 +7,7 @@ v0.1 是纯 Rust CLI —— 无 LLM、无浏览器自动化、无 JS 运行时�
 
 ## 状态
 
-发布前阶段。M0（仓库引导）已完成，详见
+v0.1.0 就绪。M0–M7 完成；65/65 验收用例全绿。详见
 `docs/report/implementation-status.md`。
 
 ## 安装

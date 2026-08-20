@@ -30,4 +30,4 @@
 | [08_release_security.md](08_release_security.md) | SEC-001..003, PERF-001..002, REL-001..003, RELS-001..003, DOC-001..002, HTTP-001..003 |
 | [09_live_smoke.md](09_live_smoke.md) | LIVE-001..003 |
 
-All cases are `pending` as of M0.
+All 65 cases are `pass` as of v0.1.0 (64 hard + 1 advisory).

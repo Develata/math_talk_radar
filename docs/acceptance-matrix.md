@@ -40,6 +40,6 @@
 | DOC | DOC-001..002 | 2 |
 | RELS | RELS-001..003 | 3 |
 | LIVE | LIVE-001..003 | 3 |
-| **Total** | | **69** |
+| **Total** | | **65** |
 
 Per-case detail: `docs/acceptance-cases/`.

@@ -15,9 +15,9 @@
 | RELS-003 | artifact provenance attestation | hard | pass |
 | DOC-001 | every plan has an acceptance mapping | hard | pass |
 | DOC-002 | every hard case has automation | hard | pass |
-| HTTP-001 | timeout isolation | hard | pending |
-| HTTP-002 | retry transient once | hard | pending |
-| HTTP-003 | 404 no retry | hard | pending |
+| HTTP-001 | timeout isolation | hard | pass |
+| HTTP-002 | retry transient once | hard | pass |
+| HTTP-003 | 404 no retry | hard | pass |
 
 Plan refs: `docs/plan/11_security.md` (SEC), `docs/plan/13_performance_budget.md`
 (PERF-001), `docs/plan/12_release.md` (PERF-002, RELS), `docs/plan/05_fetching_reliability.md`
