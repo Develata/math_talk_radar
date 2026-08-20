@@ -171,6 +171,33 @@ pub(crate) fn acquire_update_lock() -> Result<UpdateGuard, CliError> {
     }
 }
 
+/// Read-only lock check: returns `Ok(())` if no live update lock is held,
+/// `Err` if one is held by a live process. Does NOT create the data
+/// directory or lock file — safe for `--dry-run` (UNS-001: zero mutation).
+pub(crate) fn check_update_lock() -> Result<(), CliError> {
+    let lock_path = paths::data_dir().join("update.lock");
+    if !lock_path.exists() {
+        return Ok(());
+    }
+    let content = std::fs::read_to_string(&lock_path)
+        .map_err(|e| CliError::update(format!("read update lock: {e}")))?;
+    let held = parse_lock_pid(&content)
+        .map(|(pid, starttime)| {
+            if pid == 0 {
+                return false;
+            }
+            is_process_alive_with_starttime(pid, starttime)
+        })
+        .unwrap_or(false);
+    if held {
+        Err(CliError::update(
+            "another update is in progress (update.lock is held)",
+        ))
+    } else {
+        Ok(())
+    }
+}
+
 /// Parse `PID:STARTTIME:TOKEN` from a lock file, returning (PID, STARTTIME).
 fn parse_lock_pid(content: &str) -> Option<(u32, u64)> {
     let parts: Vec<&str> = content.trim().split(':').collect();

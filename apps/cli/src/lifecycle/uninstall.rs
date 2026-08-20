@@ -21,18 +21,15 @@ pub async fn run(args: UninstallArgs) -> Result<String, CliError> {
         return Err(CliError::uninstall("noninteractive mode requires --yes"));
     }
 
-    // H12: serialize against `update`. Without this lock, a concurrent
-    // `update` could be mid-rename while `uninstall` deletes the binary and
-    // rollback copy — update's post-replace self-test would then run against
-    // a deleted path, or its `rename` would fail into a half-deleted tree.
-    // The lock is acquired before any path resolution or deletion. `--dry-run`
-    // also acquires it so a dry-run cannot inspect a tree that a live update
-    // is mutating underneath it. The lock-failure error is remapped to an
-    // uninstall-fatal code (exit 11) so the exit code matches the command
-    // the user ran, not the shared lock's origin subsystem.
-    let _lock = crate::lifecycle::update::acquire_update_lock().map_err(|e| {
-        CliError::uninstall(format!("could not acquire update lock: {}", e.message))
-    })?;
+    // R3-P0-04: `--dry-run` must be zero-mutation (UNS-001). The full
+    // `acquire_update_lock` creates the data directory and lock file; use a
+    // read-only `check_update_lock` instead. The non-dry-run path acquires
+    // the real lock below, before any deletion.
+    if args.dry_run {
+        crate::lifecycle::update::check_update_lock().map_err(|e| {
+            CliError::uninstall(format!("could not check update lock: {}", e.message))
+        })?;
+    }
 
     let data_dir = paths::data_dir();
     let config_dir = paths::config_dir();
@@ -115,6 +112,17 @@ pub async fn run(args: UninstallArgs) -> Result<String, CliError> {
         }
         return Ok(plan);
     }
+
+    // H12: serialize against `update`. Without this lock, a concurrent
+    // `update` could be mid-rename while `uninstall` deletes the binary and
+    // rollback copy — update's post-replace self-test would then run against
+    // a deleted path, or its `rename` would fail into a half-deleted tree.
+    // The lock-failure error is remapped to an uninstall-fatal code (exit 11)
+    // so the exit code matches the command the user ran, not the shared
+    // lock's origin subsystem.
+    let _lock = crate::lifecycle::update::acquire_update_lock().map_err(|e| {
+        CliError::uninstall(format!("could not acquire update lock: {}", e.message))
+    })?;
 
     let mut deleted = Vec::new();
     for (p, is_binary) in &to_delete {

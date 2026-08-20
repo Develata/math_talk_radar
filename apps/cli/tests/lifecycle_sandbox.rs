@@ -523,6 +523,30 @@ fn uns_001_dry_run_zero_mutation() {
     );
 }
 
+// R3-P0-04: UNS-001 strengthened — dry-run must not create the data
+// directory or lock file. The original test used setup_full which pre-
+// creates all dirs, so the mutation (create_dir_all inside
+// acquire_update_lock) was invisible. This test starts WITHOUT data_dir
+// and verifies it is NOT created.
+#[test]
+fn uns_001_dry_run_zero_mutation_no_data_dir() {
+    let sandbox = Sandbox::new();
+    std::fs::create_dir_all(sandbox.config_dir()).expect("create config dir");
+    std::fs::create_dir_all(sandbox.cache_dir()).expect("create cache dir");
+    // Do NOT create data_dir — simulates a system where data_dir was cleaned.
+
+    let mut cmd = bin();
+    sandbox.set_env(&mut cmd);
+    cmd.args(["uninstall", "--dry-run", "--keep-data", "--force-unmanaged"])
+        .assert()
+        .success();
+
+    assert!(
+        !sandbox.data_dir().exists(),
+        "R3-P0-04: dry-run must not create data_dir (UNS-001 zero-mutation)"
+    );
+}
+
 // UNS-002: keep-data preserves only data.
 #[test]
 fn uns_002_keep_data_preserves_data() {
