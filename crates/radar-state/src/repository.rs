@@ -280,24 +280,25 @@ impl Repository {
                     tombstone_first_seen.insert(key.value().to_string(), t.first_seen_at);
                 }
             }
-            // ADR-0012 (P0-03): the prune step treats events absent from the
-            // current scan as cancelled (writes a tombstone, removes the row,
-            // emits EventCancelled). That inference is only sound when every
-            // enabled source reached at least `Ok`/`Partial` — a terminal
-            // failure on one source means its events are simply missing from
-            // this scan, NOT cancelled. Pruning them would lose live events
-            // and produce spurious cancellation signals every time a source
-            // has a transient outage.
+            // ADR-0012 (P0-03, R3-P0-02): the prune step treats events absent
+            // from the current scan as cancelled (writes a tombstone, removes
+            // the row, emits EventCancelled). That inference is only sound
+            // when every enabled source reached `Ok` — a `Partial` status
+            // means the source's data was truncated (per-source stub cap,
+            // global candidate cap, or enrichment failures), so absent events
+            // may simply have been dropped rather than genuinely cancelled.
+            // A terminal failure (Timeout, HttpError, ParseError, etc.) means
+            // the source contributed nothing at all. In both cases, pruning
+            // the absent events would lose live events and produce spurious
+            // cancellation signals.
             //
-            // `all_healthy` gates both the prune loop and the EventCancelled
-            // records from `detect_changes` (suppressed below). An empty
-            // health slice (the `store_scan` path) is vacuously healthy, so
-            // the legacy behavior is preserved.
-            let all_healthy = source_health
-                .iter()
-                .all(|h| matches!(h.status, SourceStatus::Ok | SourceStatus::Partial));
+            // `all_authoritative` gates both the prune loop and the
+            // EventCancelled records from `detect_changes` (suppressed below).
+            // An empty health slice (the `store_scan` path) is vacuously
+            // authoritative, so the legacy behavior is preserved.
+            let all_authoritative = source_health.iter().all(|h| h.status == SourceStatus::Ok);
             let mut changes = detect_changes(&prev_events, events, now);
-            if !all_healthy {
+            if !all_authoritative {
                 changes.retain(|c| c.kind != crate::changes::ChangeKind::EventCancelled);
             }
             let current_ids: std::collections::HashSet<&str> =
@@ -325,13 +326,14 @@ impl Repository {
             // tombstone preserving `first_seen_at` so a future reappearance
             // restores it instead of resetting to the reappearance scan time.
             //
-            // ADR-0012 (P0-03): skip prune entirely when any enabled source
-            // had a terminal failure — absent events are presumed missing due
-            // to the failed source, not genuinely cancelled. The events stay
-            // in the table; `last_seen_at` is NOT advanced for them here (it
-            // is only advanced for events present in the current scan), so
-            // their `last_seen_at` will lag until the failed source recovers.
-            if all_healthy {
+            // ADR-0012 (P0-03, R3-P0-02): skip prune entirely when any enabled
+            // source had a non-Ok status (terminal failure or Partial/truncated)
+            // — absent events are presumed missing due to the incomplete scan,
+            // not genuinely cancelled. The events stay in the table;
+            // `last_seen_at` is NOT advanced for them here (it is only
+            // advanced for events present in the current scan), so their
+            // `last_seen_at` will lag until the source recovers.
+            if all_authoritative {
                 for prev in &prev_events {
                     if !current_ids.contains(prev.id.0.as_str()) {
                         if let Some(first_seen) = prev.first_seen_at {

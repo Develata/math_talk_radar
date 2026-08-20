@@ -160,6 +160,12 @@ pub async fn run_scan(args: ScanArgs) -> Result<ScanOutput, CliError> {
         // — an inconsistency that made source_health misleading. Recount
         // per-source survivors so health reflects the events actually
         // carried forward into the pipeline and persisted state.
+        //
+        // R3-P0-02: a source whose events were dropped by the global cap is
+        // no longer complete — mark it Partial so the ADR-0012 prune guard
+        // in store_scan_bundle suppresses cancellation of the truncated
+        // events. Without this, the next scan would tombstone and delete
+        // live events that were merely cut by the cap.
         let mut survivors: HashMap<String, u32> = HashMap::new();
         for ev in &events {
             for s in &ev.sources {
@@ -167,7 +173,11 @@ pub async fn run_scan(args: ScanArgs) -> Result<ScanOutput, CliError> {
             }
         }
         for h in &mut source_health {
-            h.events = survivors.get(&h.source).copied().unwrap_or(0);
+            let survivor_count = survivors.get(&h.source).copied().unwrap_or(0);
+            if h.events > survivor_count {
+                h.status = radar_core::SourceStatus::Partial;
+            }
+            h.events = survivor_count;
         }
     }
 

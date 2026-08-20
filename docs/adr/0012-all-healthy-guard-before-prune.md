@@ -1,11 +1,13 @@
-# ADR-0012 — All-healthy guard before prune (P0-03)
+# ADR-0012 — All-healthy guard before prune (P0-03, R3-P0-02)
 
 - Status: Accepted (Deve sign-off 2026-08-19 — minimal fix: skip prune +
-  suppress `EventCancelled` when any enabled source has terminal failure)
-- Date: 2026-08-19
+  suppress `EventCancelled` when any enabled source has non-Ok status;
+  R3-P0-02 correction 2026-08-20: `Partial` is not authoritative)
+- Date: 2026-08-19 (updated 2026-08-20)
 - Decider: Deve
 - Supersedes: none
-- Related findings: GPT-Pro audit P0-03 (round 10 pre-release audit)
+- Related findings: GPT-Pro audit P0-03 (round 10), R3-P0-02 (round 3
+  release-readiness audit)
 
 ## Context
 
@@ -39,24 +41,31 @@ live events."
 
 ## Decision
 
-Gate the prune step on an **all-healthy** precondition computed from the
+Gate the prune step on an **all-authoritative** precondition computed from the
 `source_health` slice passed to `store_scan_bundle`:
 
-- `all_healthy = source_health.iter().all(|h| matches!(h.status,
-  SourceStatus::Ok | SourceStatus::Partial))`.
-- When `all_healthy` is **false**:
+- `all_authoritative = source_health.iter().all(|h| h.status == SourceStatus::Ok)`.
+- When `all_authoritative` is **false**:
   - Skip the prune loop (no tombstones written, no event rows removed).
   - Suppress `EventCancelled` records from the returned change vector (so the
     change log and stdout do not report spurious cancellations).
-- When `all_healthy` is **true**: behavior is unchanged (prune + emit
+- When `all_authoritative` is **true**: behavior is unchanged (prune + emit
   `EventCancelled` as before).
 - An **empty** `source_health` slice (the legacy `store_scan` path, which
-  delegates to `store_scan_bundle` with `&[]`) is vacuously healthy, so the
-  legacy behavior is preserved.
+  delegates to `store_scan_bundle` with `&[]`) is vacuously authoritative, so
+  the legacy behavior is preserved.
 
-`Ok` and `Partial` are the only non-terminal statuses — `Partial` means the
-source fetched and parsed successfully but produced some warnings (e.g. a few
-broken detail pages); its events are still present and authoritative.
+Only `Ok` authorizes prune. `Partial` means the source's data was truncated
+(per-source stub cap at 2000, global candidate cap at 10 000, or enrichment
+failures) — absent events may have been dropped rather than genuinely
+cancelled. Terminal failure statuses (`Timeout`, `HttpError`, `ParseError`,
+`RobotsDenied`, `DynamicUnsupported`, `BudgetExhausted`) mean the source
+contributed nothing. In both cases, pruning absent events would lose live
+events and produce spurious cancellation signals.
+
+The global candidate cap in `scan_engine.rs` marks any source whose events
+were dropped by the cap as `Partial`, so the guard in `store_scan_bundle`
+automatically suppresses prune for those sources.
 
 ## Rationale
 

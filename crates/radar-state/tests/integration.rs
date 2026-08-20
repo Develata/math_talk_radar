@@ -530,6 +530,45 @@ fn store_scan_bundle_skips_prune_on_partial_failure() {
     );
 }
 
+/// ADR-0012 (R3-P0-02): `Partial` status means the source's data was
+/// truncated (per-source stub cap, global candidate cap, or enrichment
+/// failures). Its events are NOT authoritative — absent events may have been
+/// dropped rather than genuinely cancelled. The prune guard must suppress
+/// cancellation for `Partial` sources just as it does for terminal failures.
+#[test]
+fn store_scan_bundle_skips_prune_on_partial_status() {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let db_path = dir.path().join("state.redb");
+    let repo = Repository::open(&db_path).expect("open repo");
+
+    // scan 1: seed an event from a healthy source.
+    let event = base_event("e1", vec![]);
+    let h_ok = health("s1", SourceStatus::Ok, t0());
+    repo.store_scan_bundle(
+        std::slice::from_ref(&event),
+        std::slice::from_ref(&h_ok),
+        t0(),
+    )
+    .expect("scan 1: seed");
+
+    // scan 2: the source returns Partial (e.g. stubs were truncated). No
+    // events this scan, and the health slice records Partial. The event
+    // must survive — Partial is not authoritative.
+    let h_partial = health("s1", SourceStatus::Partial, t1());
+    let (stored, changes) = repo
+        .store_scan_bundle(&[], std::slice::from_ref(&h_partial), t1())
+        .expect("scan 2: partial status");
+    assert!(stored.is_empty());
+    assert!(
+        changes.iter().all(|c| c.kind != ChangeKind::EventCancelled),
+        "R3-P0-02: EventCancelled must be suppressed on Partial status, got: {changes:?}"
+    );
+    assert!(
+        repo.get_event(&event.id).expect("get").is_some(),
+        "R3-P0-02: event must NOT be pruned when source status is Partial"
+    );
+}
+
 /// ADR-0012 (P0-03) complement: when all sources are healthy, the prune step
 /// runs as before and EventCancelled is emitted. This guards against the guard
 /// being accidentally inverted.
