@@ -5,9 +5,7 @@ on:
     tags: ["v*.*.*"]
 
 permissions:
-  contents: write
-  attestations: write
-  id-token: write
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -19,12 +17,21 @@ env:
 # Each CI job runs on `push: tags` as well (its trigger is `push: branches:
 # [main]` only), so this workflow re-runs the gates itself rather than
 # depending on the CI workflow's separate run.
+#
+# R3-P0-03: workflow-level permissions are read-only. Jobs that need write
+# access (build-musl for attestation, release for GitHub Release) escalate
+# per-job. All checkout actions use persist-credentials: false since no job
+# performs authenticated git operations.
 jobs:
   quality:
+    permissions:
+      contents: read
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
       - name: Install Rust toolchain
         run: |
@@ -43,10 +50,14 @@ jobs:
         run: cargo test --workspace
 
   acceptance:
+    permissions:
+      contents: read
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
       - name: Install Rust toolchain
         run: rustup show
@@ -60,10 +71,14 @@ jobs:
         run: cargo xtask check-matrix
 
   forbid-unsafe:
+    permissions:
+      contents: read
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
       - name: Install Rust toolchain
         run: rustup show
@@ -80,10 +95,14 @@ jobs:
           done
 
   supply-chain:
+    permissions:
+      contents: read
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
       - name: Install Rust toolchain
         run: rustup show
@@ -91,17 +110,23 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
 
       - name: Install cargo-deny
-        run: cargo install cargo-deny --locked || cargo install cargo-deny --locked --version 0.20.2
+        run: cargo install cargo-deny --locked --version 0.20.2
 
       - name: cargo deny check
         run: cargo deny check
 
   build-musl:
+    permissions:
+      contents: read
+      attestations: write
+      id-token: write
     needs: [quality, acceptance, forbid-unsafe, supply-chain]
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
       - name: Install Rust toolchain + musl target
         run: |
@@ -177,11 +202,15 @@ jobs:
             target/x86_64-unknown-linux-musl/release/math_talk_radar-x86_64-unknown-linux-musl.sha256
 
   release:
+    permissions:
+      contents: write
     needs: build-musl
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
