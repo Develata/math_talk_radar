@@ -1,6 +1,7 @@
 //! Uninstall (§35). Deletes only known app-owned paths. No `rm -rf`, no
 //! symlink following, no `$HOME` deletion. Unmanaged binaries (no manifest,
 //! under `target/`) are protected without `--force-unmanaged`.
+use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 
 use crate::cli::UninstallArgs;
@@ -9,17 +10,33 @@ use crate::lifecycle::paths;
 use crate::runtime::CliError;
 
 pub async fn run(args: UninstallArgs) -> Result<String, CliError> {
-    if !args.keep_data && !args.purge {
-        return Err(CliError::uninstall("requires --keep-data or --purge"));
-    }
     if args.keep_data && args.purge {
         return Err(CliError::uninstall(
             "--keep-data and --purge are mutually exclusive",
         ));
     }
-    if !args.dry_run && !args.yes {
-        return Err(CliError::uninstall("noninteractive mode requires --yes"));
-    }
+
+    // R3-P1-04: §35.1 (TTY interactive) / §35.2 (non-TTY strict). dry-run is
+    // zero-mutation and skips the prompt — the plan output needs an explicit
+    // mode to display, and scripts that use --dry-run must not block on a
+    // TTY prompt.
+    let preserve_data = if args.dry_run {
+        if !args.keep_data && !args.purge {
+            return Err(CliError::uninstall(
+                "dry-run requires --keep-data or --purge to pick a mode",
+            ));
+        }
+        args.keep_data
+    } else {
+        let stdin = io::stdin();
+        let is_tty = stdin.is_terminal();
+        let mut reader = stdin.lock();
+        let mut writer = io::stderr().lock();
+        let Some(preserve_data) = resolve_mode(&args, is_tty, &mut reader, &mut writer)? else {
+            return Ok("uninstall cancelled".to_string());
+        };
+        preserve_data
+    };
 
     // R3-P0-04: `--dry-run` must be zero-mutation (UNS-001). The full
     // `acquire_update_lock` creates the data directory and lock file; use a
@@ -60,7 +77,6 @@ pub async fn run(args: UninstallArgs) -> Result<String, CliError> {
         )));
     }
 
-    let preserve_data = args.keep_data;
     let mut to_delete: Vec<(PathBuf, bool)> = vec![
         (binary.clone(), true),
         (config_dir.clone(), false),
@@ -180,4 +196,179 @@ fn delete_path(path: &Path, is_binary: bool) -> Result<(), CliError> {
             .map_err(|e| CliError::uninstall(format!("delete {}: {e}", canonical.display())))?;
     }
     Ok(())
+}
+
+/// §35.1 / §35.2: resolve the uninstall mode. Returns `Some(preserve_data)` to
+/// proceed, or `None` if the user cancelled at the TTY prompt. Non-TTY without
+/// `--yes` is refused (§35.2). `--yes` with an explicit `--keep-data`/`--purge`
+/// skips the prompt (scriptable). TTY without an explicit mode offers the
+/// three-way choice from §35.1.
+fn resolve_mode<R: BufRead, W: Write>(
+    args: &UninstallArgs,
+    is_tty: bool,
+    reader: &mut R,
+    writer: &mut W,
+) -> Result<Option<bool>, CliError> {
+    match (args.keep_data, args.purge, args.yes) {
+        (true, false, true) => return Ok(Some(true)),
+        (false, true, true) => return Ok(Some(false)),
+        (false, false, true) => {
+            return Err(CliError::uninstall(
+                "--yes requires --keep-data or --purge to pick a mode",
+            ));
+        }
+        _ => {}
+    }
+
+    if !is_tty {
+        return Err(CliError::uninstall(
+            "noninteractive shell: pass --keep-data --yes or --purge --yes (see --help)",
+        ));
+    }
+
+    let preserve_data = if args.keep_data {
+        true
+    } else if args.purge {
+        false
+    } else {
+        writeln!(
+            writer,
+            "math_talk_radar uninstall\n\
+             [1] remove program + config + cache, keep data (default)\n\
+             [2] remove everything (including data)\n\
+             [3] cancel"
+        )
+        .map_err(io_err)?;
+        let choice = prompt_line(reader, writer, "select [1-3]: ")?;
+        match choice.trim() {
+            "" | "1" => true,
+            "2" => false,
+            "3" | "c" | "cancel" | "q" | "quit" => return Ok(None),
+            other => {
+                return Err(CliError::uninstall(format!(
+                    "invalid selection {other:?}: expected 1, 2, or 3"
+                )));
+            }
+        }
+    };
+
+    let label = if preserve_data { "keep-data" } else { "purge" };
+    let confirm = prompt_line(reader, writer, &format!("confirm {label}? [y/N]: "))?;
+    if !matches!(confirm.trim().to_lowercase().as_str(), "y" | "yes") {
+        return Ok(None);
+    }
+    Ok(Some(preserve_data))
+}
+
+fn prompt_line<R: BufRead, W: Write>(
+    reader: &mut R,
+    writer: &mut W,
+    prompt: &str,
+) -> Result<String, CliError> {
+    writer.write_all(prompt.as_bytes()).map_err(io_err)?;
+    writer.flush().map_err(io_err)?;
+    let mut line = String::new();
+    reader.read_line(&mut line).map_err(io_err)?;
+    Ok(line)
+}
+
+fn io_err(e: io::Error) -> CliError {
+    CliError::uninstall(format!("prompt I/O error: {e}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cli::UninstallArgs;
+
+    fn args(keep_data: bool, purge: bool, yes: bool) -> UninstallArgs {
+        UninstallArgs {
+            dry_run: false,
+            keep_data,
+            purge,
+            yes,
+            force_unmanaged: false,
+        }
+    }
+
+    fn run_resolve(a: &UninstallArgs, is_tty: bool, stdin: &str) -> Result<Option<bool>, CliError> {
+        let mut reader = io::Cursor::new(stdin.as_bytes());
+        let mut writer = Vec::<u8>::new();
+        let result = resolve_mode(a, is_tty, &mut reader, &mut writer);
+        let _ = String::from_utf8(writer).unwrap_or_default();
+        result
+    }
+
+    #[test]
+    fn yes_keep_data_skips_prompt() {
+        assert_eq!(
+            run_resolve(&args(true, false, true), false, "").unwrap(),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn yes_purge_skips_prompt() {
+        assert_eq!(
+            run_resolve(&args(false, true, true), false, "").unwrap(),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn yes_without_mode_is_error() {
+        assert!(run_resolve(&args(false, false, true), false, "").is_err());
+    }
+
+    #[test]
+    fn non_tty_without_yes_refused() {
+        let err = run_resolve(&args(true, false, false), false, "").unwrap_err();
+        assert!(
+            err.message.contains("noninteractive"),
+            "got: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn tty_default_choice_keeps_data() {
+        let a = args(false, false, false);
+        assert_eq!(run_resolve(&a, true, "\ny\n").unwrap(), Some(true));
+    }
+
+    #[test]
+    fn tty_choice_2_purge() {
+        let a = args(false, false, false);
+        assert_eq!(run_resolve(&a, true, "2\ny\n").unwrap(), Some(false));
+    }
+
+    #[test]
+    fn tty_choice_3_cancels() {
+        let a = args(false, false, false);
+        assert_eq!(run_resolve(&a, true, "3\n").unwrap(), None);
+    }
+
+    #[test]
+    fn tty_confirm_no_cancels() {
+        let a = args(false, false, false);
+        assert_eq!(run_resolve(&a, true, "1\nn\n").unwrap(), None);
+    }
+
+    #[test]
+    fn tty_explicit_keep_data_skips_menu_but_confirms() {
+        let a = args(true, false, false);
+        assert_eq!(run_resolve(&a, true, "y\n").unwrap(), Some(true));
+    }
+
+    #[test]
+    fn tty_explicit_purge_skips_menu_but_confirms() {
+        let a = args(false, true, false);
+        assert_eq!(run_resolve(&a, true, "y\n").unwrap(), Some(false));
+    }
+
+    #[test]
+    fn tty_invalid_choice_errors() {
+        let a = args(false, false, false);
+        assert!(run_resolve(&a, true, "9\n").is_err());
+    }
 }

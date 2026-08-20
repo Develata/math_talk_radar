@@ -699,3 +699,63 @@ fn r9_b07_uninstall_skips_symlink_sibling() {
     // The binary itself must be deleted (uninstall proceeded past the symlink).
     assert!(!binary.exists(), "binary must still be deleted");
 }
+
+// R3-P1-04: §35.2 — noninteractive (non-TTY) uninstall without an explicit
+// `--yes` + mode must refuse with exit 11. assert_cmd runs the binary with
+// stdin as a pipe (not a TTY), so `IsTerminal::is_terminal()` returns false.
+// No path may be deleted.
+#[test]
+fn r3_p1_04_non_tty_without_yes_refused() {
+    let sandbox = Sandbox::new();
+    let binary = sandbox.setup_full(VALID_SCRIPT);
+
+    let mut cmd = bin();
+    sandbox.set_env(&mut cmd);
+    cmd.args(["uninstall", "--keep-data"])
+        .assert()
+        .failure()
+        .code(11);
+
+    assert!(binary.exists(), "binary must NOT be deleted on refusal");
+    assert!(
+        sandbox.config_dir().exists(),
+        "config dir must NOT be deleted on refusal"
+    );
+    assert!(
+        sandbox.data_dir().exists(),
+        "data dir must NOT be deleted on refusal"
+    );
+}
+
+// R3-P1-04: `--dry-run` without an explicit mode must refuse (the dry-run
+// plan needs a mode to display). Exit 11, no mutation.
+#[test]
+fn r3_p1_04_dry_run_without_mode_refused() {
+    let sandbox = Sandbox::new();
+    let binary = sandbox.setup_full(VALID_SCRIPT);
+
+    let mut cmd = bin();
+    sandbox.set_env(&mut cmd);
+    cmd.args(["uninstall", "--dry-run"])
+        .assert()
+        .failure()
+        .code(11);
+
+    assert!(
+        binary.exists(),
+        "binary must NOT be deleted on dry-run refusal"
+    );
+}
+
+// R3-P1-04: `--yes` without `--keep-data`/`--purge` must refuse. Exit 11.
+#[test]
+fn r3_p1_04_yes_without_mode_refused() {
+    let sandbox = Sandbox::new();
+    let binary = sandbox.setup_full(VALID_SCRIPT);
+
+    let mut cmd = bin();
+    sandbox.set_env(&mut cmd);
+    cmd.args(["uninstall", "--yes"]).assert().failure().code(11);
+
+    assert!(binary.exists(), "binary must NOT be deleted on refusal");
+}
