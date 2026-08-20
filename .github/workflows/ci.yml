@@ -85,7 +85,21 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Install cargo-deny
-        run: cargo install cargo-deny --locked || cargo install cargo-deny --locked --version 0.20.2
+        run: cargo install cargo-deny --locked --version 0.20.2
 
       - name: cargo deny check
         run: cargo deny check
+
+  msrv:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust 1.96 (declared MSRV)
+        run: rustup toolchain install 1.96 --profile minimal
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: cargo +1.96 check
+        run: cargo +1.96 check --workspace --all-targets
