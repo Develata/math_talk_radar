@@ -115,12 +115,74 @@ jobs:
       - name: cargo deny check
         run: cargo deny check
 
+  coverage:
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        run: |
+          rustup show
+          rustup component add llvm-tools-preview
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+
+      - name: Install cargo-llvm-cov
+        run: cargo install cargo-llvm-cov --locked
+
+      - name: Coverage radar-core ≥85%
+        run: cargo llvm-cov -p radar-core --fail-under-lines 85
+
+      - name: Coverage workspace ≥75%
+        run: cargo llvm-cov --workspace --fail-under-lines 75
+
+  baseline:
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        run: rustup show
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+
+      - name: Baseline (B1-B4)
+        run: cargo xtask baseline
+
+  msrv:
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Install Rust 1.96 (declared MSRV)
+        run: rustup toolchain install 1.96 --profile minimal
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+
+      - name: cargo +1.96 check
+        run: cargo +1.96 check --workspace --all-targets
+
   build-musl:
     permissions:
       contents: read
       attestations: write
       id-token: write
-    needs: [quality, acceptance, forbid-unsafe, supply-chain]
+    needs: [quality, acceptance, forbid-unsafe, supply-chain, coverage, baseline, msrv]
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -201,10 +263,35 @@ jobs:
             target/x86_64-unknown-linux-musl/release/math_talk_radar-x86_64-unknown-linux-musl
             target/x86_64-unknown-linux-musl/release/math_talk_radar-x86_64-unknown-linux-musl.sha256
 
+  container-smoke:
+    permissions:
+      contents: read
+    needs: build-musl
+    runs-on: ubuntu-latest
+    container:
+      image: ubuntu:22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: math_talk_radar-musl
+          path: release-assets
+
+      - name: Make binary executable
+        run: chmod +x release-assets/math_talk_radar-x86_64-unknown-linux-musl
+
+      - name: Smoke test in clean Ubuntu 22.04 (no Rust/Cargo/OpenSSL)
+        run: |
+          BIN=release-assets/math_talk_radar-x86_64-unknown-linux-musl
+          "$BIN" --version
+          "$BIN" --help
+          "$BIN" schema
+          "$BIN" doctor --json
+
   release:
     permissions:
       contents: write
-    needs: build-musl
+    needs: container-smoke
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
