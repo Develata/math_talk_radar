@@ -226,11 +226,18 @@ pub fn safe_canonicalize(path: &Path) -> Result<PathBuf, String> {
     Ok(canonical)
 }
 
-/// True if `binary` looks like a `cargo run` / `target/debug` development
-/// binary (§36). Used by uninstall to protect dev binaries.
+/// True if `binary` looks like a `cargo run` / `target/.../debug` or
+/// `target/.../release` development binary (§36). Used by uninstall to
+/// protect dev binaries.
+///
+/// Cargo's target dir can be customized via `CARGO_TARGET_DIR`,
+/// `build.target-dir`, or tools like `cargo-llvm-cov` (which uses
+/// `target/llvm-cov-target/`). Instead of hardcoding `/target/debug/`
+/// and `/target/release/`, check if the path contains `/target/` and a
+/// `/debug/` or `/release/` profile component.
 pub fn is_unmanaged_binary(binary: &Path) -> bool {
     let s = binary.to_string_lossy();
-    s.contains("/target/debug/") || s.contains("/target/release/")
+    s.contains("/target/") && (s.contains("/debug/") || s.contains("/release/"))
 }
 
 fn xdg_dir(env_var: &str, default_sub: &str) -> PathBuf {
@@ -531,5 +538,32 @@ mod tests {
     fn reject_symlink_in_components_accepts_nonexistent_leaf() {
         let p = Path::new("/tmp/definitely/not/here/zzz_not_existing_12345");
         assert!(reject_symlink_in_components(p).is_ok());
+    }
+
+    #[test]
+    fn is_unmanaged_binary_recognizes_standard_target_dirs() {
+        assert!(is_unmanaged_binary(Path::new(
+            "/home/u/proj/target/debug/math_talk_radar"
+        )));
+        assert!(is_unmanaged_binary(Path::new(
+            "/home/u/proj/target/release/math_talk_radar"
+        )));
+    }
+
+    #[test]
+    fn is_unmanaged_binary_recognizes_custom_target_dirs() {
+        assert!(is_unmanaged_binary(Path::new(
+            "/home/runner/work/proj/proj/target/llvm-cov-target/debug/math_talk_radar"
+        )));
+    }
+
+    #[test]
+    fn is_unmanaged_binary_rejects_managed_paths() {
+        assert!(!is_unmanaged_binary(Path::new(
+            "/usr/local/bin/math_talk_radar"
+        )));
+        assert!(!is_unmanaged_binary(Path::new(
+            "/home/user/.local/bin/math_talk_radar"
+        )));
     }
 }
