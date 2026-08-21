@@ -28,5 +28,8 @@ that.
 ## Consequences
 
 TLS behavior is rustls's. The musl target must be added before release
-engineering (`rustup target add x86_64-unknown-linux-musl`, M7). Acceptance:
+engineering (`rustup target add x86_64-unknown-linux-musl`, M7). The `ring`
+crate (rustls's crypto backend) ships a C build script that requires a musl C
+compiler, so the release environment must also install `musl-tools` and export
+`CC_x86_64_unknown_linux_musl=musl-gcc` before `cargo build`. Acceptance:
 `file` + `ldd` show no runtime dynamic-library deps (RELS-001).
