@@ -59,7 +59,7 @@ feed-rs = "2.4"
 icalendar = { version = "0.17", features = ["parser"] }
 
 # State
-redb = "2.0"
+redb = "4.1"
 
 # CLI / diagnostics
 clap = { version = "4.5", features = ["derive", "env", "cargo"] }
