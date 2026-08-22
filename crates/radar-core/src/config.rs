@@ -30,6 +30,10 @@ pub enum ConfigError {
     InvalidMaxDepth(String, u8),
     #[error("source '{0}': request_budget must be >= 1, got {1}")]
     InvalidRequestBudget(String, u32),
+    #[error(
+        "source '{0}': unsupported media_strategy '{1}'; v0.1 supports only 'youtube_channel' with adapter = 'rss'"
+    )]
+    InvalidMediaStrategy(String, String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
@@ -153,6 +157,10 @@ pub struct SourceSpec {
     pub max_depth: u8,
     #[serde(default = "default_request_budget")]
     pub request_budget: u32,
+    /// Optional media-plane specialization. v0.1 intentionally keeps the
+    /// serialized field string-shaped for config compatibility, but semantic
+    /// validation accepts only `youtube_channel` on RSS sources; unknown
+    /// non-empty values fail closed rather than being silently ignored.
     #[serde(default)]
     pub media_strategy: Option<String>,
     #[serde(default)]
@@ -209,11 +217,10 @@ impl SourcesConfig {
     /// R9-M02: validate semantic invariants that TOML deserialization cannot
     /// enforce. Call after `parse` (or `embedded`) to fail fast at load time
     /// with a precise message instead of a late runtime failure mid-scan.
-    /// Checks: (1) source IDs are unique, (2) `HtmlConfig` sources carry a
-    /// `[selectors]` table with all four required fields non-empty, (3) id
-    /// and name are non-empty, (4) enabled sources have an http/https
-    /// entrypoint, (5) allowed_hosts has no empty entries, (6) max_depth and
-    /// request_budget are >= 1.
+    /// Checks: IDs unique; HtmlConfig selectors complete; id/name non-empty;
+    /// enabled entrypoint is HTTP(S); allowed_hosts has no empty entries;
+    /// max_depth/request_budget are positive; media_strategy is a supported
+    /// adapter-specific value.
     pub fn validate(&self) -> Result<(), ConfigError> {
         let mut seen_ids = std::collections::HashSet::new();
         for source in &self.sources {
@@ -252,6 +259,18 @@ impl SourcesConfig {
                 return Err(ConfigError::InvalidRequestBudget(
                     source.id.clone(),
                     source.request_budget,
+                ));
+            }
+            if let Some(strategy) = source
+                .media_strategy
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                && (strategy != "youtube_channel" || source.adapter != AdapterKind::Rss)
+            {
+                return Err(ConfigError::InvalidMediaStrategy(
+                    source.id.clone(),
+                    strategy.to_string(),
                 ));
             }
             if source.adapter == AdapterKind::HtmlConfig {
@@ -369,9 +388,6 @@ detail_date = "time"
     #[test]
     fn cfg_001_embedded_default_config_parses() {
         let config = super::SourcesConfig::embedded().expect("embedded sources.toml parses");
-        // M0 ships an empty list; M6 promotes audited sources. The contract
-        // is that the embedded file parses without error, not that it has
-        // a minimum source count.
         let _ = config.sources.len();
     }
 
@@ -401,7 +417,6 @@ enabled = false
         assert_eq!(enabled[0].id, "s1");
     }
 
-    // R9-M02: validate() rejects duplicate source IDs.
     #[test]
     fn validate_rejects_duplicate_source_id() {
         let toml = r#"
@@ -418,7 +433,6 @@ name = "Second"
         assert!(matches!(err, super::ConfigError::DuplicateSourceId(ref id) if id == "dup"));
     }
 
-    // R9-M02: validate() rejects HtmlConfig source without a [selectors] table.
     #[test]
     fn validate_rejects_html_config_missing_selectors() {
         let toml = r#"
@@ -432,8 +446,6 @@ adapter = "html_config"
         assert!(matches!(err, super::ConfigError::MissingSelectors(ref id) if id == "no-sel"));
     }
 
-    // R9-M02: validate() rejects HtmlConfig source with an empty required
-    // selector field (whitespace-only counts as empty).
     #[test]
     fn validate_rejects_html_config_empty_required_selector() {
         let toml = r#"
@@ -455,8 +467,6 @@ detail_date = "time"
         );
     }
 
-    // R9-M02: validate() accepts a well-formed HtmlConfig source with all
-    // four required selectors non-empty and optional selectors absent.
     #[test]
     fn validate_accepts_well_formed_html_config() {
         let toml = r#"
@@ -475,7 +485,6 @@ detail_date = "time"
         config.validate().expect("well-formed config must pass");
     }
 
-    // R9-M02: validate() accepts non-HtmlConfig sources without selectors.
     #[test]
     fn validate_accepts_rss_source_without_selectors() {
         let toml = r#"
@@ -490,9 +499,6 @@ adapter = "rss"
             .expect("RSS source without selectors must pass");
     }
 
-    // R9-M02: the embedded default config must pass semantic validation.
-    // If this fails, the shipped config is broken and every `scan` would
-    // fail at load time.
     #[test]
     fn cfg_embedded_default_passes_validation() {
         let config = super::SourcesConfig::embedded().expect("embedded sources.toml parses");
@@ -501,7 +507,53 @@ adapter = "rss"
             .expect("embedded sources.toml must pass semantic validation");
     }
 
-    // R9-M02: validate() rejects an empty id.
+    #[test]
+    fn validate_rejects_unknown_media_strategy() {
+        let toml = r#"
+[[sources]]
+id = "bad-media"
+name = "Bad Media"
+adapter = "rss"
+media_strategy = "youtub_channel"
+"#;
+        let config = super::SourcesConfig::parse(toml).expect("TOML parses");
+        let err = config.validate().expect_err("unknown media strategy must fail");
+        assert!(
+            matches!(err, super::ConfigError::InvalidMediaStrategy(ref id, ref strategy)
+                if id == "bad-media" && strategy == "youtub_channel")
+        );
+    }
+
+    #[test]
+    fn validate_rejects_youtube_strategy_on_non_rss_adapter() {
+        let toml = r#"
+[[sources]]
+id = "bad-media-adapter"
+name = "Bad Media Adapter"
+adapter = "ics"
+media_strategy = "youtube_channel"
+"#;
+        let config = super::SourcesConfig::parse(toml).expect("TOML parses");
+        assert!(matches!(
+            config.validate(),
+            Err(super::ConfigError::InvalidMediaStrategy(ref id, ref strategy))
+                if id == "bad-media-adapter" && strategy == "youtube_channel"
+        ));
+    }
+
+    #[test]
+    fn validate_accepts_youtube_strategy_on_rss_adapter() {
+        let toml = r#"
+[[sources]]
+id = "youtube"
+name = "YouTube"
+adapter = "rss"
+media_strategy = "youtube_channel"
+"#;
+        let config = super::SourcesConfig::parse(toml).expect("TOML parses");
+        config.validate().expect("supported strategy must pass");
+    }
+
     #[test]
     fn validate_rejects_empty_id() {
         let toml = r#"
@@ -516,7 +568,6 @@ name = "Has Name"
         );
     }
 
-    // R9-M02: validate() rejects a whitespace-only id (trim before check).
     #[test]
     fn validate_rejects_whitespace_id() {
         let toml = r#"
@@ -529,7 +580,6 @@ name = "Has Name"
         assert!(matches!(err, super::ConfigError::EmptyField(_, f) if f == "id"));
     }
 
-    // R9-M02: validate() rejects an empty name.
     #[test]
     fn validate_rejects_empty_name() {
         let toml = r#"
@@ -544,7 +594,6 @@ name = ""
         );
     }
 
-    // R9-M02: validate() rejects an enabled source without an entrypoint.
     #[test]
     fn validate_rejects_enabled_without_entrypoint() {
         let toml = r#"
@@ -560,7 +609,6 @@ enabled = true
         assert!(matches!(err, super::ConfigError::MissingEntrypoint(ref id) if id == "no-ep"));
     }
 
-    // R9-M02: validate() accepts a disabled source without an entrypoint.
     #[test]
     fn validate_accepts_disabled_without_entrypoint() {
         let toml = r#"
@@ -575,7 +623,6 @@ enabled = false
             .expect("disabled source without entrypoint must pass");
     }
 
-    // R9-M02: validate() rejects an enabled source with a non-http(s) scheme.
     #[test]
     fn validate_rejects_invalid_entrypoint_scheme() {
         let toml = r#"
@@ -592,7 +639,6 @@ entrypoint = "ftp://example.com/"
         );
     }
 
-    // R9-M02: validate() rejects allowed_hosts containing an empty string.
     #[test]
     fn validate_rejects_empty_allowed_host() {
         let toml = r#"
@@ -607,7 +653,6 @@ allowed_hosts = ["example.com", ""]
         assert!(matches!(err, super::ConfigError::EmptyAllowedHost(ref id) if id == "bad-hosts"));
     }
 
-    // R9-M02: validate() rejects max_depth = 0.
     #[test]
     fn validate_rejects_zero_max_depth() {
         let toml = r#"
@@ -624,7 +669,6 @@ max_depth = 0
         );
     }
 
-    // R9-M02: validate() rejects request_budget = 0.
     #[test]
     fn validate_rejects_zero_request_budget() {
         let toml = r#"
@@ -641,7 +685,6 @@ request_budget = 0
         );
     }
 
-    // R9-M02: deny_unknown_fields rejects an unknown key in a source.
     #[test]
     fn deny_unknown_fields_rejects_unknown_source_key() {
         let toml = r#"
@@ -651,13 +694,9 @@ name = "Bad"
 typo_field = "oops"
 "#;
         let result = super::SourcesConfig::parse(toml);
-        assert!(
-            result.is_err(),
-            "unknown field must fail at parse time, not silently ignored"
-        );
+        assert!(result.is_err(), "unknown field must fail at parse time, not silently ignored");
     }
 
-    // R9-M02: deny_unknown_fields rejects an unknown key in [selectors].
     #[test]
     fn deny_unknown_fields_rejects_unknown_selector_key() {
         let toml = r#"
@@ -674,13 +713,9 @@ detail_date = "time"
 bogus_selector = "x"
 "#;
         let result = super::SourcesConfig::parse(toml);
-        assert!(
-            result.is_err(),
-            "unknown selector field must fail at parse time"
-        );
+        assert!(result.is_err(), "unknown selector field must fail at parse time");
     }
 
-    // R9-M02: a fully well-formed enabled source passes all checks.
     #[test]
     fn validate_accepts_complete_enabled_source() {
         let toml = r#"
@@ -695,8 +730,6 @@ request_budget = 30
 enabled = true
 "#;
         let config = super::SourcesConfig::parse(toml).expect("TOML parses");
-        config
-            .validate()
-            .expect("complete enabled source must pass");
+        config.validate().expect("complete enabled source must pass");
     }
 }
