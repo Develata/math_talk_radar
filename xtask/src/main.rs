@@ -54,22 +54,16 @@ fn main() -> ExitCode {
 
 fn workspace_root() -> PathBuf {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    // Compile-time invariant: xtask lives directly under the workspace root.
     manifest_dir
         .parent()
         .expect("xtask must live directly under the workspace root")
         .to_path_buf()
 }
 
-// ---------------------------------------------------------------------------
-// static-release: verify a release binary is statically linked (RELS-001, §51)
-// ---------------------------------------------------------------------------
-
 fn run_static_release(binary: &Path) -> Result<(), Vec<String>> {
     use std::process::Command;
 
     let mut errors: Vec<String> = Vec::new();
-
     if !binary.exists() {
         return Err(vec![format!("binary not found: {}", binary.display())]);
     }
@@ -80,12 +74,9 @@ fn run_static_release(binary: &Path) -> Result<(), Vec<String>> {
         .map_err(|e| vec![format!("failed to run `file`: {e}")])?;
     let file_text = String::from_utf8_lossy(&file_out.stdout);
     println!("file: {file_text}");
-
-    let statically_linked = file_text.contains("statically linked");
-    if !statically_linked {
+    if !file_text.contains("statically linked") {
         errors.push(format!(
-            "RELS-001: `file` does not report 'statically linked'.\n\
-             Output: {file_text}"
+            "RELS-001: `file` does not report 'statically linked'.\nOutput: {file_text}"
         ));
     }
 
@@ -97,34 +88,19 @@ fn run_static_release(binary: &Path) -> Result<(), Vec<String>> {
                 String::from_utf8_lossy(&out.stderr)
             );
             println!("ldd: {combined}");
-            // GNU/glibc ldd reports fully static executables as "not a
-            // dynamic executable" (typically exit 1), while static-PIE
-            // binaries can report "statically linked" and exit 0. Both are
-            // valid RELS-001 signals; exit status alone is not authoritative.
             let static_signal = combined.contains("not a dynamic executable")
                 || combined.contains("statically linked");
             if !static_signal {
                 errors.push(format!(
-                    "RELS-001: `ldd` does not report a static executable.\n\
-                     Output: {combined}"
+                    "RELS-001: `ldd` does not report a static executable.\nOutput: {combined}"
                 ));
             }
         }
-        Err(e) => {
-            errors.push(format!("failed to run `ldd`: {e}"));
-        }
+        Err(e) => errors.push(format!("failed to run `ldd`: {e}")),
     }
 
-    if errors.is_empty() {
-        Ok(())
-    } else {
-        Err(errors)
-    }
+    if errors.is_empty() { Ok(()) } else { Err(errors) }
 }
-
-// ---------------------------------------------------------------------------
-// baseline: functional + quality + perf orchestration (M7/M8, §57 B5)
-// ---------------------------------------------------------------------------
 
 fn run_baseline(root: &Path) -> Result<(), Vec<String>> {
     use std::process::Command;
@@ -132,27 +108,27 @@ fn run_baseline(root: &Path) -> Result<(), Vec<String>> {
     let mut errors: Vec<String> = Vec::new();
 
     println!("baseline: functional (cargo test --workspace)");
-    let test = Command::new("cargo")
+    match Command::new("cargo")
         .args(["test", "--workspace"])
         .current_dir(root)
-        .status();
-    match test {
+        .status()
+    {
         Ok(s) if s.success() => {}
         Ok(s) => errors.push(format!("functional: cargo test failed ({s})")),
         Err(e) => errors.push(format!("functional: failed to run cargo test: {e}")),
     }
 
     println!("baseline: quality (fmt + clippy)");
-    let fmt = Command::new("cargo")
+    match Command::new("cargo")
         .args(["fmt", "--check"])
         .current_dir(root)
-        .status();
-    match fmt {
+        .status()
+    {
         Ok(s) if s.success() => {}
         Ok(s) => errors.push(format!("quality: cargo fmt --check failed ({s})")),
         Err(e) => errors.push(format!("quality: failed to run cargo fmt: {e}")),
     }
-    let clippy = Command::new("cargo")
+    match Command::new("cargo")
         .args([
             "clippy",
             "--workspace",
@@ -163,15 +139,15 @@ fn run_baseline(root: &Path) -> Result<(), Vec<String>> {
             "warnings",
         ])
         .current_dir(root)
-        .status();
-    match clippy {
+        .status()
+    {
         Ok(s) if s.success() => {}
         Ok(s) => errors.push(format!("quality: cargo clippy failed ({s})")),
         Err(e) => errors.push(format!("quality: failed to run cargo clippy: {e}")),
     }
 
     println!("baseline: perf (RSS adapter memory, PERF-001 ≤128 MiB)");
-    let perf = Command::new("cargo")
+    match Command::new("cargo")
         .args([
             "run",
             "-p",
@@ -181,8 +157,8 @@ fn run_baseline(root: &Path) -> Result<(), Vec<String>> {
             "--release",
         ])
         .current_dir(root)
-        .output();
-    match perf {
+        .output()
+    {
         Ok(out) if out.status.success() => {
             let stdout = String::from_utf8_lossy(&out.stdout);
             let peak_kb: Option<u64> = stdout
@@ -207,55 +183,96 @@ fn run_baseline(root: &Path) -> Result<(), Vec<String>> {
                 _ => errors.push(format!("perf: failed to parse perf_rss output:\n{stdout}")),
             }
         }
-        Ok(out) => {
-            let stderr = String::from_utf8_lossy(&out.stderr);
-            errors.push(format!("perf: perf_rss exited non-zero\n{stderr}"));
-        }
+        Ok(out) => errors.push(format!(
+            "perf: perf_rss exited non-zero\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        )),
         Err(e) => errors.push(format!("perf: failed to run perf_rss: {e}")),
     }
 
-    if errors.is_empty() {
-        Ok(())
-    } else {
-        Err(errors)
+    println!("baseline: full synthetic pipeline (1k/5k/10k + high-collision)");
+    let release_binary = root.join("target/release/math_talk_radar");
+    let release_build_ok = match Command::new("cargo")
+        .args(["build", "--release", "--bin", "math_talk_radar"])
+        .current_dir(root)
+        .status()
+    {
+        Ok(s) if s.success() => true,
+        Ok(s) => {
+            errors.push(format!("pipeline: release CLI build failed ({s})"));
+            false
+        }
+        Err(e) => {
+            errors.push(format!("pipeline: failed to build release CLI: {e}"));
+            false
+        }
+    };
+    if release_build_ok {
+        match Command::new("cargo")
+            .args([
+                "run",
+                "-p",
+                "math_talk_radar",
+                "--example",
+                "perf_pipeline",
+                "--release",
+                "--quiet",
+            ])
+            .env("PERF_CLI_BINARY", &release_binary)
+            .current_dir(root)
+            .output()
+        {
+            Ok(out) if out.status.success() => {
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                for line in stdout.lines().filter(|line| line.starts_with("PERF_PIPELINE_")) {
+                    println!("baseline: {line}");
+                }
+                let expected_cases = ["n=1000;", "n=5000;", "n=10000;"];
+                for marker in expected_cases {
+                    if !stdout.lines().any(|line| {
+                        line.starts_with("PERF_PIPELINE_CASE:") && line.contains(marker)
+                    }) {
+                        errors.push(format!(
+                            "pipeline: missing benchmark result for {marker}"
+                        ));
+                    }
+                }
+                for required in [
+                    "PERF_PIPELINE_HIGH_COLLISION:",
+                    "PERF_PIPELINE_BINARY_BYTES:",
+                    "PERF_PIPELINE_STARTUP_MS:",
+                    "PERF_PIPELINE_PEAK_KB:",
+                ] {
+                    if !stdout.lines().any(|line| line.starts_with(required)) {
+                        errors.push(format!("pipeline: missing metric {required}"));
+                    }
+                }
+            }
+            Ok(out) => errors.push(format!(
+                "pipeline: perf_pipeline exited non-zero\nstdout:\n{}\nstderr:\n{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            )),
+            Err(e) => errors.push(format!("pipeline: failed to run perf_pipeline: {e}")),
+        }
     }
-}
 
-// ---------------------------------------------------------------------------
-// check: source-registry + acceptance-matrix + doc coverage
-// ---------------------------------------------------------------------------
+    if errors.is_empty() { Ok(()) } else { Err(errors) }
+}
 
 fn run_check(root: &Path) -> Result<(), Vec<String>> {
     let mut errors = Vec::new();
     errors.extend(validate_source_registry(root));
     errors.extend(validate_matrix(root));
     errors.extend(validate_schema_drift(root));
-    if errors.is_empty() {
-        Ok(())
-    } else {
-        Err(errors)
-    }
+    if errors.is_empty() { Ok(()) } else { Err(errors) }
 }
 
 fn run_check_matrix(root: &Path) -> Result<(), Vec<String>> {
     let errors = validate_matrix(root);
-    if errors.is_empty() {
-        Ok(())
-    } else {
-        Err(errors)
-    }
+    if errors.is_empty() { Ok(()) } else { Err(errors) }
 }
 
-// ---------------------------------------------------------------------------
-// schema drift validation (§09:38, H4)
-// ---------------------------------------------------------------------------
-
-/// H4: verify the golden JSON Schema file exists. The actual drift check
-/// (regenerate schema from Rust model, compare to golden) runs as a Rust
-/// integration test in `apps/cli/tests/schema_drift.rs` so it can call
-/// `schemars::schema_for!` in-process. This xtask gate only verifies the
-/// golden file is present and non-empty — catching accidental deletion
-/// without duplicating the build logic here.
 fn validate_schema_drift(root: &Path) -> Vec<String> {
     let golden = root.join("docs/reference/output-schema.json");
     let mut errors = Vec::new();
@@ -264,98 +281,44 @@ fn validate_schema_drift(root: &Path) -> Vec<String> {
             if content.trim().is_empty() {
                 errors.push(format!(
                     "schema drift: {} is empty (regenerate with `cargo run -- schema > {}`)",
-                    golden.display(),
-                    golden.display()
+                    golden.display(), golden.display()
                 ));
             }
             if !content.contains("\"ScanOutput\"") {
                 errors.push(format!(
                     "schema drift: {} does not contain the ScanOutput root schema (regenerate with `cargo run -- schema > {}`)",
-                    golden.display(),
-                    golden.display()
+                    golden.display(), golden.display()
                 ));
             }
         }
-        Err(e) => {
-            errors.push(format!(
-                "schema drift: cannot read {}: {e} (regenerate with `cargo run -- schema > {}`)",
-                golden.display(),
-                golden.display()
-            ));
-        }
+        Err(e) => errors.push(format!(
+            "schema drift: cannot read {}: {e} (regenerate with `cargo run -- schema > {}`)",
+            golden.display(), golden.display()
+        )),
     }
     errors
 }
 
-// ---------------------------------------------------------------------------
-// source-registry validation (§17)
-// ---------------------------------------------------------------------------
-
 const SRC_COLS: &[&str] = &[
-    "id",
-    "name",
-    "tier",
-    "kind",
-    "adapter",
-    "entrypoint",
-    "allowed_hosts",
-    "max_depth",
-    "request_budget",
-    "media_strategy",
-    "dynamic",
-    "enabled",
-    "list_fixture",
-    "detail_fixture",
-    "last_verified",
-    "status",
-    "notes",
+    "id", "name", "tier", "kind", "adapter", "entrypoint", "allowed_hosts",
+    "max_depth", "request_budget", "media_strategy", "dynamic", "enabled",
+    "list_fixture", "detail_fixture", "last_verified", "status", "notes",
 ];
-
-// R9-H03: adapters whose `plan_enrichment` emits a detail-page fetch. Sources
-// enabled with one of these adapters SHOULD have a `detail_fixture` (§45);
-// the gate warns when missing (hard-error path is deferred until fixtures
-// are captured). `indico` is not yet implemented (returns no fetch plans);
-// `none` has no adapter.
 const ADAPTERS_WITH_DETAIL: &[&str] = &["rss", "ics", "jsonld", "html_config", "html_generic"];
 const SRC_REQUIRED: &[&str] = &[
-    "id",
-    "name",
-    "tier",
-    "kind",
-    "adapter",
-    "max_depth",
-    "request_budget",
-    "dynamic",
-    "enabled",
-    "status",
+    "id", "name", "tier", "kind", "adapter", "max_depth", "request_budget",
+    "dynamic", "enabled", "status",
 ];
 const VALID_TIERS: &[&str] = &["S", "A", "B", "unknown"];
 const VALID_KINDS: &[&str] = &[
-    "institution_calendar",
-    "conference_series",
-    "rss_feed",
-    "ics_feed",
-    "indico",
-    "jsonld",
-    "media_archive",
-    "other",
+    "institution_calendar", "conference_series", "rss_feed", "ics_feed", "indico",
+    "jsonld", "media_archive", "other",
 ];
 const VALID_ADAPTERS: &[&str] = &[
-    "rss",
-    "ics",
-    "jsonld",
-    "indico",
-    "html_config",
-    "html_generic",
-    "none",
+    "rss", "ics", "jsonld", "indico", "html_config", "html_generic", "none",
 ];
 const VALID_SRC_STATUS: &[&str] = &[
-    "pending_audit",
-    "audited",
-    "enabled",
-    "disabled",
-    "broken",
-    "dynamic_unsupported",
+    "pending_audit", "audited", "enabled", "disabled", "broken", "dynamic_unsupported",
 ];
 
 fn validate_source_registry(root: &Path) -> Vec<String> {
@@ -385,7 +348,6 @@ fn validate_source_registry(root: &Path) -> Vec<String> {
     let i_dyn = idx("dynamic");
     let i_en = idx("enabled");
     let i_status = idx("status");
-
     let i_list_fixture = idx("list_fixture");
     let i_detail_fixture = idx("detail_fixture");
     let i_media = idx("media_strategy");
@@ -401,8 +363,7 @@ fn validate_source_registry(root: &Path) -> Vec<String> {
         let cell = |ri: Option<usize>| ri.and_then(|x| row.get(x)).copied().unwrap_or("");
         let id = cell(i_id);
         for col in SRC_REQUIRED {
-            let ci = idx(col);
-            if cell(ci).is_empty() {
+            if cell(idx(col)).is_empty() {
                 errors.push(format!(
                     "source-registry row {i} ({id}): empty required column '{col}'"
                 ));
@@ -412,62 +373,35 @@ fn validate_source_registry(root: &Path) -> Vec<String> {
             errors.push(format!("source-registry row {i}: duplicate id '{id}'"));
         }
         if !VALID_TIERS.contains(&cell(i_tier)) {
-            errors.push(format!(
-                "source-registry row {i} ({id}): invalid tier '{}'",
-                cell(i_tier)
-            ));
+            errors.push(format!("source-registry row {i} ({id}): invalid tier '{}'", cell(i_tier)));
         }
         if !VALID_KINDS.contains(&cell(i_kind)) {
-            errors.push(format!(
-                "source-registry row {i} ({id}): invalid kind '{}'",
-                cell(i_kind)
-            ));
+            errors.push(format!("source-registry row {i} ({id}): invalid kind '{}'", cell(i_kind)));
         }
         if !VALID_ADAPTERS.contains(&cell(i_adapter)) {
-            errors.push(format!(
-                "source-registry row {i} ({id}): invalid adapter '{}'",
-                cell(i_adapter)
-            ));
+            errors.push(format!("source-registry row {i} ({id}): invalid adapter '{}'", cell(i_adapter)));
         }
         if !cell(i_dyn).is_empty() && !["true", "false"].contains(&cell(i_dyn)) {
-            errors.push(format!(
-                "source-registry row {i} ({id}): dynamic must be true/false"
-            ));
+            errors.push(format!("source-registry row {i} ({id}): dynamic must be true/false"));
         }
         if !cell(i_en).is_empty() && !["true", "false"].contains(&cell(i_en)) {
-            errors.push(format!(
-                "source-registry row {i} ({id}): enabled must be true/false"
-            ));
+            errors.push(format!("source-registry row {i} ({id}): enabled must be true/false"));
         }
-        for (col, val) in [
-            ("max_depth", cell(i_depth)),
-            ("request_budget", cell(i_budget)),
-        ] {
+        for (col, val) in [("max_depth", cell(i_depth)), ("request_budget", cell(i_budget))] {
             if !val.is_empty() && val.parse::<u32>().is_err() {
-                errors.push(format!(
-                    "source-registry row {i} ({id}): {col} not an integer: '{val}'"
-                ));
+                errors.push(format!("source-registry row {i} ({id}): {col} not an integer: '{val}'"));
             }
         }
         let status = cell(i_status);
         if !VALID_SRC_STATUS.contains(&status) {
-            errors.push(format!(
-                "source-registry row {i} ({id}): invalid status '{}'",
-                status
-            ));
+            errors.push(format!("source-registry row {i} ({id}): invalid status '{status}'"));
         }
 
-        if status == "pending_audit" {
-            pending_audit_count += 1;
-        } else {
-            audited_count += 1;
-        }
+        if status == "pending_audit" { pending_audit_count += 1; } else { audited_count += 1; }
         if cell(i_en) == "true" {
             let fixture = cell(i_list_fixture);
             if !fixture.is_empty() {
-                let fixture_path = root
-                    .join("crates/radar-adapters/tests/fixtures")
-                    .join(fixture);
+                let fixture_path = root.join("crates/radar-adapters/tests/fixtures").join(fixture);
                 if fixture_path.exists() {
                     enabled_fixture_count += 1;
                 } else {
@@ -476,26 +410,15 @@ fn validate_source_registry(root: &Path) -> Vec<String> {
                     ));
                 }
             }
-            // R9-H03: detail_fixture dual gate.
-            //   - hard error if the column is non-empty but the file is
-            //     missing (a typo'd path must not pass silently);
-            //   - warning if the column is empty for an enabled source whose
-            //     adapter fetches a detail page (§45 expects a detail
-            //     fixture; the warning path is upgradable to a hard error
-            //     once the fixtures are captured).
             let detail = cell(i_detail_fixture);
             if !detail.is_empty() {
-                let detail_path = root
-                    .join("crates/radar-adapters/tests/fixtures")
-                    .join(detail);
+                let detail_path = root.join("crates/radar-adapters/tests/fixtures").join(detail);
                 if !detail_path.exists() {
                     errors.push(format!(
                         "source-registry row {i} ({id}): detail_fixture '{detail}' not found on disk"
                     ));
                 }
-            } else if ADAPTERS_WITH_DETAIL.contains(&cell(i_adapter))
-                && cell(i_media) != "youtube_channel"
-            {
+            } else if ADAPTERS_WITH_DETAIL.contains(&cell(i_adapter)) && cell(i_media) != "youtube_channel" {
                 errors.push(format!(
                     "source-registry row {i} ({id}): enabled source with adapter '{}' requires detail_fixture (§45)",
                     cell(i_adapter)
@@ -503,35 +426,25 @@ fn validate_source_registry(root: &Path) -> Vec<String> {
             }
             enabled_adapter_kinds.insert(cell(i_adapter));
 
-            // §45: every enabled source needs ≥1 golden expectation in
-            // site_audits.rs (function `site_{id_with_underscores}_*`).
             let test_fn_prefix = format!("fn site_{}", id.replace('-', "_"));
             let audits_path = root.join("crates/radar-adapters/tests/site_audits.rs");
             match std::fs::read_to_string(&audits_path) {
-                Ok(audits) if !audits.contains(&test_fn_prefix) => {
-                    errors.push(format!(
-                        "source-registry row {i} ({id}): no golden test in site_audits.rs (expected function starting with '{test_fn_prefix}')"
-                    ));
-                }
-                Err(e) => {
-                    errors.push(format!("source-registry: cannot read site_audits.rs: {e}"));
-                }
+                Ok(audits) if !audits.contains(&test_fn_prefix) => errors.push(format!(
+                    "source-registry row {i} ({id}): no golden test in site_audits.rs (expected function starting with '{test_fn_prefix}')"
+                )),
+                Err(e) => errors.push(format!("source-registry: cannot read site_audits.rs: {e}")),
                 _ => {}
             }
         }
 
-        // §18: count media/recording sources for the coverage baseline.
-        // H8-1: media_strategy validated against a closed enum to catch
-        // typos that would silently break the media-source baseline.
         if cell(i_en) == "true" {
             let kind = cell(i_kind);
             let media_strategy = cell(i_media);
-            let valid_strategies = ["youtube_channel", "rss_media", "ics_media", "scrape_media"];
+            let valid_strategies = ["youtube_channel"];
             if !media_strategy.is_empty() {
                 if !valid_strategies.contains(&media_strategy) {
                     errors.push(format!(
-                        "source-registry row {i} ({id}): unknown media_strategy '{media_strategy}', expected one of: {}",
-                        valid_strategies.join(", ")
+                        "source-registry row {i} ({id}): unsupported v0.1 media_strategy '{media_strategy}', expected youtube_channel"
                     ));
                 }
                 media_source_count += 1;
@@ -545,14 +458,9 @@ fn validate_source_registry(root: &Path) -> Vec<String> {
         }
     }
 
-    // LIVE-001/002 coverage baseline (§18). Only enforced once the audit is
-    // complete — while any row is still pending_audit, the counts are not
-    // checked so the gate doesn't fail during an in-progress audit.
     if pending_audit_count == 0 {
         if audited_count < 20 {
-            errors.push(format!(
-                "LIVE-001: need >=20 audited sources, got {audited_count}"
-            ));
+            errors.push(format!("LIVE-001: need >=20 audited sources, got {audited_count}"));
         }
         if enabled_fixture_count < 10 {
             errors.push(format!(
@@ -563,45 +471,21 @@ fn validate_source_registry(root: &Path) -> Vec<String> {
             errors.push(format!(
                 "coverage: need >=2 distinct adapter kinds among enabled sources, got {} ({})",
                 enabled_adapter_kinds.len(),
-                enabled_adapter_kinds
-                    .iter()
-                    .copied()
-                    .collect::<Vec<_>>()
-                    .join(", ")
+                enabled_adapter_kinds.iter().copied().collect::<Vec<_>>().join(", ")
             ));
         }
         if media_source_count < 3 {
-            eprintln!(
-                "warning: §18 coverage: need >=3 media/recording sources, got {media_source_count}"
-            );
+            eprintln!("warning: §18 coverage: need >=3 media/recording sources, got {media_source_count}");
         }
     }
-
     errors
 }
 
-// ---------------------------------------------------------------------------
-// acceptance-matrix validation (§55, §56, DOC-001, DOC-002)
-// ---------------------------------------------------------------------------
-
 const MATRIX_COLS: &[&str] = &[
-    "case_id",
-    "requirement",
-    "plan_ref",
-    "test_surface",
-    "automation",
-    "gate",
-    "evidence",
-    "status",
+    "case_id", "requirement", "plan_ref", "test_surface", "automation", "gate", "evidence", "status",
 ];
 const MATRIX_REQUIRED: &[&str] = &[
-    "case_id",
-    "requirement",
-    "plan_ref",
-    "test_surface",
-    "automation",
-    "gate",
-    "status",
+    "case_id", "requirement", "plan_ref", "test_surface", "automation", "gate", "status",
 ];
 const VALID_GATES: &[&str] = &["hard", "advisory"];
 const VALID_STATUS: &[&str] = &["pending", "pass", "fail", "skipped"];
@@ -614,15 +498,11 @@ fn validate_matrix(root: &Path) -> Vec<String> {
         Err(e) => return vec![format!("cannot read {}: {e}", path.display())],
     };
     let lines: Vec<&str> = content.lines().filter(|l| !l.trim().is_empty()).collect();
-    if lines.is_empty() {
-        return vec!["acceptance-matrix.tsv is empty".into()];
-    }
+    if lines.is_empty() { return vec!["acceptance-matrix.tsv is empty".into()]; }
     let header: Vec<&str> = lines[0].split('\t').collect();
     for col in MATRIX_COLS {
         if !header.contains(col) {
-            errors.push(format!(
-                "acceptance-matrix: missing required column '{col}'"
-            ));
+            errors.push(format!("acceptance-matrix: missing required column '{col}'"));
         }
     }
     let idx = |name: &str| header.iter().position(|h| *h == name);
@@ -648,11 +528,8 @@ fn validate_matrix(root: &Path) -> Vec<String> {
         let evidence = cell(i_ev);
 
         for col in MATRIX_REQUIRED {
-            let ci = idx(col);
-            if cell(ci).is_empty() {
-                errors.push(format!(
-                    "matrix row {i} ({case_id}): empty required column '{col}'"
-                ));
+            if cell(idx(col)).is_empty() {
+                errors.push(format!("matrix row {i} ({case_id}): empty required column '{col}'"));
             }
         }
         if !seen.insert(case_id.to_string()) {
@@ -662,28 +539,20 @@ fn validate_matrix(root: &Path) -> Vec<String> {
             errors.push(format!("matrix row {i} ({case_id}): invalid gate '{gate}'"));
         }
         if !VALID_STATUS.contains(&status) {
-            errors.push(format!(
-                "matrix row {i} ({case_id}): invalid status '{status}'"
-            ));
+            errors.push(format!("matrix row {i} ({case_id}): invalid status '{status}'"));
         }
         if gate == "hard" {
             if test_surface.is_empty() {
-                errors.push(format!(
-                    "matrix row {i} ({case_id}): hard gate with empty test_surface"
-                ));
+                errors.push(format!("matrix row {i} ({case_id}): hard gate with empty test_surface"));
             }
             if automation.is_empty() {
-                errors.push(format!(
-                    "matrix row {i} ({case_id}): hard gate with empty automation (DOC-002)"
-                ));
+                errors.push(format!("matrix row {i} ({case_id}): hard gate with empty automation (DOC-002)"));
             }
         }
         if !plan_ref.is_empty() {
             let p = root.join(plan_ref);
             if !p.exists() {
-                errors.push(format!(
-                    "matrix row {i} ({case_id}): plan_ref not found: {plan_ref}"
-                ));
+                errors.push(format!("matrix row {i} ({case_id}): plan_ref not found: {plan_ref}"));
             } else {
                 referenced_plans.insert(plan_ref.to_string());
             }
@@ -691,14 +560,11 @@ fn validate_matrix(root: &Path) -> Vec<String> {
         if !evidence.is_empty() {
             let p = root.join(evidence);
             if !p.exists() {
-                errors.push(format!(
-                    "matrix row {i} ({case_id}): evidence not found: {evidence}"
-                ));
+                errors.push(format!("matrix row {i} ({case_id}): evidence not found: {evidence}"));
             }
         }
     }
 
-    // DOC-001: every plan file must be referenced by ≥1 acceptance case.
     let plan_dir = root.join("docs/plan");
     if let Ok(rd) = std::fs::read_dir(&plan_dir) {
         let mut all_plans: HashSet<String> = HashSet::new();
@@ -712,20 +578,13 @@ fn validate_matrix(root: &Path) -> Vec<String> {
         }
         for plan in &all_plans {
             if !referenced_plans.contains(plan) {
-                errors.push(format!(
-                    "DOC-001: plan '{plan}' has no acceptance case referencing it"
-                ));
+                errors.push(format!("DOC-001: plan '{plan}' has no acceptance case referencing it"));
             }
         }
     }
-
     errors
 }
 
-/// R3-P1-01 / LIVE-003: run the real fetch+adapter pipeline against enabled
-/// sources and report per-source health + success ratio. Third-party source
-/// failures are advisory (never hard-fail); only instrumentation breakage
-/// (build failure, binary crash, unparseable output, config error) hard-fails.
 type SourceHealthRow = (String, String, u32, u64);
 type SmokeSummary = (usize, usize, Vec<SourceHealthRow>);
 fn run_live_smoke(root: &Path) -> Result<(), Vec<String>> {
@@ -744,15 +603,12 @@ fn run_live_smoke(root: &Path) -> Result<(), Vec<String>> {
     }
 
     let binary = root.join("target/release/math_talk_radar");
-
     let scan = Command::new(&binary)
         .args(["scan", "--no-state", "--format", "json"])
         .current_dir(root)
         .output()
         .map_err(|e| vec![format!("failed to execute scan: {e}")])?;
-
     let exit_code = scan.status.code().unwrap_or(-1);
-
     if !matches!(exit_code, 0 | 4) {
         return Err(vec![format!(
             "scan exited {exit_code} (instrumentation/config error):\n{}",
@@ -761,51 +617,31 @@ fn run_live_smoke(root: &Path) -> Result<(), Vec<String>> {
     }
 
     let (total, healthy, per_source) = if exit_code == 0 {
-        match parse_live_smoke_health(&scan.stdout) {
-            Ok(h) => h,
-            Err(e) => {
-                return Err(vec![format!(
-                    "could not parse scan output (instrumentation): {e}"
-                )]);
-            }
-        }
+        parse_live_smoke_health(&scan.stdout)
+            .map_err(|e| vec![format!("could not parse scan output (instrumentation): {e}")])?
     } else {
-        let count = count_enabled_sources(&binary);
-        (count, 0, Vec::new())
+        (count_enabled_sources(&binary), 0, Vec::new())
     };
 
-    let ratio = if total > 0 {
-        healthy as f64 / total as f64 * 100.0
-    } else {
-        0.0
-    };
-
+    let ratio = if total > 0 { healthy as f64 / total as f64 * 100.0 } else { 0.0 };
     println!("live-smoke report");
     println!("  total enabled:  {total}");
     println!("  healthy (Ok|Partial): {healthy}");
     println!("  success ratio:  {ratio:.1}%");
     if !per_source.is_empty() {
         println!();
-        println!(
-            "  {:<24} {:<16} {:>7} {:>10}",
-            "SOURCE", "STATUS", "EVENTS", "DURATION"
-        );
+        println!("  {:<24} {:<16} {:>7} {:>10}", "SOURCE", "STATUS", "EVENTS", "DURATION");
         for (source, status, events, duration_ms) in &per_source {
-            println!(
-                "  {:<24} {:<16} {:>7} {:>9}ms",
-                source, status, events, duration_ms
-            );
+            println!("  {:<24} {:<16} {:>7} {:>9}ms", source, status, events, duration_ms);
         }
     } else if exit_code == 4 {
         println!("  (all sources failed — possible network outage on runner)");
     }
-
     Ok(())
 }
 
 fn parse_live_smoke_health(stdout: &[u8]) -> Result<SmokeSummary, String> {
-    let v: serde_json::Value =
-        serde_json::from_slice(stdout).map_err(|e| format!("invalid JSON: {e}"))?;
+    let v: serde_json::Value = serde_json::from_slice(stdout).map_err(|e| format!("invalid JSON: {e}"))?;
     let health = v
         .get("source_health")
         .ok_or("missing 'source_health' field")?
@@ -818,19 +654,14 @@ fn parse_live_smoke_health(stdout: &[u8]) -> Result<SmokeSummary, String> {
         let status = h.get("status").and_then(|v| v.as_str()).unwrap_or("?");
         let events = h.get("events").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
         let duration_ms = h.get("duration_ms").and_then(|v| v.as_u64()).unwrap_or(0);
-        if matches!(status, "ok" | "partial") {
-            healthy += 1;
-        }
+        if matches!(status, "ok" | "partial") { healthy += 1; }
         per_source.push((source.to_string(), status.to_string(), events, duration_ms));
     }
     Ok((health.len(), healthy, per_source))
 }
 
 fn count_enabled_sources(binary: &Path) -> usize {
-    let output = std::process::Command::new(binary)
-        .args(["sources", "list"])
-        .output();
-    match output {
+    match std::process::Command::new(binary).args(["sources", "list"]).output() {
         Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout)
             .lines()
             .filter(|l| l.ends_with("true"))
@@ -860,14 +691,12 @@ mod tests {
 
     #[test]
     fn missing_source_health_errors() {
-        let json = br#"{"events":[]}"#;
-        assert!(parse_live_smoke_health(json).is_err());
+        assert!(parse_live_smoke_health(br#"{"events":[]}"#).is_err());
     }
 
     #[test]
     fn non_array_source_health_errors() {
-        let json = br#"{"source_health":null}"#;
-        assert!(parse_live_smoke_health(json).is_err());
+        assert!(parse_live_smoke_health(br#"{"source_health":null}"#).is_err());
     }
 
     #[test]
