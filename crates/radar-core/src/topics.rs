@@ -129,47 +129,69 @@ pub fn match_topics(text: &str, topics: &[TopicRecord]) -> Vec<TopicMatch> {
     match_topics_normalized(text, &normalized)
 }
 
-/// Enrich `event.topics` with registry matches (§7, §6.2, CLI-22).
+fn merge_topic_matches(
+    target: &mut Vec<TopicMatch>,
+    incoming: impl IntoIterator<Item = TopicMatch>,
+) {
+    for candidate in incoming {
+        if let Some(existing) = target
+            .iter_mut()
+            .find(|existing| existing.topic_id == candidate.topic_id)
+        {
+            if candidate.confidence > existing.confidence {
+                *existing = candidate;
+            }
+        } else {
+            target.push(candidate);
+        }
+    }
+}
+
+/// Enrich event- and talk-level topics with registry matches (§7, §6.2,
+/// CLI-22).
 ///
-/// The title is matched first (canonical names are more likely there), then
-/// the description; matches are deduplicated by `topic_id`, keeping the
-/// highest-confidence hit so a canonical title match beats an alias match from
-/// the description.
+/// Event title/description and every talk title/abstract participate. Each
+/// talk retains its own matches, while `event.topics` is the deduplicated union
+/// of event-level and talk-level evidence so ranking can reflect the actual
+/// program. A topic contributes at most once to the event regardless of how
+/// many talks mention it; the highest-confidence match wins.
 ///
-/// CLI-22: merges registry matches with adapter-set topics instead of
-/// replacing. Keeps adapter topics, then adds registry matches, deduping by
-/// `topic_id` and keeping the higher confidence hit.
+/// Adapter-set topics are preserved and merged rather than replaced.
 pub fn enrich_event_topics(event: &mut Event, topics: &[NormalizedTopic]) {
     if topics.is_empty() {
         return;
     }
-    let mut matches = match_topics_normalized(&event.title, topics);
+
+    let mut event_matches = match_topics_normalized(&event.title, topics);
     if let Some(desc) = event.description.as_ref()
         && !desc.is_empty()
     {
-        let desc_matches = match_topics_normalized(desc, topics);
-        for m in desc_matches {
-            if let Some(existing) = matches.iter_mut().find(|e| e.topic_id == m.topic_id) {
-                if m.confidence > existing.confidence {
-                    *existing = m;
-                }
-            } else {
-                matches.push(m);
-            }
-        }
+        merge_topic_matches(&mut event_matches, match_topics_normalized(desc, topics));
     }
-    // Merge: start from adapter topics, then fold in registry matches.
-    let mut merged = std::mem::take(&mut event.topics);
-    for m in matches {
-        if let Some(existing) = merged.iter_mut().find(|e| e.topic_id == m.topic_id) {
-            if m.confidence > existing.confidence {
-                *existing = m;
-            }
-        } else {
-            merged.push(m);
+
+    let mut merged_event_topics = std::mem::take(&mut event.topics);
+    merge_topic_matches(&mut merged_event_topics, event_matches);
+
+    let mut talk_rollup = Vec::new();
+    for talk in &mut event.talks {
+        let mut talk_matches = match_topics_normalized(&talk.title, topics);
+        if let Some(abstract_text) = talk.abstract_text.as_ref()
+            && !abstract_text.is_empty()
+        {
+            merge_topic_matches(
+                &mut talk_matches,
+                match_topics_normalized(abstract_text, topics),
+            );
         }
+
+        let mut merged_talk_topics = std::mem::take(&mut talk.topics);
+        merge_topic_matches(&mut merged_talk_topics, talk_matches);
+        merge_topic_matches(&mut talk_rollup, merged_talk_topics.iter().cloned());
+        talk.topics = merged_talk_topics;
     }
-    event.topics = merged;
+
+    merge_topic_matches(&mut merged_event_topics, talk_rollup);
+    event.topics = merged_event_topics;
 }
 
 /// Wrapper for the `topics.toml` document shape: a top-level `[[topics]]` array.
@@ -181,8 +203,8 @@ pub struct TopicsConfig {
 }
 
 impl TopicsConfig {
-    /// Parse a `topics.toml` document. Returns a config with an empty topic
-    /// list for empty input.
+    /// Parse a `topics.toml` document. Returns a config with an empty
+    /// scholar list for empty input.
     pub fn parse(toml_str: &str) -> Result<Self, toml::de::Error> {
         toml::from_str(toml_str)
     }
@@ -345,6 +367,81 @@ mod tests {
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].topic_id, "arithmetic_geometry");
         assert!((result[0].confidence - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn enrich_event_topics_includes_talk_title_and_abstract_without_double_counting() {
+        use crate::date::{DatePrecision, EventDate};
+        use crate::model::{
+            AccessInfo, Event, EventId, EventStatus, EventType, OnlineAvailability, PublicAccess,
+            SourceEvidence, Talk, TalkId,
+        };
+        use url::Url;
+
+        let source = SourceEvidence {
+            source_id: "test".into(),
+            source_url: Url::parse("https://example.com/event").unwrap(),
+            evidence: None,
+            captured_at: None,
+            native_id: None,
+        };
+        let mut event = Event {
+            id: EventId("event".into()),
+            title: "General Mathematics Meeting".into(),
+            url: Some(Url::parse("https://example.com/event").unwrap()),
+            event_type: EventType::Conference,
+            status: EventStatus::Announced,
+            date: EventDate {
+                start: None,
+                end: None,
+                timezone: None,
+                original_text: String::new(),
+                precision: DatePrecision::Unknown,
+            },
+            location: None,
+            description: None,
+            topics: Vec::new(),
+            people: Vec::new(),
+            talks: vec![Talk {
+                id: TalkId("talk-1".into()),
+                title: "Shimura varieties and applications".into(),
+                speaker: Vec::new(),
+                date_time: None,
+                abstract_text: Some("Recent PDE methods in arithmetic geometry".into()),
+                topics: Vec::new(),
+                media: Vec::new(),
+                source: source.clone(),
+            }],
+            media: Vec::new(),
+            access: AccessInfo {
+                access: PublicAccess::Unknown,
+                online: OnlineAvailability::Unknown,
+            },
+            sources: vec![source],
+            score: 0.0,
+            score_components: Default::default(),
+            rank_reasons: Vec::new(),
+            first_seen_at: None,
+            last_seen_at: None,
+        };
+
+        let normalized = normalize_topics(&[arithmetic_geometry(), analysis()]);
+        enrich_event_topics(&mut event, &normalized);
+
+        assert_eq!(event.talks[0].topics.len(), 2);
+        assert_eq!(event.topics.len(), 2);
+        assert!(
+            event
+                .topics
+                .iter()
+                .any(|topic| topic.topic_id == "arithmetic_geometry")
+        );
+        assert!(
+            event
+                .topics
+                .iter()
+                .any(|topic| topic.topic_id == "analysis")
+        );
     }
 
     // Supplementary: empty topics list.
