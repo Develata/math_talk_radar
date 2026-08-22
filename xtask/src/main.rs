@@ -89,32 +89,25 @@ fn run_static_release(binary: &Path) -> Result<(), Vec<String>> {
         ));
     }
 
-    let ldd = Command::new("ldd").arg(binary).output();
-    match ldd {
+    match Command::new("ldd").arg(binary).output() {
         Ok(out) => {
-            let ldd_text = String::from_utf8_lossy(&out.stdout);
-            let ldd_err = String::from_utf8_lossy(&out.stderr);
-            if out.status.success() {
-                println!("ldd: {ldd_text}");
-                let has_deps = ldd_text
-                    .lines()
-                    .any(|l| !l.trim().is_empty() && !l.contains("not a dynamic executable"));
-                if has_deps {
-                    errors.push(format!(
-                        "RELS-001: `ldd` reports runtime shared-library dependencies.\n\
-                         Output: {ldd_text}"
-                    ));
-                }
-            } else {
-                let combined = format!("{ldd_text}{ldd_err}");
-                let not_dynamic = combined.contains("not a dynamic executable");
-                println!("ldd: {combined}");
-                if !not_dynamic {
-                    errors.push(format!(
-                        "RELS-001: `ldd` failed without 'not a dynamic executable'.\n\
-                         Output: {combined}"
-                    ));
-                }
+            let combined = format!(
+                "{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            );
+            println!("ldd: {combined}");
+            // GNU/glibc ldd reports fully static executables as "not a
+            // dynamic executable" (typically exit 1), while static-PIE
+            // binaries can report "statically linked" and exit 0. Both are
+            // valid RELS-001 signals; exit status alone is not authoritative.
+            let static_signal = combined.contains("not a dynamic executable")
+                || combined.contains("statically linked");
+            if !static_signal {
+                errors.push(format!(
+                    "RELS-001: `ldd` does not report a static executable.\n\
+                     Output: {combined}"
+                ));
             }
         }
         Err(e) => {
