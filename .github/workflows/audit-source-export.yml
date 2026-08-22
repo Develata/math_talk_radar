@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: read
+  issues: write
 
 jobs:
   export:
@@ -30,3 +31,12 @@ jobs:
           path: ${{ runner.temp }}/math_talk_radar-source-${{ github.sha }}.tar.gz
           retention-days: 1
           if-no-files-found: error
+
+      - name: Publish run identity for the release audit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh issue create \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "audit-source-export run ${GITHUB_RUN_ID}" \
+            --body "run_id=${GITHUB_RUN_ID}\nartifact_name=source-${GITHUB_SHA}\nhead_sha=${GITHUB_SHA}"
