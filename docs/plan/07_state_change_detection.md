@@ -31,6 +31,19 @@ leaves no half-migrated state. Destructive migrations must be explicit.
 `first_seen` and media history must not be silently lost (state is rebuildable
 but history should not vanish without notice).
 
+Ordered persisted keys must use a canonical fixed-width UTC timestamp
+representation. Chrono's variable-precision default RFC3339 formatting is not
+permitted for lexicographically ordered state keys because values within the
+same second can sort incorrectly. The canonical form is RFC3339 UTC with nine
+fractional digits (`SecondsFormat::Nanos`, `Z`).
+
+`SOURCE_HEALTH` keys are `{source}\0{fixed_timestamp}`. `CHANGE_LOG` keys are
+`{fixed_timestamp}\0{event_id}\0{kind}\0{detail_digest}`. The detail component
+must be a deterministic fixed-size digest rather than unbounded external text,
+while still distinguishing multiple same-kind changes for one event in one
+scan. State schema v4 transactionally re-keys v1-v3 data into this canonical
+form and fails closed on malformed rows or key collisions (ADR-0013).
+
 ## Acceptance cases
 
 - STATE-001 — first_seen persisted (integration).
