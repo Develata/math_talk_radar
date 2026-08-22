@@ -1,3 +1,4 @@
+# One-shot cleanup for accidental audit telemetry. Remove after this run.
 name: Cleanup Audit Records
 
 on:
