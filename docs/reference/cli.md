@@ -1,6 +1,6 @@
 # CLI Reference
 
-> Status: M0 skeleton. Authoritative shape lives in `apps/cli/src/cli.rs` and
+> Authoritative shape lives in `apps/cli/src/cli.rs` and
 > `docs/plan/09_cli_output_contract.md`.
 
 Binary: `math_talk_radar`.
@@ -32,14 +32,22 @@ math_talk_radar schema                  # print the public JSON output schema
 | `--before` | 30 | days before `--today` |
 | `--after` | 180 | days after `--today` |
 | `--jobs` | 8 | concurrent fetch jobs |
-| `--max-events` | — | cap emitted events |
-| `--max-talks` | — | cap emitted talks |
+| `--max-events` | — | optional cap on emitted events |
+| `--max-talks` | 300 | per-event talk cap; explicit `--max-talks 0` disables the cap |
 | `--timezone` | local IANA | override timezone |
 | `--today` | system clock | inject date (YYYY-MM-DD) for deterministic runs |
-| `--sources/--scholars/--interests/--state` | XDG defaults | file path overrides |
+| `--sources` | embedded registry | override `sources.toml`; parsed and semantically validated before scan |
+| `--scholars` | embedded registry | override `scholars.toml` |
+| `--interests` | none / neutral | optional user interest-weight TOML |
+| `--state` | app data path | override redb state path |
 | `--no-state` | false | do not read or write state |
 | `--format` | `json` | `json` \| `jsonl` |
 | `--detail` | `compact` | `compact` \| `full` |
+
+`--sources` does not enable arbitrary extra configuration surface: v0.1 accepts
+the documented source schema only, rejects unknown keys, and fails closed on
+semantic errors such as duplicate IDs, unsupported media strategies, or an
+enabled source without an HTTP(S) entrypoint.
 
 ## Exit codes
 
