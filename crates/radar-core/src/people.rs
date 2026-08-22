@@ -250,50 +250,52 @@ pub fn match_scholars(
     match_scholars_normalized(text, &normalized, context)
 }
 
-/// CORE-12: enrich the event's people list with scholar tags from the curated
-/// registry and add title-mentioned scholars that adapters did not surface.
-/// Adapters construct `PersonHit`s from parsed speaker fields but set
-/// `scholar_tags: Vec::new()`; without this step the people component can
-/// never exceed the 3-point baseline for a non-TitleMention role, so
-/// important laureates (Fields/Abel/Wolf/Crafoord) are never recognized.
+fn enrich_person_from_registry(person: &mut PersonHit, scholars: &[NormalizedScholar]) {
+    if !person.scholar_tags.is_empty() {
+        return;
+    }
+    let norm_name = normalize_name(&person.canonical_name);
+    if let Some(scholar) = scholars
+        .iter()
+        .find(|scholar| scholar.matches_normalized(&norm_name))
+    {
+        person.scholar_tags = scholar.tags.clone();
+        person.canonical_name = scholar.canonical_name.clone();
+    }
+}
+
+/// CORE-12: enrich event-level people and structured talk speakers with
+/// scholar tags from the curated registry, then add title-mentioned scholars
+/// that adapters did not surface.
 ///
-/// Two passes:
-/// 1. For each adapter-found person, look up the scholar by normalized
-///    canonical name (using the pre-normalized [`NormalizedScholar`] list).
-///    On a hit, back-fill `scholar_tags` and correct the `canonical_name` to
-///    the registry's canonical form (adapters may use a variant surface form).
-/// 2. Run [`match_scholars_normalized`] on the title under `TitleText` context
-///    to find important scholars mentioned only in the title. Add any not
-///    already present (by normalized canonical name) as `TitleMention` so the
-///    people component can still recognize them for ranking.
+/// Structured `Talk.speaker` entries are first-class person evidence and must
+/// be enriched just like `event.people`; otherwise an important scholar that
+/// exists only at talk level can never receive the people ranking signal.
+/// Title-only mentions retain the protected `TitleMention` role and do not
+/// become speakers.
 pub fn enrich_event_scholars(event: &mut Event, scholars: &[NormalizedScholar]) {
     if scholars.is_empty() {
         return;
     }
 
-    // Pass 1: back-fill scholar_tags on adapter-found people.
-    // Match against any candidate (canonical name OR alias) so a speaker
-    // surfaced under an alias form (e.g. "Zagier") still attaches the
-    // laureate tags of the canonical scholar ("Don Zagier").
+    // Pass 1: back-fill scholar_tags on every structured person surface.
     for person in &mut event.people {
-        if !person.scholar_tags.is_empty() {
-            continue;
-        }
-        let norm_name = normalize_name(&person.canonical_name);
-        if let Some(scholar) = scholars.iter().find(|s| s.matches_normalized(&norm_name)) {
-            person.scholar_tags = scholar.tags.clone();
-            person.canonical_name = scholar.canonical_name.clone();
+        enrich_person_from_registry(person, scholars);
+    }
+    for talk in &mut event.talks {
+        for speaker in &mut talk.speaker {
+            enrich_person_from_registry(speaker, scholars);
         }
     }
 
-    // Pass 2: add title-mentioned scholars not already present.
+    // Pass 2: add event-title-mentioned scholars not already present.
     let title_hits = match_scholars_normalized(&event.title, scholars, MatchContext::TitleText);
     for hit in title_hits {
         let norm_canonical = normalize_name(&hit.canonical_name);
         let already_present = event
             .people
             .iter()
-            .any(|p| normalize_name(&p.canonical_name) == norm_canonical);
+            .any(|person| normalize_name(&person.canonical_name) == norm_canonical);
         if !already_present {
             event.people.push(hit);
         }
@@ -503,6 +505,49 @@ mod tests {
         let p = &event.people[0];
         assert_eq!(p.canonical_name, "Don Zagier");
         assert!(p.scholar_tags.contains(&"wolf".to_string()));
+    }
+
+    #[test]
+    fn per_004_enrich_attaches_tags_for_talk_only_speaker() {
+        use crate::model::{SourceEvidence, Talk, TalkId};
+        use url::Url;
+
+        let z = zagier();
+        let normalized = normalize_scholars(std::slice::from_ref(&z));
+        let source = SourceEvidence {
+            source_id: "jsonld".into(),
+            source_url: Url::parse("https://example.com/event").unwrap(),
+            evidence: None,
+            captured_at: None,
+            native_id: None,
+        };
+        let mut event = Event {
+            talks: vec![Talk {
+                id: TalkId("talk-1".into()),
+                title: "A structured talk".into(),
+                speaker: vec![PersonHit {
+                    canonical_name: "Zagier".into(),
+                    matched_text: "Zagier".into(),
+                    role: PersonRole::Speaker,
+                    evidence: Some("jsonld:performer".into()),
+                    confidence: 1.0,
+                    scholar_tags: Vec::new(),
+                }],
+                date_time: None,
+                abstract_text: None,
+                topics: Vec::new(),
+                media: Vec::new(),
+                source,
+            }],
+            ..empty_event()
+        };
+
+        enrich_event_scholars(&mut event, &normalized);
+
+        assert!(event.people.is_empty());
+        let speaker = &event.talks[0].speaker[0];
+        assert_eq!(speaker.canonical_name, "Don Zagier");
+        assert!(speaker.scholar_tags.contains(&"wolf".to_string()));
     }
 
     fn empty_event() -> Event {
