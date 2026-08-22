@@ -10,6 +10,7 @@ use radar_core::{
     SourceEvidence, SourceHealth, SourceStatus,
 };
 use radar_state::{ChangeKind, Repository, StateError, detect_changes};
+use redb::ReadableTable;
 use url::Url;
 
 fn t0() -> DateTime<Utc> {
@@ -741,11 +742,11 @@ fn store_scan_matches_manual_pattern() {
 }
 
 /// ST-16 / ADR-0011: a v1 database (version=1, no `cancelled_events` table)
-/// is migrated in place to v3 by `Repository::open`. The tombstone and
+/// is migrated in place to v4 by `Repository::open`. The tombstone and
 /// change_log tables are created and the version row is bumped — existing
 /// events are preserved.
 #[test]
-fn migrates_v1_to_v3_in_place() {
+fn migrates_v1_to_v4_in_place() {
     let dir = tempfile::TempDir::new().expect("temp dir");
     let db_path = dir.path().join("state.redb");
 
@@ -764,9 +765,9 @@ fn migrates_v1_to_v3_in_place() {
         txn.commit().expect("v1 commit");
     }
 
-    // Open with current binary — should forward-migrate v1→v3.
-    let repo = Repository::open(&db_path).expect("migrate v1 to v3");
-    assert_eq!(repo.schema_version().expect("version"), 3);
+    // Open with current binary — should forward-migrate v1→v4.
+    let repo = Repository::open(&db_path).expect("migrate v1 to v4");
+    assert_eq!(repo.schema_version().expect("version"), 4);
 
     // The tombstone table must exist: exercise it by storing, cancelling, and
     // reappearing an event. If the table were missing, the cancel step would
@@ -781,7 +782,7 @@ fn migrates_v1_to_v3_in_place() {
     assert_eq!(
         stored[0].first_seen_at,
         Some(t0()),
-        "first_seen_at restored from tombstone after v1 to v3 migration"
+        "first_seen_at restored from tombstone after v1 to v4 migration"
     );
 }
 
@@ -810,7 +811,7 @@ fn refuses_to_open_newer_schema_version() {
         matches!(
             err,
             StateError::Schema {
-                expected: 3,
+                expected: 4,
                 found: 999
             }
         ),
@@ -820,7 +821,7 @@ fn refuses_to_open_newer_schema_version() {
 
 // ---------------------------------------------------------------------------
 // ADR-0011 tests: store_scan_bundle, source-health history, change log,
-// retention purge, v2→v3 migration.
+// retention purge, v2→v4 migration.
 // ---------------------------------------------------------------------------
 
 fn health(source: &str, status: SourceStatus, at: DateTime<Utc>) -> SourceHealth {
@@ -1027,12 +1028,12 @@ fn retention_purges_expired_health_and_changes() {
     );
 }
 
-/// ADR-0011 §5: v2→v3 migration re-keys legacy SOURCE_HEALTH rows from bare
+/// ADR-0011 §5: v2→v4 migration re-keys legacy SOURCE_HEALTH rows from bare
 /// source id to composite "{source}\x00{recorded_at}". On real v2 databases
 /// the table is empty (scan path never wrote it); this test simulates the
 /// defensive case where a legacy row exists.
 #[test]
-fn migrates_v2_to_v3_rekeys_legacy_source_health() {
+fn migrates_v2_to_v4_rekeys_legacy_source_health() {
     let dir = tempfile::TempDir::new().expect("temp dir");
     let db_path = dir.path().join("state.redb");
 
@@ -1072,9 +1073,9 @@ fn migrates_v2_to_v3_rekeys_legacy_source_health() {
         txn.commit().expect("v2 commit");
     }
 
-    // Open with current binary — should forward-migrate v2→v3 and re-key.
-    let repo = Repository::open(&db_path).expect("migrate v2 to v3");
-    assert_eq!(repo.schema_version().expect("version"), 3);
+    // Open with current binary — should forward-migrate v2→v4 and re-key.
+    let repo = Repository::open(&db_path).expect("migrate v2 to v4");
+    assert_eq!(repo.schema_version().expect("version"), 4);
 
     // The legacy row must have been re-keyed to composite and stamped with
     // recorded_at (= migration time, not None).
@@ -1094,7 +1095,7 @@ fn migrates_v2_to_v3_rekeys_legacy_source_health() {
 /// malformed rows and still committed v3, making them unreachable (the v3
 /// read path skips non-composite keys).
 #[test]
-fn migrates_v2_to_v3_fails_on_malformed_legacy_row() {
+fn migrates_v2_to_v4_fails_on_malformed_legacy_row() {
     let dir = tempfile::TempDir::new().expect("temp dir");
     let db_path = dir.path().join("state.redb");
 
@@ -1146,4 +1147,237 @@ fn migrates_v2_to_v3_fails_on_malformed_legacy_row() {
             "R3-P1-02: schema version must stay at 2 after failed migration"
         );
     }
+}
+
+/// State-v4: fixed-width timestamp keys preserve chronological order for
+/// observations that differ only within one second.
+#[test]
+fn fixed_width_source_health_keys_order_same_second() {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let db_path = dir.path().join("state.redb");
+    let repo = Repository::open(&db_path).expect("open");
+    let later = t0() + chrono::Duration::milliseconds(100);
+    let event = base_event("e1", vec![]);
+
+    // Insert later first to prove ordering comes from the key, not insertion.
+    repo.store_scan_bundle(
+        std::slice::from_ref(&event),
+        &[health("s1", SourceStatus::Partial, later)],
+        later,
+    )
+    .expect("later scan");
+    repo.store_scan_bundle(
+        std::slice::from_ref(&event),
+        &[health("s1", SourceStatus::Ok, t0())],
+        t0(),
+    )
+    .expect("earlier scan");
+
+    let history = repo.list_source_health("s1").expect("history");
+    assert_eq!(history.len(), 2);
+    assert_eq!(history[0].recorded_at, Some(t0()));
+    assert_eq!(history[1].recorded_at, Some(later));
+}
+
+/// State-v4: a range that begins between two sub-second change records must
+/// exclude the earlier exact-second record and include the later one.
+#[test]
+fn fixed_width_change_keys_respect_same_second_range() {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let db_path = dir.path().join("state.redb");
+    let repo = Repository::open(&db_path).expect("open");
+    let later = t0() + chrono::Duration::milliseconds(100);
+
+    let base = base_event("e1", vec![]);
+    repo.store_scan_bundle(std::slice::from_ref(&base), &[], t0())
+        .expect("seed");
+    let with_media = base_event("e1", vec![video("https://youtube.com/v/1")]);
+    repo.store_scan_bundle(std::slice::from_ref(&with_media), &[], later)
+        .expect("later change");
+
+    let changes = repo
+        .list_changes(t0() + chrono::Duration::milliseconds(50))
+        .expect("range");
+    assert!(changes.iter().all(|change| change.detected_at >= later));
+    assert!(
+        changes
+            .iter()
+            .any(|change| change.kind == ChangeKind::MediaAdded)
+    );
+    assert!(
+        !changes
+            .iter()
+            .any(|change| change.kind == ChangeKind::EventAdded)
+    );
+}
+
+/// State-v4: retention compares fixed-width keys, so an exact-second record
+/// just before a fractional cutoff is purged rather than retained by lexical
+/// mis-ordering.
+#[test]
+fn fixed_width_change_keys_respect_fractional_retention_cutoff() {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let db_path = dir.path().join("state.redb");
+    let repo = Repository::open(&db_path).expect("open");
+    let event = base_event("e1", vec![]);
+    repo.store_scan_bundle(std::slice::from_ref(&event), &[], t0())
+        .expect("seed");
+
+    let now = t0() + chrono::Duration::days(90) + chrono::Duration::milliseconds(50);
+    repo.store_scan_bundle(std::slice::from_ref(&event), &[], now)
+        .expect("purge scan");
+
+    let changes = repo
+        .list_changes(DateTime::from_timestamp(0, 0).expect("epoch"))
+        .expect("changes");
+    assert!(
+        changes.iter().all(|change| change.detected_at >= now),
+        "the t0 EventAdded row must be older than the fractional cutoff: {changes:?}"
+    );
+}
+
+/// State-v4 migrates variable-width v3 keys transactionally, preserving rows
+/// while restoring chronological/range semantics and bounding detail suffixes.
+#[test]
+fn migrates_v3_to_v4_rekeys_ordered_tables() {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let db_path = dir.path().join("state.redb");
+    let later = t0() + chrono::Duration::milliseconds(100);
+
+    {
+        use radar_state::ChangeRecord;
+        use radar_state::schema::{
+            CANCELLED_EVENTS, CHANGE_LOG, EVENTS, SCHEMA_VERSION, SOURCE_HEALTH,
+        };
+        let db = redb::Database::create(&db_path).expect("create v3 db");
+        let txn = db.begin_write().expect("v3 txn");
+        {
+            let mut versions = txn.open_table(SCHEMA_VERSION).expect("schema");
+            versions.insert("version", 3u32).expect("v3 version");
+        }
+        let _ = txn.open_table(EVENTS).expect("events");
+        let _ = txn.open_table(CANCELLED_EVENTS).expect("cancelled");
+        {
+            let mut health_table = txn.open_table(SOURCE_HEALTH).expect("health");
+            for record in [
+                health("s1", SourceStatus::Ok, t0()),
+                health("s1", SourceStatus::Partial, later),
+            ] {
+                let at = record.recorded_at.expect("timestamp");
+                let key = format!("{}\u{0}{}", record.source, at.to_rfc3339());
+                let bytes = serde_json::to_vec(&record).expect("serialize health");
+                health_table
+                    .insert(key.as_str(), bytes.as_slice())
+                    .expect("insert health");
+            }
+        }
+        {
+            let mut changes = txn.open_table(CHANGE_LOG).expect("changes");
+            for record in [
+                ChangeRecord {
+                    kind: ChangeKind::EventAdded,
+                    event_id: EventId("e1".into()),
+                    detected_at: t0(),
+                    detail: None,
+                },
+                ChangeRecord {
+                    kind: ChangeKind::MediaAdded,
+                    event_id: EventId("e1".into()),
+                    detected_at: later,
+                    detail: Some("https://youtube.com/v/1".into()),
+                },
+            ] {
+                let detail = record.detail.as_deref().unwrap_or("");
+                let key = format!(
+                    "{}\u{0}{}\u{0}{}\u{0}{}",
+                    record.detected_at.to_rfc3339(),
+                    record.event_id.0,
+                    record.kind.as_str(),
+                    detail
+                );
+                let bytes = serde_json::to_vec(&record).expect("serialize change");
+                changes
+                    .insert(key.as_str(), bytes.as_slice())
+                    .expect("insert change");
+            }
+        }
+        txn.commit().expect("commit v3");
+    }
+
+    let repo = Repository::open(&db_path).expect("migrate v3 to v4");
+    assert_eq!(repo.schema_version().expect("version"), 4);
+    let history = repo.list_source_health("s1").expect("health history");
+    assert_eq!(
+        history.iter().map(|h| h.recorded_at).collect::<Vec<_>>(),
+        vec![Some(t0()), Some(later)]
+    );
+    let changes = repo
+        .list_changes(t0() + chrono::Duration::milliseconds(50))
+        .expect("change range");
+    assert_eq!(changes.len(), 1);
+    assert_eq!(changes[0].kind, ChangeKind::MediaAdded);
+    drop(repo);
+
+    use radar_state::schema::{CHANGE_LOG, SOURCE_HEALTH};
+    let db = redb::Database::open(&db_path).expect("raw reopen");
+    let txn = db.begin_read().expect("raw read");
+    let health_table = txn.open_table(SOURCE_HEALTH).expect("health table");
+    for entry in health_table.iter().expect("health iter") {
+        let (key, _) = entry.expect("health row");
+        let timestamp = key.value().split_once('\u{0}').expect("composite").1;
+        assert!(timestamp.ends_with('Z'));
+        assert_eq!(timestamp.len(), "2026-08-09T12:00:00.000000000Z".len());
+    }
+    let change_table = txn.open_table(CHANGE_LOG).expect("change table");
+    for entry in change_table.iter().expect("change iter") {
+        let (key, _) = entry.expect("change row");
+        let parts: Vec<_> = key.value().split('\u{0}').collect();
+        assert_eq!(parts.len(), 4);
+        assert_eq!(parts[0].len(), "2026-08-09T12:00:00.000000000Z".len());
+        assert!(parts[3].starts_with("blake3:"));
+        assert_eq!(parts[3].len(), "blake3:".len() + 64);
+    }
+}
+
+/// A malformed v3 append-only row aborts v4 and leaves the version at 3.
+#[test]
+fn migrates_v3_to_v4_fails_closed_on_malformed_change_row() {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let db_path = dir.path().join("state.redb");
+    {
+        use radar_state::schema::{
+            CANCELLED_EVENTS, CHANGE_LOG, EVENTS, SCHEMA_VERSION, SOURCE_HEALTH,
+        };
+        let db = redb::Database::create(&db_path).expect("create v3 db");
+        let txn = db.begin_write().expect("v3 txn");
+        {
+            let mut versions = txn.open_table(SCHEMA_VERSION).expect("schema");
+            versions.insert("version", 3u32).expect("v3 version");
+        }
+        let _ = txn.open_table(EVENTS).expect("events");
+        let _ = txn.open_table(CANCELLED_EVENTS).expect("cancelled");
+        let _ = txn.open_table(SOURCE_HEALTH).expect("health");
+        {
+            let mut changes = txn.open_table(CHANGE_LOG).expect("changes");
+            changes
+                .insert(
+                    "2026-08-09T12:00:00Z\u{0}e1\u{0}event_added\u{0}",
+                    b"not json".as_slice(),
+                )
+                .expect("insert malformed");
+        }
+        txn.commit().expect("commit v3");
+    }
+
+    let err = Repository::open(&db_path).expect_err("migration must fail");
+    assert!(matches!(err, StateError::Migration(ref message) if message.contains("change_log")));
+
+    use radar_state::schema::SCHEMA_VERSION;
+    let db = redb::Database::open(&db_path).expect("raw reopen");
+    let txn = db.begin_read().expect("read");
+    let versions = txn.open_table(SCHEMA_VERSION).expect("schema");
+    assert_eq!(
+        versions.get("version").expect("get").expect("row").value(),
+        3
+    );
 }
