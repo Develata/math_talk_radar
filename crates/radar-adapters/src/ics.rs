@@ -19,6 +19,7 @@ use crate::helpers;
 /// VCALENDAR > VTIMEZONE > STANDARD). 8 gives ample headroom while staying far
 /// below stack-overflow territory for `icalendar`'s nom parser.
 const MAX_NESTING_DEPTH: usize = 8;
+const SYNTHETIC_ICS_ID_PARAM: &str = "mtr-ics-eid";
 
 #[derive(Debug, Default)]
 pub struct IcsAdapter;
@@ -50,10 +51,14 @@ impl SourceAdapter for IcsAdapter {
             })?;
 
         let mut stubs = Vec::new();
+        let mut event_idx = 0usize;
         for component in &calendar.components {
             if component.name.as_str() != "VEVENT" {
                 continue;
             }
+            let current_event_idx = event_idx;
+            event_idx += 1;
+
             let title = component
                 .find_prop("SUMMARY")
                 .map(|p| p.val.as_str().to_string());
@@ -69,7 +74,8 @@ impl SourceAdapter for IcsAdapter {
             // cancel+add noise.
             let uid = component
                 .find_prop("UID")
-                .map(|p| p.val.as_str().to_string());
+                .map(|p| p.val.as_str().to_string())
+                .filter(|value| !value.trim().is_empty());
             let dtend = component
                 .find_prop("DTEND")
                 .map(|p| p.val.as_str().to_string());
@@ -78,16 +84,23 @@ impl SourceAdapter for IcsAdapter {
                 .map(|p| p.val.as_str().to_string());
 
             let Some(title) = title else { continue };
-            let Some(url_str) = url_str else { continue };
             if title.trim().is_empty() {
                 continue;
             }
-            let Ok(url) = Url::parse(&url_str) else {
-                continue;
-            };
-            if !crate::helpers::is_http_url(&url) {
-                continue;
-            }
+
+            // RFC 5545 does not require URL on VEVENT. EventStub does, so use
+            // a stable synthetic URL based on the post-redirect calendar URL
+            // when URL is missing/unsupported. Prefer UID as the identity;
+            // only UID-less events fall back to their deterministic VEVENT
+            // ordinal. Relative URL values are resolved against final_url.
+            let synthetic_identity = uid
+                .clone()
+                .unwrap_or_else(|| current_event_idx.to_string());
+            let url = url_str
+                .as_deref()
+                .and_then(|value| document.final_url.join(value).ok())
+                .filter(crate::helpers::is_http_url)
+                .unwrap_or_else(|| synthetic_ics_url(&document.final_url, &synthetic_identity));
 
             let date_hint =
                 parse_ics_date_range(dtstart.as_deref(), dtend.as_deref(), duration.as_deref());
@@ -110,6 +123,12 @@ impl SourceAdapter for IcsAdapter {
     }
 
     fn plan_enrichment(&self, event: &EventStub, _source: &SourceSpec) -> Vec<FetchPlan> {
+        // A URL-less VEVENT uses a synthetic URL rooted at the already-fetched
+        // calendar. Re-fetching that calendar once per such event would waste
+        // the request budget and cannot provide an HTML detail page.
+        if is_synthetic_ics_url(event) {
+            return Vec::new();
+        }
         vec![FetchPlan {
             url: event.url.clone(),
             depth: 1,
@@ -171,6 +190,41 @@ impl SourceAdapter for IcsAdapter {
             stub: event,
         })
     }
+}
+
+fn synthetic_ics_url(base: &Url, identity: &str) -> Url {
+    let mut url = base.clone();
+    let kept: Vec<(String, String)> = url
+        .query_pairs()
+        .filter(|(key, _)| key != SYNTHETIC_ICS_ID_PARAM)
+        .map(|(key, value)| (key.into_owned(), value.into_owned()))
+        .collect();
+    url.query_pairs_mut().clear();
+    url.query_pairs_mut()
+        .extend_pairs(kept.iter().map(|(key, value)| (key.as_str(), value.as_str())))
+        .append_pair(SYNTHETIC_ICS_ID_PARAM, identity);
+    url
+}
+
+fn is_synthetic_ics_url(event: &EventStub) -> bool {
+    if !event
+        .url
+        .query_pairs()
+        .any(|(key, _)| key == SYNTHETIC_ICS_ID_PARAM)
+    {
+        return false;
+    }
+    let mut stripped = event.url.clone();
+    let kept: Vec<(String, String)> = stripped
+        .query_pairs()
+        .filter(|(key, _)| key != SYNTHETIC_ICS_ID_PARAM)
+        .map(|(key, value)| (key.into_owned(), value.into_owned()))
+        .collect();
+    stripped.query_pairs_mut().clear();
+    stripped
+        .query_pairs_mut()
+        .extend_pairs(kept.iter().map(|(key, value)| (key.as_str(), value.as_str())));
+    stripped == event.source.source_url
 }
 
 /// Track the maximum nesting depth of BEGIN:/END: blocks (case-insensitive).
@@ -429,7 +483,7 @@ END:VCALENDAR
     }
 
     #[test]
-    fn discover_skips_events_without_url() {
+    fn discover_preserves_url_less_events_with_synthetic_url() {
         let ics = "\
 BEGIN:VCALENDAR
 VERSION:2.0
@@ -451,8 +505,42 @@ END:VCALENDAR
         let stubs = IcsAdapter
             .discover(&doc, &source)
             .expect("valid ICS should parse");
+        assert_eq!(stubs.len(), 2);
+        assert_eq!(stubs[0].title, "No URL Event");
+        assert_eq!(
+            stubs[0].url.as_str(),
+            "https://example.com/cal.ics?mtr-ics-eid=no-url"
+        );
+        assert_eq!(stubs[0].source.native_id.as_deref(), Some("no-url"));
+        assert!(
+            IcsAdapter.plan_enrichment(&stubs[0], &source).is_empty(),
+            "synthetic URL must not re-fetch the calendar"
+        );
+        assert_eq!(stubs[1].title, "With URL Event");
+        assert_eq!(stubs[1].url.as_str(), "https://example.com/e");
+    }
+
+    #[test]
+    fn discover_resolves_relative_event_url_against_final_url() {
+        let ics = "\
+BEGIN:VCALENDAR
+VERSION:2.0
+BEGIN:VEVENT
+UID:relative-url
+SUMMARY:Relative URL Event
+URL:events/relative
+DTSTART:20260808
+END:VEVENT
+END:VCALENDAR
+";
+        let doc = make_doc(ics.as_bytes());
+        let source = make_source();
+        let stubs = IcsAdapter.discover(&doc, &source).expect("parse ok");
         assert_eq!(stubs.len(), 1);
-        assert_eq!(stubs[0].title, "With URL Event");
+        assert_eq!(
+            stubs[0].url.as_str(),
+            "https://example.com/events/relative"
+        );
     }
 
     #[test]
