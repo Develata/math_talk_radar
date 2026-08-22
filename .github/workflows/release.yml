@@ -11,12 +11,10 @@ env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: "-D warnings"
 
-# P0-08: a release must not ship unless every CI quality gate on the tagged
-# commit is green. `needs:` chains the four CI jobs (quality, acceptance,
-# forbid-unsafe, supply-chain) so a tag push on red CI aborts the release.
-# Each CI job runs on `push: tags` as well (its trigger is `push: branches:
-# [main]` only), so this workflow re-runs the gates itself rather than
-# depending on the CI workflow's separate run.
+# A release must not ship unless every mandatory quality gate on the tagged
+# commit is green. The normal CI workflow is branch/PR scoped, so the tag
+# workflow re-runs the hard gates itself and chains the build/release jobs via
+# `needs:`.
 #
 # R3-P0-03: workflow-level permissions are read-only. Jobs that need write
 # access (build-musl for attestation, release for GitHub Release) escalate
@@ -202,21 +200,36 @@ jobs:
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
 
-      - name: Verify tag version matches Cargo.toml (§53)
+      - name: Verify tag version matches workspace package (§53)
+        env:
+          TAG_NAME: ${{ github.ref_name }}
         run: |
-          TAG="${GITHUB_REF_NAME#v}"
-          CARGO=$(grep '^version' Cargo.toml | head -1 | sed -E 's/.*"([0-9.]+)".*/\1/')
-          echo "tag version: $TAG"
-          echo "Cargo.toml version: $CARGO"
-          if [ "$TAG" != "$CARGO" ]; then
-            echo "error: tag version ($TAG) != Cargo.toml version ($CARGO)" >&2
-            exit 1
-          fi
+          python3 - <<'PY'
+          import os
+          import sys
+          import tomllib
+
+          with open("Cargo.toml", "rb") as fh:
+              manifest = tomllib.load(fh)
+          version = manifest["workspace"]["package"]["version"]
+          expected = f"v{version}"
+          actual = os.environ["TAG_NAME"]
+          print(f"tag: {actual}")
+          print(f"workspace.package.version: {version}")
+          if actual != expected:
+              print(f"error: tag {actual!r} != expected {expected!r}", file=sys.stderr)
+              raise SystemExit(1)
+          PY
 
       - name: Build static release binary
         env:
           CC_x86_64_unknown_linux_musl: musl-gcc
         run: cargo build --release --target x86_64-unknown-linux-musl
+
+      - name: Run authoritative static-release gate
+        run: |
+          cargo xtask static-release \
+            target/x86_64-unknown-linux-musl/release/math_talk_radar
 
       - name: Verify static linkage (RELS-001)
         run: |
@@ -225,9 +238,6 @@ jobs:
           # A statically-linked musl binary has no dynamic dependencies.
           # `ldd` on a fully static binary prints "not a dynamic executable"
           # (exit 1), while a static-PIE binary prints "statically linked".
-          # Both are valid static-linkage signals; only shared-library lines
-          # (e.g. "linux-vdso.so" is fine, but "libc.so" is not) indicate
-          # dynamic linkage.
           LDD_OUT=$(ldd "$BIN" 2>&1 || true)
           echo "$LDD_OUT"
           if ! echo "$LDD_OUT" | grep -qE "not a dynamic executable|statically linked"; then
@@ -249,14 +259,10 @@ jobs:
 
       - name: Stage release assets with target-triple names
         run: |
-          # B1: update.rs find_assets expects assets named with the target
-          # triple so self-update can select the correct architecture. The
-          # previous step uploaded the bare `math_talk_radar` name, which
-          # never matched find_assets' BINARY_NAME constant, so every
-          # self-update would fail with "release missing asset".
           cd target/x86_64-unknown-linux-musl/release
           cp math_talk_radar math_talk_radar-x86_64-unknown-linux-musl
           sha256sum math_talk_radar-x86_64-unknown-linux-musl > math_talk_radar-x86_64-unknown-linux-musl.sha256
+          sha256sum -c math_talk_radar-x86_64-unknown-linux-musl.sha256
 
       - name: Attest build provenance (RELS-003)
         uses: actions/attest-build-provenance@ef244123eb79f2f7a7e75d99086184180e6d0018 # v1
@@ -285,6 +291,10 @@ jobs:
         with:
           name: math_talk_radar-musl
           path: release-assets
+
+      - name: Verify checksum in clean Ubuntu 22.04
+        working-directory: release-assets
+        run: sha256sum -c math_talk_radar-x86_64-unknown-linux-musl.sha256
 
       - name: Make binary executable
         run: chmod +x release-assets/math_talk_radar-x86_64-unknown-linux-musl
