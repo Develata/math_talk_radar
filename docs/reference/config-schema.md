@@ -19,7 +19,6 @@ entrypoint = "https://www.claymath.org/events/feed/"
 allowed_hosts = ["www.claymath.org"]
 max_depth = 1
 request_budget = 20
-media_strategy = ""
 dynamic = false
 enabled = true
 ```
@@ -33,14 +32,27 @@ enabled = true
 | `tier` | `s`\|`a`\|`b`\|`unknown` | no | `unknown` | quality tier (snake_case) |
 | `kind` | enum | no | `other` | `institution_calendar`, `conference_series`, `rss_feed`, `ics_feed`, `indico`, `json_ld`, `media_archive`, `other` |
 | `adapter` | enum | no | `none` | `rss`, `ics`, `json_ld`, `indico`, `html_config`, `html_generic`, `none` |
-| `entrypoint` | URL | no | — | feed/list page URL |
+| `entrypoint` | URL | no | — | feed/list page URL; required when enabled |
 | `allowed_hosts` | string[] | no | `[]` | host allowlist for fetch redirects |
-| `max_depth` | u8 | no | `2` | max redirect/follow depth |
-| `request_budget` | u32 | no | `20` | per-source HTTP request cap |
-| `media_strategy` | string | no | `""` | media detection strategy hint |
+| `max_depth` | u8 | no | `2` | max redirect/follow depth; must be ≥1 |
+| `request_budget` | u32 | no | `20` | per-source HTTP request cap; must be ≥1 |
+| `media_strategy` | string | no | absent | v0.1 supports only `youtube_channel`, and only with `adapter = "rss"`; any other non-empty value fails semantic validation |
 | `dynamic` | bool | no | `false` | JS-rendered page flag |
 | `enabled` | bool | no | `false` | whether the source is active |
 | `selectors` | `HtmlSelectors` | no | — | required when `adapter = "html_config"` |
+
+`SourcesConfig::validate()` is part of the public configuration contract. It
+fails closed on duplicate/empty IDs, empty names, invalid enabled entrypoint
+schemes, empty allowlist hosts, zero depth/budget, unsupported media strategy,
+and missing/empty required HTML-config selectors. Parsing alone is not a
+substitute for semantic validation.
+
+For the v0.1 media plane, `media_strategy = "youtube_channel"` means an RSS
+source is a YouTube channel feed. The RSS entry itself supplies the recording
+title, watch URL, publication timestamp, and native entry identity, so no
+per-video HTML detail fetch is scheduled. Other media-strategy names are
+reserved for future versions and are rejected in v0.1 rather than silently
+ignored.
 
 ### HtmlSelectors (ADR-0005)
 
@@ -96,6 +108,9 @@ aliases = ["arithmetic geometry", "Shimura varieties"]
 ```
 
 Canonical topic + aliases; word-boundary matching (§7, `contains_phrase`).
+Event enrichment matches event title/description and talk title/abstract,
+retains talk-level matches, and rolls a deduplicated highest-confidence union
+up to the event for ranking.
 
 ## interests.example.toml (§7)
 
