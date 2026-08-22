@@ -4,11 +4,12 @@ All notable changes to `math_talk_radar` are documented here. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project adheres to [Semantic Versioning](https://semver.org/).
 
-## [0.1.0] — 2026-08-21
+## [0.1.0] — 2026-08-23
 
-First public release. Pure Rust CLI for discovering public mathematics
-conferences, talks, lecture series, recordings, slides, and related resources.
-No LLM, no browser automation, no JS runtime.
+First public release, rewritten before the v0.1.0 tag/Release is finalized.
+Pure Rust CLI for discovering public mathematics conferences, talks, lecture
+series, recordings, slides, and related resources. No LLM, no browser
+automation, no JS runtime.
 
 ### Added
 
@@ -25,9 +26,11 @@ No LLM, no browser automation, no JS runtime.
   post-redirect `final_url` (H04).
 - Fetch client with rustls TLS, HTTP policy, retry, robots (RFC 9309),
   per-source + global request budgets, global scan deadline.
-- State schema v3 with change detection: event added/updated/cancelled,
-  tombstone retention, source-health history (ADR-0011). Transactional
-  v1→v2→v3 migration with fail-closed on malformed legacy rows (R3-P1-02).
+- State schema v4 with change detection: event added/updated/cancelled,
+  tombstone retention, source-health history, collision-safe change-log keys,
+  and fixed-width ordered timestamps (ADR-0011, ADR-0013). Transactional
+  v1→v2→v3→v4 migration fails closed on malformed rows or migration key
+  collisions.
 - CLI surface (§27): `scan`, `sources list`, `doctor`, `update`, `uninstall`,
   `schema`. Interactive TTY uninstall prompt (§35.1) with non-TTY refusal
   (§35.2). `--dry-run` is zero-mutation (R3-P0-04).
@@ -46,7 +49,7 @@ No LLM, no browser automation, no JS runtime.
   + cargo-deny), `release.yml` (quality gates → musl build → container smoke
   → release with provenance attestation), `live-smoke.yml` (scheduled,
   advisory).
-- 12 ADRs, 14 plan documents, reference docs (config schema, CLI, output
+- 13 ADRs, 14 plan documents, reference docs (config schema, CLI, output
   schema), runbook, acceptance-case documentation.
 
 ### Security
