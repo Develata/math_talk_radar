@@ -18,6 +18,7 @@ use crate::changes::{ChangeRecord, detect_changes};
 use crate::migrations::run_migrations;
 use crate::schema::{
     CANCELLED_EVENTS, CHANGE_LOG, EVENTS, SCHEMA_VERSION, SOURCE_HEALTH, STATE_SCHEMA_VERSION,
+    change_log_key, source_health_key, timestamp_key,
 };
 
 /// Retention window (days) for cancelled-event tombstones (ST-16),
@@ -108,8 +109,11 @@ impl Repository {
             crate::migrations::MigrateError::UnsupportedVersion { found, expected } => {
                 StateError::Schema { expected, found }
             }
-            crate::migrations::MigrateError::MalformedLegacyRow { source_id, error } => {
-                StateError::Migration(format!("malformed legacy row for {source_id}: {error}"))
+            crate::migrations::MigrateError::MalformedStateRow { table, key, error } => {
+                StateError::Migration(format!("malformed {table} row at {key:?}: {error}"))
+            }
+            crate::migrations::MigrateError::KeyCollision { table, key } => {
+                StateError::Migration(format!("{table} migration key collision at {key:?}"))
             }
             crate::migrations::MigrateError::Backend(e) => StateError::Backend(e),
         })?;
@@ -127,11 +131,8 @@ impl Repository {
         let db = redb::Database::open(path)?;
         let version = {
             let txn = db.begin_read()?;
-            txn.open_table(SCHEMA_VERSION)
-                .ok()
-                .and_then(|table| table.get("version").ok())
-                .and_then(|opt| opt.map(|g| g.value()))
-                .unwrap_or(0)
+            let table = txn.open_table(SCHEMA_VERSION)?;
+            table.get("version")?.map(|g| g.value()).unwrap_or(0)
         };
         if version != STATE_SCHEMA_VERSION {
             return Err(StateError::Schema {
@@ -361,26 +362,14 @@ impl Repository {
             // ADR-0011 §3 (R9-H08): persist change records to CHANGE_LOG so
             // media history and change signals survive a restart (§65).
             //
-            // Key shape: `{detected_at}\x00{event_id}\x00{kind}\x00{detail}`.
-            // `detail` is appended so multiple same-kind records on the same
-            // event in one scan (e.g. several MediaAdded URLs, several
-            // ScheduleAdded talks, several SpeakerAdded names) do not collide
-            // and overwrite each other. `detected_at` remains the lex-leading
-            // field so `list_changes(since)` and the retention purge can still
-            // range-scan by timestamp prefix. `detail` is sanitized of NUL
-            // (which would otherwise split the key) — URLs, talk ids, and
-            // speaker names are all NUL-free in practice, but the sanitization
-            // is defensive against malformed input.
+            // Key shape:
+            // `{fixed_detected_at}\x00{event_id}\x00{kind}\x00{detail_digest}`.
+            // The timestamp is fixed-width UTC RFC3339 so lexical range order
+            // equals time order within a second. The BLAKE3 detail digest keeps
+            // the key bounded while preserving multiple same-kind records on
+            // one event/scan (MediaAdded URLs, talks, speakers, and so on).
             for record in &changes {
-                let detail = record.detail.as_deref().unwrap_or("");
-                let detail_sanitized = detail.replace('\u{0}', "");
-                let key = format!(
-                    "{}\u{0}{}\u{0}{}\u{0}{}",
-                    record.detected_at.to_rfc3339(),
-                    record.event_id.0,
-                    record.kind.as_str(),
-                    detail_sanitized
-                );
+                let key = change_log_key(record);
                 let bytes = serde_json::to_vec(record)?;
                 change_log.insert(key.as_str(), bytes.as_slice())?;
             }
@@ -397,7 +386,7 @@ impl Repository {
                         (now, serde_json::to_vec(&stamped)?)
                     }
                 };
-                let key = format!("{}\u{0}{}", h.source, ts.to_rfc3339());
+                let key = source_health_key(&h.source, ts);
                 health_table.insert(key.as_str(), bytes.as_slice())?;
             }
 
@@ -407,7 +396,7 @@ impl Repository {
             // parse it from the key string instead of deserializing the full
             // value — O(n) iteration but zero serde cost per row, and a
             // corrupt value can't crash the purge.
-            let cutoff_rfc3339 = retention_cutoff.to_rfc3339();
+            let cutoff_rfc3339 = timestamp_key(retention_cutoff);
             let mut expired_health_keys: Vec<String> = Vec::new();
             for entry in health_table.iter()? {
                 let (key, _value) = entry?;
@@ -488,7 +477,7 @@ impl Repository {
     pub fn list_changes(&self, since: DateTime<Utc>) -> Result<Vec<ChangeRecord>, StateError> {
         let txn = self.db.begin_read()?;
         let table = txn.open_table(CHANGE_LOG)?;
-        let start = since.to_rfc3339();
+        let start = timestamp_key(since);
         let mut out = Vec::new();
         for entry in table.range(start.as_str()..)? {
             let (_, value) = entry?;
