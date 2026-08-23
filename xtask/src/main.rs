@@ -74,9 +74,9 @@ fn run_static_release(binary: &Path) -> Result<(), Vec<String>> {
         .map_err(|e| vec![format!("failed to run `file`: {e}")])?;
     let file_text = String::from_utf8_lossy(&file_out.stdout);
     println!("file: {file_text}");
-    if !file_text.contains("statically linked") {
+    if !file_text.contains("statically linked") && !file_text.contains("static-pie linked") {
         errors.push(format!(
-            "RELS-001: `file` does not report 'statically linked'.\nOutput: {file_text}"
+            "RELS-001: `file` does not report static linkage.\nOutput: {file_text}"
         ));
     }
 
