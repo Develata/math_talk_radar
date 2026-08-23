@@ -153,35 +153,13 @@ pub async fn run_scan(args: ScanArgs) -> Result<ScanOutput, CliError> {
     let capped = events.len() > MAX_GLOBAL_CANDIDATES;
     if capped {
         events.truncate(MAX_GLOBAL_CANDIDATES);
-        // P0-04(b): SourceHealth.events was populated in fetch_source as
-        // candidates.len() at fetch time (the pre-cap count). When the global
-        // cap drops later-sorted sources' events entirely, the persisted
-        // health reported the original count while state held the capped set
-        // — an inconsistency that made source_health misleading. Recount
-        // per-source survivors so health reflects the events actually
-        // carried forward into the pipeline and persisted state.
-        //
-        // R3-P0-02: a source whose events were dropped by the global cap is
-        // no longer complete — mark it Partial so the ADR-0012 prune guard
-        // in store_scan_bundle suppresses cancellation of the truncated
-        // events. Without this, the next scan would tombstone and delete
-        // live events that were merely cut by the cap.
-        let mut survivors: HashMap<String, u32> = HashMap::new();
-        for ev in &events {
-            for s in &ev.sources {
-                *survivors.entry(s.source_id.clone()).or_default() += 1;
-            }
-        }
-        for h in &mut source_health {
-            let survivor_count = survivors.get(&h.source).copied().unwrap_or(0);
-            if h.events > survivor_count {
-                h.status = radar_core::SourceStatus::Partial;
-            }
-            h.events = survivor_count;
-        }
-    }
-
-    // CORE-11/CORE-12: enrich each event before the first scoring pass so the
+        // P0-04(b)/R3-P0-02: recount per-source survivors and mark truncated
+        // sources Partial so the ADR-0012 prune guard in store_scan_bundle
+        // suppresses cancellation of the truncated events. Without this, the
+        // next scan would tombstone and delete live events that were merely
+        // cut by the cap.
+        recount_and_mark_partial(&events, &mut source_health);
+    } // CORE-11/CORE-12: enrich each event before the first scoring pass so the
     // topic (30pt) and people (10pt) components reflect real matches and
     // influence dedup primary selection. Topic matching populates event.topics
     // from the title + description. Scholar enrichment back-fills scholar_tags
@@ -335,4 +313,118 @@ fn open_state_repo(override_path: Option<&Path>) -> Result<radar_state::Reposito
         std::fs::create_dir_all(parent).map_err(|e| format!("create state dir {parent:?}: {e}"))?;
     }
     radar_state::Repository::open(&path).map_err(|e| format!("open state db {path:?}: {e}"))
+}
+
+fn recount_and_mark_partial(events: &[Event], health: &mut [SourceHealth]) {
+    let mut survivors: HashMap<String, u32> = HashMap::new();
+    for ev in events {
+        for s in &ev.sources {
+            *survivors.entry(s.source_id.clone()).or_default() += 1;
+        }
+    }
+    for h in health {
+        let survivor_count = survivors.get(&h.source).copied().unwrap_or(0);
+        if h.events > survivor_count {
+            h.status = radar_core::SourceStatus::Partial;
+        }
+        h.events = survivor_count;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use radar_core::{
+        AccessInfo, EventDate, EventId, EventStatus, EventType, OnlineAvailability, PublicAccess,
+        SourceEvidence, SourceStatus,
+    };
+    use url::Url;
+
+    const MAX_GLOBAL_CANDIDATES: usize = 10_000;
+
+    fn make_event(source_id: &str, idx: usize) -> Event {
+        Event {
+            id: EventId(format!("evt-{source_id}-{idx}")),
+            title: format!("Talk {idx} from {source_id}"),
+            url: Some(Url::parse(&format!("https://example.com/{source_id}/{idx}")).unwrap()),
+            event_type: EventType::Unknown,
+            status: EventStatus::Unknown,
+            date: EventDate::unknown(String::new()),
+            location: None,
+            description: None,
+            topics: Vec::new(),
+            people: Vec::new(),
+            talks: Vec::new(),
+            media: Vec::new(),
+            access: AccessInfo {
+                access: PublicAccess::Unknown,
+                online: OnlineAvailability::Unknown,
+            },
+            sources: vec![SourceEvidence {
+                source_id: source_id.to_string(),
+                source_url: Url::parse("https://example.com/feed").unwrap(),
+                evidence: None,
+                captured_at: None,
+                native_id: None,
+            }],
+            score: 0.0,
+            score_components: radar_core::ScoreComponents::default(),
+            rank_reasons: Vec::new(),
+            first_seen_at: None,
+            last_seen_at: None,
+        }
+    }
+
+    fn make_health(source: &str, events: u32) -> SourceHealth {
+        SourceHealth {
+            source: source.to_string(),
+            status: SourceStatus::Ok,
+            duration_ms: 0,
+            requests: 0,
+            events,
+            recorded_at: None,
+        }
+    }
+
+    #[test]
+    fn global_cap_marks_affected_source_partial() {
+        let source_a_events: Vec<Event> = (0..6000).map(|i| make_event("a", i)).collect();
+        let source_b_events: Vec<Event> = (0..6000).map(|i| make_event("b", i)).collect();
+        let mut events: Vec<Event> = source_a_events.into_iter().chain(source_b_events).collect();
+        let mut health = vec![make_health("a", 6000), make_health("b", 6000)];
+
+        events.truncate(MAX_GLOBAL_CANDIDATES);
+        recount_and_mark_partial(&events, &mut health);
+
+        assert_eq!(health[0].status, SourceStatus::Ok);
+        assert_eq!(health[0].events, 6000);
+        assert_eq!(health[1].status, SourceStatus::Partial);
+        assert_eq!(health[1].events, 4000);
+    }
+
+    #[test]
+    fn global_cap_does_not_cancel_non_survivors() {
+        let events: Vec<Event> = (0..MAX_GLOBAL_CANDIDATES)
+            .map(|i| make_event("a", i))
+            .collect();
+        let mut health = vec![make_health("a", 12000), make_health("b", 3000)];
+
+        recount_and_mark_partial(&events, &mut health);
+
+        assert_eq!(health[0].status, SourceStatus::Partial);
+        assert_eq!(health[0].events, 10000);
+        assert_eq!(health[1].status, SourceStatus::Partial);
+        assert_eq!(health[1].events, 0);
+    }
+
+    #[test]
+    fn recount_no_truncation_keeps_ok() {
+        let events: Vec<Event> = (0..100).map(|i| make_event("a", i)).collect();
+        let mut health = vec![make_health("a", 100)];
+
+        recount_and_mark_partial(&events, &mut health);
+
+        assert_eq!(health[0].status, SourceStatus::Ok);
+        assert_eq!(health[0].events, 100);
+    }
 }
