@@ -7,8 +7,6 @@
 //! shared HTML helpers. Feed entry authors are intentionally not promoted to
 //! event speakers: an article/video author is not reliable evidence of the
 //! mathematical speaker (§P-2, §6.2).
-use url::Url;
-
 use radar_core::date::parse_date;
 use radar_core::{
     AccessInfo, AdapterError, EventCandidate, EventDate, EventStatus, EventStub, FetchPlan,
@@ -217,6 +215,7 @@ impl RssAdapter {
 mod tests {
     use super::*;
     use radar_core::{AdapterKind, EventType, MediaType, SourceKind, SourceTier};
+    use url::Url;
 
     fn test_source() -> SourceSpec {
         SourceSpec {
@@ -325,10 +324,7 @@ mod tests {
         let source = test_source();
         let stubs = RssAdapter.discover(&doc, &source).expect("valid Atom feed");
         assert_eq!(stubs.len(), 1);
-        assert_eq!(
-            stubs[0].url.as_str(),
-            "https://example.com/talks/relative"
-        );
+        assert_eq!(stubs[0].url.as_str(), "https://example.com/talks/relative");
         assert_eq!(
             stubs[0].source.native_id.as_deref(),
             Some("tag:example.com,2024:relative")

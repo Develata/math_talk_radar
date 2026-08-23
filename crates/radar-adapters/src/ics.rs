@@ -93,9 +93,7 @@ impl SourceAdapter for IcsAdapter {
             // when URL is missing/unsupported. Prefer UID as the identity;
             // only UID-less events fall back to their deterministic VEVENT
             // ordinal. Relative URL values are resolved against final_url.
-            let synthetic_identity = uid
-                .clone()
-                .unwrap_or_else(|| current_event_idx.to_string());
+            let synthetic_identity = uid.clone().unwrap_or_else(|| current_event_idx.to_string());
             let url = url_str
                 .as_deref()
                 .and_then(|value| document.final_url.join(value).ok())
@@ -201,7 +199,10 @@ fn synthetic_ics_url(base: &Url, identity: &str) -> Url {
         .collect();
     url.query_pairs_mut().clear();
     url.query_pairs_mut()
-        .extend_pairs(kept.iter().map(|(key, value)| (key.as_str(), value.as_str())))
+        .extend_pairs(
+            kept.iter()
+                .map(|(key, value)| (key.as_str(), value.as_str())),
+        )
         .append_pair(SYNTHETIC_ICS_ID_PARAM, identity);
     url
 }
@@ -220,10 +221,15 @@ fn is_synthetic_ics_url(event: &EventStub) -> bool {
         .filter(|(key, _)| key != SYNTHETIC_ICS_ID_PARAM)
         .map(|(key, value)| (key.into_owned(), value.into_owned()))
         .collect();
-    stripped.query_pairs_mut().clear();
-    stripped
-        .query_pairs_mut()
-        .extend_pairs(kept.iter().map(|(key, value)| (key.as_str(), value.as_str())));
+    if kept.is_empty() {
+        stripped.set_query(None);
+    } else {
+        stripped.query_pairs_mut().clear();
+        stripped.query_pairs_mut().extend_pairs(
+            kept.iter()
+                .map(|(key, value)| (key.as_str(), value.as_str())),
+        );
+    }
     stripped == event.source.source_url
 }
 
@@ -537,10 +543,7 @@ END:VCALENDAR
         let source = make_source();
         let stubs = IcsAdapter.discover(&doc, &source).expect("parse ok");
         assert_eq!(stubs.len(), 1);
-        assert_eq!(
-            stubs[0].url.as_str(),
-            "https://example.com/events/relative"
-        );
+        assert_eq!(stubs[0].url.as_str(), "https://example.com/events/relative");
     }
 
     #[test]

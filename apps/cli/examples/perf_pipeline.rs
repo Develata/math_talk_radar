@@ -105,7 +105,11 @@ fn run_distinct_case(
     let deduped = dedup_events(events);
     let dedup_ms = started.elapsed().as_millis();
     if deduped.len() != n {
-        return Err(format!("distinct dedup expected {n} clusters, got {}", deduped.len()).into());
+        return Err(format!(
+            "distinct dedup expected {n} clusters, got {}",
+            deduped.len()
+        )
+        .into());
     }
 
     let dir = tempdir()?;
@@ -136,7 +140,8 @@ fn run_distinct_case(
         OutputFormat::Json,
         DetailLevel::Full,
         &mut io::sink(),
-    )?;
+    )
+    .map_err(|e| Box::<dyn Error>::from(e.message))?;
     let json_ms = started.elapsed().as_millis();
 
     let started = Instant::now();
@@ -145,7 +150,8 @@ fn run_distinct_case(
         OutputFormat::Jsonl,
         DetailLevel::Full,
         &mut io::sink(),
-    )?;
+    )
+    .map_err(|e| Box::<dyn Error>::from(e.message))?;
     let jsonl_ms = started.elapsed().as_millis();
 
     Ok(CaseMetrics {

@@ -99,7 +99,11 @@ fn run_static_release(binary: &Path) -> Result<(), Vec<String>> {
         Err(e) => errors.push(format!("failed to run `ldd`: {e}")),
     }
 
-    if errors.is_empty() { Ok(()) } else { Err(errors) }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
+    }
 }
 
 fn run_baseline(root: &Path) -> Result<(), Vec<String>> {
@@ -224,7 +228,10 @@ fn run_baseline(root: &Path) -> Result<(), Vec<String>> {
         {
             Ok(out) if out.status.success() => {
                 let stdout = String::from_utf8_lossy(&out.stdout);
-                for line in stdout.lines().filter(|line| line.starts_with("PERF_PIPELINE_")) {
+                for line in stdout
+                    .lines()
+                    .filter(|line| line.starts_with("PERF_PIPELINE_"))
+                {
                     println!("baseline: {line}");
                 }
                 let expected_cases = ["n=1000;", "n=5000;", "n=10000;"];
@@ -232,9 +239,7 @@ fn run_baseline(root: &Path) -> Result<(), Vec<String>> {
                     if !stdout.lines().any(|line| {
                         line.starts_with("PERF_PIPELINE_CASE:") && line.contains(marker)
                     }) {
-                        errors.push(format!(
-                            "pipeline: missing benchmark result for {marker}"
-                        ));
+                        errors.push(format!("pipeline: missing benchmark result for {marker}"));
                     }
                 }
                 for required in [
@@ -257,7 +262,11 @@ fn run_baseline(root: &Path) -> Result<(), Vec<String>> {
         }
     }
 
-    if errors.is_empty() { Ok(()) } else { Err(errors) }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
+    }
 }
 
 fn run_check(root: &Path) -> Result<(), Vec<String>> {
@@ -265,12 +274,20 @@ fn run_check(root: &Path) -> Result<(), Vec<String>> {
     errors.extend(validate_source_registry(root));
     errors.extend(validate_matrix(root));
     errors.extend(validate_schema_drift(root));
-    if errors.is_empty() { Ok(()) } else { Err(errors) }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
+    }
 }
 
 fn run_check_matrix(root: &Path) -> Result<(), Vec<String>> {
     let errors = validate_matrix(root);
-    if errors.is_empty() { Ok(()) } else { Err(errors) }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
+    }
 }
 
 fn validate_schema_drift(root: &Path) -> Vec<String> {
@@ -281,7 +298,8 @@ fn validate_schema_drift(root: &Path) -> Vec<String> {
             if content.trim().is_empty() {
                 errors.push(format!(
                     "schema drift: {} is empty (regenerate with `cargo run -- schema > {}`)",
-                    golden.display(), golden.display()
+                    golden.display(),
+                    golden.display()
                 ));
             }
             if !content.contains("\"ScanOutput\"") {
@@ -293,32 +311,72 @@ fn validate_schema_drift(root: &Path) -> Vec<String> {
         }
         Err(e) => errors.push(format!(
             "schema drift: cannot read {}: {e} (regenerate with `cargo run -- schema > {}`)",
-            golden.display(), golden.display()
+            golden.display(),
+            golden.display()
         )),
     }
     errors
 }
 
 const SRC_COLS: &[&str] = &[
-    "id", "name", "tier", "kind", "adapter", "entrypoint", "allowed_hosts",
-    "max_depth", "request_budget", "media_strategy", "dynamic", "enabled",
-    "list_fixture", "detail_fixture", "last_verified", "status", "notes",
+    "id",
+    "name",
+    "tier",
+    "kind",
+    "adapter",
+    "entrypoint",
+    "allowed_hosts",
+    "max_depth",
+    "request_budget",
+    "media_strategy",
+    "dynamic",
+    "enabled",
+    "list_fixture",
+    "detail_fixture",
+    "last_verified",
+    "status",
+    "notes",
 ];
 const ADAPTERS_WITH_DETAIL: &[&str] = &["rss", "ics", "jsonld", "html_config", "html_generic"];
 const SRC_REQUIRED: &[&str] = &[
-    "id", "name", "tier", "kind", "adapter", "max_depth", "request_budget",
-    "dynamic", "enabled", "status",
+    "id",
+    "name",
+    "tier",
+    "kind",
+    "adapter",
+    "max_depth",
+    "request_budget",
+    "dynamic",
+    "enabled",
+    "status",
 ];
 const VALID_TIERS: &[&str] = &["S", "A", "B", "unknown"];
 const VALID_KINDS: &[&str] = &[
-    "institution_calendar", "conference_series", "rss_feed", "ics_feed", "indico",
-    "jsonld", "media_archive", "other",
+    "institution_calendar",
+    "conference_series",
+    "rss_feed",
+    "ics_feed",
+    "indico",
+    "jsonld",
+    "media_archive",
+    "other",
 ];
 const VALID_ADAPTERS: &[&str] = &[
-    "rss", "ics", "jsonld", "indico", "html_config", "html_generic", "none",
+    "rss",
+    "ics",
+    "jsonld",
+    "indico",
+    "html_config",
+    "html_generic",
+    "none",
 ];
 const VALID_SRC_STATUS: &[&str] = &[
-    "pending_audit", "audited", "enabled", "disabled", "broken", "dynamic_unsupported",
+    "pending_audit",
+    "audited",
+    "enabled",
+    "disabled",
+    "broken",
+    "dynamic_unsupported",
 ];
 
 fn validate_source_registry(root: &Path) -> Vec<String> {
@@ -373,35 +431,61 @@ fn validate_source_registry(root: &Path) -> Vec<String> {
             errors.push(format!("source-registry row {i}: duplicate id '{id}'"));
         }
         if !VALID_TIERS.contains(&cell(i_tier)) {
-            errors.push(format!("source-registry row {i} ({id}): invalid tier '{}'", cell(i_tier)));
+            errors.push(format!(
+                "source-registry row {i} ({id}): invalid tier '{}'",
+                cell(i_tier)
+            ));
         }
         if !VALID_KINDS.contains(&cell(i_kind)) {
-            errors.push(format!("source-registry row {i} ({id}): invalid kind '{}'", cell(i_kind)));
+            errors.push(format!(
+                "source-registry row {i} ({id}): invalid kind '{}'",
+                cell(i_kind)
+            ));
         }
         if !VALID_ADAPTERS.contains(&cell(i_adapter)) {
-            errors.push(format!("source-registry row {i} ({id}): invalid adapter '{}'", cell(i_adapter)));
+            errors.push(format!(
+                "source-registry row {i} ({id}): invalid adapter '{}'",
+                cell(i_adapter)
+            ));
         }
         if !cell(i_dyn).is_empty() && !["true", "false"].contains(&cell(i_dyn)) {
-            errors.push(format!("source-registry row {i} ({id}): dynamic must be true/false"));
+            errors.push(format!(
+                "source-registry row {i} ({id}): dynamic must be true/false"
+            ));
         }
         if !cell(i_en).is_empty() && !["true", "false"].contains(&cell(i_en)) {
-            errors.push(format!("source-registry row {i} ({id}): enabled must be true/false"));
+            errors.push(format!(
+                "source-registry row {i} ({id}): enabled must be true/false"
+            ));
         }
-        for (col, val) in [("max_depth", cell(i_depth)), ("request_budget", cell(i_budget))] {
+        for (col, val) in [
+            ("max_depth", cell(i_depth)),
+            ("request_budget", cell(i_budget)),
+        ] {
             if !val.is_empty() && val.parse::<u32>().is_err() {
-                errors.push(format!("source-registry row {i} ({id}): {col} not an integer: '{val}'"));
+                errors.push(format!(
+                    "source-registry row {i} ({id}): {col} not an integer: '{val}'"
+                ));
             }
         }
         let status = cell(i_status);
         if !VALID_SRC_STATUS.contains(&status) {
-            errors.push(format!("source-registry row {i} ({id}): invalid status '{status}'"));
+            errors.push(format!(
+                "source-registry row {i} ({id}): invalid status '{status}'"
+            ));
         }
 
-        if status == "pending_audit" { pending_audit_count += 1; } else { audited_count += 1; }
+        if status == "pending_audit" {
+            pending_audit_count += 1;
+        } else {
+            audited_count += 1;
+        }
         if cell(i_en) == "true" {
             let fixture = cell(i_list_fixture);
             if !fixture.is_empty() {
-                let fixture_path = root.join("crates/radar-adapters/tests/fixtures").join(fixture);
+                let fixture_path = root
+                    .join("crates/radar-adapters/tests/fixtures")
+                    .join(fixture);
                 if fixture_path.exists() {
                     enabled_fixture_count += 1;
                 } else {
@@ -412,13 +496,17 @@ fn validate_source_registry(root: &Path) -> Vec<String> {
             }
             let detail = cell(i_detail_fixture);
             if !detail.is_empty() {
-                let detail_path = root.join("crates/radar-adapters/tests/fixtures").join(detail);
+                let detail_path = root
+                    .join("crates/radar-adapters/tests/fixtures")
+                    .join(detail);
                 if !detail_path.exists() {
                     errors.push(format!(
                         "source-registry row {i} ({id}): detail_fixture '{detail}' not found on disk"
                     ));
                 }
-            } else if ADAPTERS_WITH_DETAIL.contains(&cell(i_adapter)) && cell(i_media) != "youtube_channel" {
+            } else if ADAPTERS_WITH_DETAIL.contains(&cell(i_adapter))
+                && cell(i_media) != "youtube_channel"
+            {
                 errors.push(format!(
                     "source-registry row {i} ({id}): enabled source with adapter '{}' requires detail_fixture (§45)",
                     cell(i_adapter)
@@ -460,7 +548,9 @@ fn validate_source_registry(root: &Path) -> Vec<String> {
 
     if pending_audit_count == 0 {
         if audited_count < 20 {
-            errors.push(format!("LIVE-001: need >=20 audited sources, got {audited_count}"));
+            errors.push(format!(
+                "LIVE-001: need >=20 audited sources, got {audited_count}"
+            ));
         }
         if enabled_fixture_count < 10 {
             errors.push(format!(
@@ -471,21 +561,40 @@ fn validate_source_registry(root: &Path) -> Vec<String> {
             errors.push(format!(
                 "coverage: need >=2 distinct adapter kinds among enabled sources, got {} ({})",
                 enabled_adapter_kinds.len(),
-                enabled_adapter_kinds.iter().copied().collect::<Vec<_>>().join(", ")
+                enabled_adapter_kinds
+                    .iter()
+                    .copied()
+                    .collect::<Vec<_>>()
+                    .join(", ")
             ));
         }
         if media_source_count < 3 {
-            eprintln!("warning: §18 coverage: need >=3 media/recording sources, got {media_source_count}");
+            eprintln!(
+                "warning: §18 coverage: need >=3 media/recording sources, got {media_source_count}"
+            );
         }
     }
     errors
 }
 
 const MATRIX_COLS: &[&str] = &[
-    "case_id", "requirement", "plan_ref", "test_surface", "automation", "gate", "evidence", "status",
+    "case_id",
+    "requirement",
+    "plan_ref",
+    "test_surface",
+    "automation",
+    "gate",
+    "evidence",
+    "status",
 ];
 const MATRIX_REQUIRED: &[&str] = &[
-    "case_id", "requirement", "plan_ref", "test_surface", "automation", "gate", "status",
+    "case_id",
+    "requirement",
+    "plan_ref",
+    "test_surface",
+    "automation",
+    "gate",
+    "status",
 ];
 const VALID_GATES: &[&str] = &["hard", "advisory"];
 const VALID_STATUS: &[&str] = &["pending", "pass", "fail", "skipped"];
@@ -498,11 +607,15 @@ fn validate_matrix(root: &Path) -> Vec<String> {
         Err(e) => return vec![format!("cannot read {}: {e}", path.display())],
     };
     let lines: Vec<&str> = content.lines().filter(|l| !l.trim().is_empty()).collect();
-    if lines.is_empty() { return vec!["acceptance-matrix.tsv is empty".into()]; }
+    if lines.is_empty() {
+        return vec!["acceptance-matrix.tsv is empty".into()];
+    }
     let header: Vec<&str> = lines[0].split('\t').collect();
     for col in MATRIX_COLS {
         if !header.contains(col) {
-            errors.push(format!("acceptance-matrix: missing required column '{col}'"));
+            errors.push(format!(
+                "acceptance-matrix: missing required column '{col}'"
+            ));
         }
     }
     let idx = |name: &str| header.iter().position(|h| *h == name);
@@ -529,7 +642,9 @@ fn validate_matrix(root: &Path) -> Vec<String> {
 
         for col in MATRIX_REQUIRED {
             if cell(idx(col)).is_empty() {
-                errors.push(format!("matrix row {i} ({case_id}): empty required column '{col}'"));
+                errors.push(format!(
+                    "matrix row {i} ({case_id}): empty required column '{col}'"
+                ));
             }
         }
         if !seen.insert(case_id.to_string()) {
@@ -539,20 +654,28 @@ fn validate_matrix(root: &Path) -> Vec<String> {
             errors.push(format!("matrix row {i} ({case_id}): invalid gate '{gate}'"));
         }
         if !VALID_STATUS.contains(&status) {
-            errors.push(format!("matrix row {i} ({case_id}): invalid status '{status}'"));
+            errors.push(format!(
+                "matrix row {i} ({case_id}): invalid status '{status}'"
+            ));
         }
         if gate == "hard" {
             if test_surface.is_empty() {
-                errors.push(format!("matrix row {i} ({case_id}): hard gate with empty test_surface"));
+                errors.push(format!(
+                    "matrix row {i} ({case_id}): hard gate with empty test_surface"
+                ));
             }
             if automation.is_empty() {
-                errors.push(format!("matrix row {i} ({case_id}): hard gate with empty automation (DOC-002)"));
+                errors.push(format!(
+                    "matrix row {i} ({case_id}): hard gate with empty automation (DOC-002)"
+                ));
             }
         }
         if !plan_ref.is_empty() {
             let p = root.join(plan_ref);
             if !p.exists() {
-                errors.push(format!("matrix row {i} ({case_id}): plan_ref not found: {plan_ref}"));
+                errors.push(format!(
+                    "matrix row {i} ({case_id}): plan_ref not found: {plan_ref}"
+                ));
             } else {
                 referenced_plans.insert(plan_ref.to_string());
             }
@@ -560,7 +683,9 @@ fn validate_matrix(root: &Path) -> Vec<String> {
         if !evidence.is_empty() {
             let p = root.join(evidence);
             if !p.exists() {
-                errors.push(format!("matrix row {i} ({case_id}): evidence not found: {evidence}"));
+                errors.push(format!(
+                    "matrix row {i} ({case_id}): evidence not found: {evidence}"
+                ));
             }
         }
     }
@@ -578,7 +703,9 @@ fn validate_matrix(root: &Path) -> Vec<String> {
         }
         for plan in &all_plans {
             if !referenced_plans.contains(plan) {
-                errors.push(format!("DOC-001: plan '{plan}' has no acceptance case referencing it"));
+                errors.push(format!(
+                    "DOC-001: plan '{plan}' has no acceptance case referencing it"
+                ));
             }
         }
     }
@@ -617,22 +744,35 @@ fn run_live_smoke(root: &Path) -> Result<(), Vec<String>> {
     }
 
     let (total, healthy, per_source) = if exit_code == 0 {
-        parse_live_smoke_health(&scan.stdout)
-            .map_err(|e| vec![format!("could not parse scan output (instrumentation): {e}")])?
+        parse_live_smoke_health(&scan.stdout).map_err(|e| {
+            vec![format!(
+                "could not parse scan output (instrumentation): {e}"
+            )]
+        })?
     } else {
         (count_enabled_sources(&binary), 0, Vec::new())
     };
 
-    let ratio = if total > 0 { healthy as f64 / total as f64 * 100.0 } else { 0.0 };
+    let ratio = if total > 0 {
+        healthy as f64 / total as f64 * 100.0
+    } else {
+        0.0
+    };
     println!("live-smoke report");
     println!("  total enabled:  {total}");
     println!("  healthy (Ok|Partial): {healthy}");
     println!("  success ratio:  {ratio:.1}%");
     if !per_source.is_empty() {
         println!();
-        println!("  {:<24} {:<16} {:>7} {:>10}", "SOURCE", "STATUS", "EVENTS", "DURATION");
+        println!(
+            "  {:<24} {:<16} {:>7} {:>10}",
+            "SOURCE", "STATUS", "EVENTS", "DURATION"
+        );
         for (source, status, events, duration_ms) in &per_source {
-            println!("  {:<24} {:<16} {:>7} {:>9}ms", source, status, events, duration_ms);
+            println!(
+                "  {:<24} {:<16} {:>7} {:>9}ms",
+                source, status, events, duration_ms
+            );
         }
     } else if exit_code == 4 {
         println!("  (all sources failed — possible network outage on runner)");
@@ -641,7 +781,8 @@ fn run_live_smoke(root: &Path) -> Result<(), Vec<String>> {
 }
 
 fn parse_live_smoke_health(stdout: &[u8]) -> Result<SmokeSummary, String> {
-    let v: serde_json::Value = serde_json::from_slice(stdout).map_err(|e| format!("invalid JSON: {e}"))?;
+    let v: serde_json::Value =
+        serde_json::from_slice(stdout).map_err(|e| format!("invalid JSON: {e}"))?;
     let health = v
         .get("source_health")
         .ok_or("missing 'source_health' field")?
@@ -654,14 +795,19 @@ fn parse_live_smoke_health(stdout: &[u8]) -> Result<SmokeSummary, String> {
         let status = h.get("status").and_then(|v| v.as_str()).unwrap_or("?");
         let events = h.get("events").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
         let duration_ms = h.get("duration_ms").and_then(|v| v.as_u64()).unwrap_or(0);
-        if matches!(status, "ok" | "partial") { healthy += 1; }
+        if matches!(status, "ok" | "partial") {
+            healthy += 1;
+        }
         per_source.push((source.to_string(), status.to_string(), events, duration_ms));
     }
     Ok((health.len(), healthy, per_source))
 }
 
 fn count_enabled_sources(binary: &Path) -> usize {
-    match std::process::Command::new(binary).args(["sources", "list"]).output() {
+    match std::process::Command::new(binary)
+        .args(["sources", "list"])
+        .output()
+    {
         Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout)
             .lines()
             .filter(|l| l.ends_with("true"))

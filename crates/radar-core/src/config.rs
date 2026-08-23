@@ -517,7 +517,9 @@ adapter = "rss"
 media_strategy = "youtub_channel"
 "#;
         let config = super::SourcesConfig::parse(toml).expect("TOML parses");
-        let err = config.validate().expect_err("unknown media strategy must fail");
+        let err = config
+            .validate()
+            .expect_err("unknown media strategy must fail");
         assert!(
             matches!(err, super::ConfigError::InvalidMediaStrategy(ref id, ref strategy)
                 if id == "bad-media" && strategy == "youtub_channel")
@@ -694,7 +696,10 @@ name = "Bad"
 typo_field = "oops"
 "#;
         let result = super::SourcesConfig::parse(toml);
-        assert!(result.is_err(), "unknown field must fail at parse time, not silently ignored");
+        assert!(
+            result.is_err(),
+            "unknown field must fail at parse time, not silently ignored"
+        );
     }
 
     #[test]
@@ -713,7 +718,10 @@ detail_date = "time"
 bogus_selector = "x"
 "#;
         let result = super::SourcesConfig::parse(toml);
-        assert!(result.is_err(), "unknown selector field must fail at parse time");
+        assert!(
+            result.is_err(),
+            "unknown selector field must fail at parse time"
+        );
     }
 
     #[test]
@@ -730,6 +738,8 @@ request_budget = 30
 enabled = true
 "#;
         let config = super::SourcesConfig::parse(toml).expect("TOML parses");
-        config.validate().expect("complete enabled source must pass");
+        config
+            .validate()
+            .expect("complete enabled source must pass");
     }
 }

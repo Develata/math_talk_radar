@@ -503,11 +503,18 @@ mod tests {
         let doc = make_doc(html);
         let spec = make_spec();
         let stubs = JsonLdAdapter.discover(&doc, &spec).unwrap();
-        assert!(stubs.len() >= 3, "expected at least 3 stubs, got {}", stubs.len());
+        assert!(
+            stubs.len() >= 3,
+            "expected at least 3 stubs, got {}",
+            stubs.len()
+        );
         assert_eq!(stubs[0].title, "Conf A");
         assert_eq!(stubs[1].title, "Conf B");
         assert_eq!(stubs[2].title, "Conf C");
-        assert!(stubs[0].date_hint.is_some(), "startDate should yield a date hint");
+        assert!(
+            stubs[0].date_hint.is_some(),
+            "startDate should yield a date hint"
+        );
     }
 
     #[test]
@@ -535,10 +542,10 @@ mod tests {
 
     #[test]
     fn discover_fragment_at_id_uses_synthetic_url_but_keeps_native_id() {
-        let html = r#"<script type="application/ld+json">[
+        let html = r##"<script type="application/ld+json">[
             {"@type":"Event","name":"Same","@id":"#event-a"},
             {"@type":"Event","name":"Same","@id":"#event-b"}
-        ]</script>"#;
+        ]</script>"##;
         let doc = make_doc(html);
         let stubs = JsonLdAdapter.discover(&doc, &make_spec()).unwrap();
         assert_eq!(stubs.len(), 2);
@@ -560,11 +567,14 @@ mod tests {
         let doc = make_doc(html);
         let stubs = JsonLdAdapter.discover(&doc, &make_spec()).unwrap();
         let date = stubs[0].date_hint.as_ref().expect("date hint");
-        assert_eq!(date.start_date(), chrono::NaiveDate::from_ymd_opt(2026, 8, 1));
         assert_eq!(
-            date.end.as_ref().and_then(|end| match end {
-                DateTimeOrDate::Date(value) => Some(*value),
-                DateTimeOrDate::DateTime(value) => Some(value.date_naive()),
+            date.start_date(),
+            chrono::NaiveDate::from_ymd_opt(2026, 8, 1)
+        );
+        assert_eq!(
+            date.end.as_ref().map(|end| match end {
+                DateTimeOrDate::Date(value) => *value,
+                DateTimeOrDate::DateTime(value) => value.date_naive(),
             }),
             chrono::NaiveDate::from_ymd_opt(2026, 8, 5)
         );
@@ -674,8 +684,14 @@ mod tests {
             )
             .unwrap();
         assert!(!candidate.event.talks.is_empty());
-        assert_eq!(candidate.event.talks[0].speaker[0].role, PersonRole::Speaker);
-        assert_eq!(candidate.event.talks[0].speaker[0].canonical_name, "Prof. X");
+        assert_eq!(
+            candidate.event.talks[0].speaker[0].role,
+            PersonRole::Speaker
+        );
+        assert_eq!(
+            candidate.event.talks[0].speaker[0].canonical_name,
+            "Prof. X"
+        );
         assert_eq!(candidate.stub.title, "Talk A");
     }
 
@@ -744,7 +760,10 @@ mod tests {
                 &spec,
             )
             .unwrap();
-        assert_eq!(candidate.event.description.as_deref(), Some("A conference on algebra"));
+        assert_eq!(
+            candidate.event.description.as_deref(),
+            Some("A conference on algebra")
+        );
         assert_eq!(candidate.event.location.as_ref().unwrap().name, "Berlin");
     }
 
@@ -768,17 +787,22 @@ mod tests {
                 native_id: None,
             },
         };
-        let candidate = JsonLdAdapter.enrich(stub, std::slice::from_ref(&doc), &spec).unwrap();
-        assert_eq!(candidate.event.description.as_deref(), Some("Real description"));
+        let candidate = JsonLdAdapter
+            .enrich(stub, std::slice::from_ref(&doc), &spec)
+            .unwrap();
+        assert_eq!(
+            candidate.event.description.as_deref(),
+            Some("Real description")
+        );
         assert!(!candidate.event.talks.is_empty());
     }
 
     #[test]
     fn enrich_matches_fragment_at_id_by_native_id() {
-        let html = r#"<script type="application/ld+json">
+        let html = r##"<script type="application/ld+json">
         {"@type":"Event","name":"Different Title","@id":"#event-a",
          "description":"Fragment identity description"}
-        </script>"#;
+        </script>"##;
         let doc = make_doc(html);
         let spec = make_spec();
         let stub = EventStub {
@@ -793,7 +817,9 @@ mod tests {
                 native_id: Some("#event-a".into()),
             },
         };
-        let candidate = JsonLdAdapter.enrich(stub, std::slice::from_ref(&doc), &spec).unwrap();
+        let candidate = JsonLdAdapter
+            .enrich(stub, std::slice::from_ref(&doc), &spec)
+            .unwrap();
         assert_eq!(
             candidate.event.description.as_deref(),
             Some("Fragment identity description")
@@ -848,8 +874,13 @@ mod tests {
                 native_id: None,
             },
         };
-        let candidate = JsonLdAdapter.enrich(stub_s2, std::slice::from_ref(&doc), &spec).unwrap();
-        assert_eq!(candidate.event.description.as_deref(), Some("Seminar TWO description"));
+        let candidate = JsonLdAdapter
+            .enrich(stub_s2, std::slice::from_ref(&doc), &spec)
+            .unwrap();
+        assert_eq!(
+            candidate.event.description.as_deref(),
+            Some("Seminar TWO description")
+        );
     }
 
     #[test]
@@ -875,7 +906,9 @@ mod tests {
                 native_id: None,
             },
         };
-        let candidate = JsonLdAdapter.enrich(stub, std::slice::from_ref(&doc), &spec).unwrap();
+        let candidate = JsonLdAdapter
+            .enrich(stub, std::slice::from_ref(&doc), &spec)
+            .unwrap();
         assert!(candidate.event.description.is_none());
     }
 
@@ -899,7 +932,9 @@ mod tests {
                 native_id: None,
             },
         };
-        let candidate = JsonLdAdapter.enrich(stub, std::slice::from_ref(&doc), &spec).unwrap();
+        let candidate = JsonLdAdapter
+            .enrich(stub, std::slice::from_ref(&doc), &spec)
+            .unwrap();
         assert_eq!(
             candidate.event.description.as_deref(),
             Some("The only Seminar description")
@@ -923,7 +958,10 @@ mod tests {
             )
             .unwrap();
         let desc = candidate.event.description.as_deref().expect("description");
-        assert!(!desc.contains('<'), "description must not contain HTML tags, got: {desc}");
+        assert!(
+            !desc.contains('<'),
+            "description must not contain HTML tags, got: {desc}"
+        );
         assert!(
             desc.contains("great") && desc.contains("conference") && desc.contains("algebra"),
             "description text must be preserved, got: {desc}"
