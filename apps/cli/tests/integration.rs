@@ -62,6 +62,57 @@ fn bin() -> Command {
     Command::cargo_bin("math_talk_radar").expect("binary present")
 }
 
+#[test]
+fn sec_003_invalid_config_never_echoes_values() {
+    let marker = "SEC003_SYNTHETIC_MARKER_NOT_A_CREDENTIAL";
+    for (flag, contents) in [
+        (
+            "--sources",
+            format!("[[sources]]\nid = 'fixture'\nenabled = '{marker}'\n"),
+        ),
+        (
+            "--interests",
+            format!("[interests]\nnumber_theory = '{marker}'\n"),
+        ),
+        ("--scholars", format!("scholars = '{marker}'\n")),
+    ] {
+        let file = NamedTempFile::new().unwrap();
+        std::fs::write(file.path(), contents).unwrap();
+        let result = bin()
+            .args(["scan", "--no-state", flag])
+            .arg(file.path())
+            .assert()
+            .code(3);
+        let stderr = String::from_utf8_lossy(&result.get_output().stderr);
+        assert!(
+            !stderr.contains(marker),
+            "{flag} reflected a configuration value"
+        );
+        assert!(
+            stderr.contains("line"),
+            "keep a useful location without the input value"
+        );
+        assert!(result.get_output().stdout.is_empty());
+    }
+}
+
+#[test]
+fn sec_003_semantic_config_error_does_not_echo_source_values() {
+    let marker = "SEC003_SYNTHETIC_MARKER_NOT_A_CREDENTIAL";
+    let file = write_sources_config(&[
+        (false, marker, "https://example.org/feed"),
+        (false, marker, "https://example.org/feed"),
+    ]);
+    let result = bin()
+        .args(["scan", "--no-state", "--sources"])
+        .arg(file.path())
+        .assert()
+        .code(3);
+    let stderr = String::from_utf8_lossy(&result.get_output().stderr);
+    assert!(stderr.contains("duplicate source id"));
+    assert!(!stderr.contains(marker));
+}
+
 // CLI-001: --help lists all 6 subcommands.
 #[test]
 fn cli_001_help_lists_all_subcommands() {

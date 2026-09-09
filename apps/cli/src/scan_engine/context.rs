@@ -73,7 +73,11 @@ pub(super) fn load(args: &ScanArgs) -> Result<ScanContext, CliError> {
                 CliError::config(format!("failed to read --interests {path:?}: {e}"))
             })?;
             Some(InterestWeights::parse(&content).map_err(|e| {
-                CliError::config(format!("failed to parse --interests {path:?}: {e}"))
+                crate::config_loader::parse_error(
+                    &format!("--interests {path:?}"),
+                    &content,
+                    e.span(),
+                )
             })?)
         }
         None => None,
@@ -93,7 +97,11 @@ pub(super) fn load(args: &ScanArgs) -> Result<ScanContext, CliError> {
                 CliError::config(format!("failed to read --scholars {path:?}: {e}"))
             })?;
             radar_core::ScholarsConfig::parse(&content).map_err(|e| {
-                CliError::config(format!("failed to parse --scholars {path:?}: {e}"))
+                crate::config_loader::parse_error(
+                    &format!("--scholars {path:?}"),
+                    &content,
+                    e.span(),
+                )
             })?
         }
         None => radar_core::ScholarsConfig::embedded()

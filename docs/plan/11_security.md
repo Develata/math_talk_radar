@@ -35,6 +35,11 @@ must cap body size, and a malformed feed affects only that source.
 ## No secret logging (§42, SEC-003)
 
 Never log full HTML, full responses, user config contents, or tokens.
+CLI configuration failures report the file/context and source position without
+rendering parser snippets or values. Semantic validation reports the constraint
+without reflecting source-provided values. Update failures omit input URLs,
+redirect values, credentials and query parameters; attached HTTP errors have
+their URL removed. Tests use synthetic sentinels rather than real credentials.
 
 ## Acceptance cases
 

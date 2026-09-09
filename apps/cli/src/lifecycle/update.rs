@@ -301,15 +301,12 @@ fn validate_url_host(url: &url::Url, allowed_hosts: &[&str]) -> Result<(), CliEr
         return Ok(());
     }
     if url.scheme() != "https" {
-        return Err(CliError::update(format!(
-            "update URL must be HTTPS, got '{}': {url}",
-            url.scheme()
-        )));
+        return Err(CliError::update("update URL must be HTTPS"));
     }
     let host = url.host_str().unwrap_or("");
     if !allowed_hosts.contains(&host) {
         return Err(CliError::update(format!(
-            "update URL host '{host}' not in allowed list {:?}",
+            "update URL host not in allowed list {:?}",
             allowed_hosts
         )));
     }
@@ -320,8 +317,8 @@ fn validate_url_host(url: &url::Url, allowed_hosts: &[&str]) -> Result<(), CliEr
 /// points to the expected origin. Wrapper around `validate_url_host` for the
 /// initial (pre-redirect) download URL string.
 fn validate_download_url(url: &str) -> Result<(), CliError> {
-    let parsed = url::Url::parse(url)
-        .map_err(|e| CliError::update(format!("invalid download URL '{url}': {e}")))?;
+    let parsed =
+        url::Url::parse(url).map_err(|e| CliError::update(format!("invalid download URL: {e}")))?;
     validate_url_host(&parsed, DOWNLOAD_HOSTS)
 }
 
@@ -352,7 +349,7 @@ async fn send_validated(
     extra_headers: Option<(&str, &str)>,
 ) -> Result<reqwest::Response, CliError> {
     let mut current =
-        url::Url::parse(url).map_err(|e| CliError::update(format!("invalid URL '{url}': {e}")))?;
+        url::Url::parse(url).map_err(|e| CliError::update(format!("invalid URL: {e}")))?;
     validate_url_host(&current, allowed_hosts)?;
     let mut hops: u8 = 0;
     loop {
@@ -363,27 +360,25 @@ async fn send_validated(
         let resp = req
             .send()
             .await
-            .map_err(|e| CliError::update(format!("request to {current} failed: {e}")))?;
+            .map_err(|e| CliError::update(format!("update request failed: {}", e.without_url())))?;
         if !resp.status().is_redirection() {
             return Ok(resp);
         }
         hops += 1;
         if hops > MAX_REDIRECTS {
             return Err(CliError::update(format!(
-                "redirect chain from {url} exceeded {MAX_REDIRECTS} hops"
+                "update redirect chain exceeded {MAX_REDIRECTS} hops"
             )));
         }
         let location = resp
             .headers()
             .get(reqwest::header::LOCATION)
             .and_then(|v| v.to_str().ok())
-            .ok_or_else(|| {
-                CliError::update(format!("redirect from {current} missing Location header"))
-            })?;
+            .ok_or_else(|| CliError::update("update redirect missing Location header"))?;
         // Resolve relative redirects against the current URL.
         let next = current
             .join(location)
-            .map_err(|e| CliError::update(format!("invalid redirect '{location}': {e}")))?;
+            .map_err(|e| CliError::update(format!("invalid update redirect: {e}")))?;
         // R9-H11: re-validate every hop — the host can change on redirect.
         validate_url_host(&next, allowed_hosts)?;
         current = next;
@@ -409,7 +404,7 @@ async fn fetch_latest_release() -> Result<Release, CliError> {
     }
     resp.json::<Release>()
         .await
-        .map_err(|e| CliError::update(format!("release JSON parse failed: {e}")))
+        .map_err(|e| CliError::update(format!("release JSON parse failed: {}", e.without_url())))
 }
 
 fn parse_tag(tag: &str) -> Result<Version, CliError> {
@@ -476,7 +471,7 @@ async fn download_bytes(url: &str, max_bytes: u64) -> Result<Vec<u8>, CliError> 
     let bytes = resp
         .bytes()
         .await
-        .map_err(|e| CliError::update(format!("download body read failed: {e}")))?;
+        .map_err(|e| CliError::update(format!("download body read failed: {}", e.without_url())))?;
     if bytes.len() as u64 > max_bytes {
         return Err(CliError::update(format!(
             "download body {} bytes exceeds limit {max_bytes}",
@@ -525,8 +520,9 @@ async fn download_to_file_with_hash(url: &str, dest: &Path) -> Result<String, Cl
         let mut stream = resp.bytes_stream();
         let mut total: u64 = 0;
         while let Some(chunk) = stream.next().await {
-            let chunk =
-                chunk.map_err(|e| CliError::update(format!("download stream error: {e}")))?;
+            let chunk = chunk.map_err(|e| {
+                CliError::update(format!("download stream error: {}", e.without_url()))
+            })?;
             total = total
                 .checked_add(chunk.len() as u64)
                 .ok_or_else(|| CliError::update("download size overflowed u64"))?;
@@ -814,4 +810,49 @@ fn rollback_path(binary: &Path) -> PathBuf {
         .and_then(|s| s.to_str())
         .unwrap_or("math_talk_radar");
     parent.join(format!(".{stem}.rollback"))
+}
+#[cfg(test)]
+mod security_tests {
+    use super::*;
+
+    #[test]
+    fn sec_003_update_url_validation_does_not_echo_credentials_or_query() {
+        let marker = "SEC003_SYNTHETIC_MARKER";
+        for address in [
+            format!("http://user:{marker}@github.com/asset?token={marker}"),
+            format!("https://[invalid-{marker}"),
+        ] {
+            let error = validate_download_url(&address).unwrap_err();
+            assert!(!error.message.contains(marker));
+        }
+    }
+
+    #[tokio::test]
+    async fn sec_003_update_transport_errors_do_not_echo_signed_urls() {
+        use wiremock::{Mock, MockServer, ResponseTemplate, matchers::path};
+        let server = MockServer::start().await;
+        Mock::given(path("/missing-location"))
+            .respond_with(ResponseTemplate::new(302))
+            .mount(&server)
+            .await;
+        Mock::given(path("/slow"))
+            .respond_with(
+                ResponseTemplate::new(200).set_delay(std::time::Duration::from_millis(200)),
+            )
+            .mount(&server)
+            .await;
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(std::time::Duration::from_millis(30))
+            .build()
+            .unwrap();
+        for endpoint in ["missing-location", "slow"] {
+            let url = format!("{}/{endpoint}?token=SEC003_SYNTHETIC_MARKER", server.uri());
+            let error = send_validated(&client, &url, DOWNLOAD_HOSTS, None)
+                .await
+                .unwrap_err();
+            assert!(!error.message.contains("SEC003_SYNTHETIC_MARKER"));
+        }
+    }
 }
