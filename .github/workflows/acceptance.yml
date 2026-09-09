@@ -103,7 +103,7 @@ jobs:
   build:
     needs:
     - plan
-    if: inputs.profile == 'release' || inputs.profile == 'live'
+    if: inputs.profile == 'release' || inputs.profile == 'preflight' || inputs.profile == 'live'
     uses: ./.github/workflows/acceptance-lane.yml
     with:
       lane: build
@@ -113,7 +113,7 @@ jobs:
     needs:
     - plan
     - build
-    if: inputs.profile == 'release'
+    if: inputs.profile == 'release' || inputs.profile == 'preflight'
     uses: ./.github/workflows/acceptance-lane.yml
     with:
       lane: artifact
@@ -184,7 +184,7 @@ jobs:
       run: |
         python3 scripts/ci_artifacts.py receipts
         stage=final
-        if [ "$PROFILE" = release ]; then stage=pre-attestation; fi
+        if [ "$PROFILE" = release ] || [ "$PROFILE" = preflight ]; then stage=pre-attestation; fi
         target/acceptance/control/xtask acceptance summarize --plan target/acceptance/control/plan.json --receipts target/acceptance/receipts --stage "$stage" --out target/acceptance/summary.json
     - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
       with:

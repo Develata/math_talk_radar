@@ -109,6 +109,14 @@ def published_readback():
         raise ValueError("published read-back failed; see its execution receipt")
 
 
+def require_publication():
+    plan = json.loads(Path("target/acceptance/control/plan.json").read_text())
+    if (os.environ.get("GITHUB_EVENT_NAME") != "push"
+            or not re.fullmatch(r"refs/tags/v[^/]+", os.environ.get("GITHUB_REF", ""))
+            or plan.get("profile") != "release"):
+        raise ValueError("publication requires a version-tag push and a release plan")
+
+
 def main():
     parser = argparse.ArgumentParser()
     commands = parser.add_subparsers(dest="command", required=True)
@@ -121,6 +129,7 @@ def main():
     packing.add_argument("--shards", required=True)
     commands.add_parser("expected")
     commands.add_parser("published-readback")
+    commands.add_parser("require-publication")
     args = parser.parse_args()
     if args.command == "control":
         directory = Path("target/acceptance/control")
@@ -145,6 +154,8 @@ def main():
         lanes = ["quality", "tests", "assurance", "performance"]
         if profile == "release":
             lanes += ["build", "artifact", "review"]
+        elif profile == "preflight":
+            lanes += ["build", "artifact"]
         elif profile == "live":
             lanes = ["build", "live"]
         elif profile not in ["full", "shadow"]:
@@ -161,6 +172,8 @@ def main():
             output.write("receipt_hashes=" + json.dumps(hashes, separators=(",", ":")) + "\n")
     elif args.command == "published-readback":
         published_readback()
+    elif args.command == "require-publication":
+        require_publication()
     else:
         pack(args.lane, args.shards)
 

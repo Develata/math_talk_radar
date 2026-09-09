@@ -92,7 +92,12 @@ fn ci_002_unknown_and_contract_changes_force_full() {
         assert_eq!(selected.len(), catalog::MODULES.len());
         assert!(!reasons.is_empty());
     }
-    for profile in [Profile::Full, Profile::Shadow, Profile::Release] {
+    for profile in [
+        Profile::Full,
+        Profile::Shadow,
+        Profile::Release,
+        Profile::Preflight,
+    ] {
         let checks = plan::checks(
             &profile,
             true,
@@ -110,6 +115,45 @@ fn ci_002_unknown_and_contract_changes_force_full() {
             assert!(checks.contains(check));
         }
     }
+}
+
+#[test]
+fn preflight_requires_automated_release_checks_but_cannot_approve_human_review() {
+    let mut plan = fixture_plan();
+    plan.profile = Profile::Preflight;
+    plan.modules = catalog::MODULES
+        .iter()
+        .map(|name| (*name).to_owned())
+        .collect();
+    plan.checks = plan::checks(&plan.profile, true, &plan.modules);
+    plan.cases = catalog::load(Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap()).unwrap();
+    let selected: BTreeSet<_> = plan::selected_cases(&plan)
+        .iter()
+        .map(|case| case.id.as_str())
+        .collect();
+    for case in ["PERF-002", "RELS-001", "RELS-002", "RELS-003"] {
+        assert!(selected.contains(case));
+    }
+    assert!(!selected.contains("SEC-003"));
+    assert!(!plan.checks.contains("review"));
+    assert!(plan.checks.contains("attestation"));
+    let directory = tempfile::tempdir().unwrap();
+    let report = summarize(&plan, "digest", directory.path(), "final").unwrap();
+    assert_eq!(report["checks"]["attestation"], "fail");
+    assert_eq!(report["cases"]["SEC-003"], "not-selected");
+    assert!(plan::checks(&Profile::Release, true, &plan.modules).contains("review"));
+    let review = json!({"schema_version": 1, "commit": plan.identity.commit,
+        "case": "SEC-003", "status": "approved", "reviewer": "maintainer", "evidence": "review-record"});
+    assert!(artifact::review(&plan, &review).is_err());
+}
+
+#[test]
+fn preflight_rejects_dirty_source_checkout() {
+    let directory = synthetic_workspace();
+    let root = directory.path();
+    plan::create(root, Profile::Preflight, Some("HEAD".into())).unwrap();
+    std::fs::write(root.join("unreviewed-input"), "changed").unwrap();
+    assert!(plan::create(root, Profile::Preflight, Some("HEAD".into())).is_err());
 }
 
 #[test]

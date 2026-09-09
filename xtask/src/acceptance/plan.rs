@@ -12,6 +12,7 @@ pub enum Profile {
     Shadow,
     Full,
     Release,
+    Preflight,
     Live,
 }
 
@@ -188,16 +189,19 @@ pub fn checks(profile: &Profile, full: bool, modules: &BTreeSet<String>) -> BTre
     if full {
         checks.extend(["security", "coverage", "performance", "msrv"].map(str::to_owned));
     }
+    if matches!(profile, Profile::Release | Profile::Preflight) {
+        checks.extend(["build", "artifact", "attestation"].map(str::to_owned));
+    }
     if *profile == Profile::Release {
-        checks.extend(["build", "artifact", "review", "attestation"].map(str::to_owned));
+        checks.insert("review".into());
     }
     checks
 }
 
 pub fn create(root: &Path, profile: Profile, base: Option<String>) -> Result<Plan> {
     let identity = evidence::identity(root)?;
-    if profile == Profile::Release && identity.dirty {
-        return Err("release requires a clean source checkout".into());
+    if matches!(profile, Profile::Release | Profile::Preflight) && identity.dirty {
+        return Err("release/preflight requires a clean source checkout".into());
     }
     let cases = catalog::load(root)?;
     let metadata = crate::architecture::metadata(root)?;
@@ -341,7 +345,8 @@ pub fn selected_cases(plan: &Plan) -> Vec<&Case> {
             plan.checks.contains(&case.check)
                 && (case.check != "tests" || plan.modules.contains(&case.module))
                 && (case.scope == "baseline"
-                    || (case.scope == "release" && plan.profile == Profile::Release)
+                    || (case.scope == "release"
+                        && matches!(plan.profile, Profile::Release | Profile::Preflight))
                     || (case.scope == "live" && plan.profile == Profile::Live))
         })
         .collect()

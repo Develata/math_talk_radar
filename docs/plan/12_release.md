@@ -85,6 +85,13 @@ directory. Cache entries never serve as acceptance evidence.
 
 Trigger: `tag v*`. Must check `tag version == Cargo.toml version`; fail otherwise.
 
+Manual dispatch is a nonpublishing preflight (ADR-0017). Its clean-checkout
+`preflight` profile runs the full baseline plus build, artifact and attestation
+checks, selecting the four automated release cases but not SEC-003. It uses the
+same signer workflow and exact artifact provenance rules. Final preflight
+success does not approve a release. Tag-triggered releases still require the
+commit-bound human review. Publication is restricted to version-tag push events.
+
 ## Assets (§34.1)
 
 `math_talk_radar-x86_64-unknown-linux-musl` + `.sha256` (required); `.tar.gz`,

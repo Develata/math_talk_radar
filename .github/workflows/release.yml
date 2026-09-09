@@ -1,5 +1,6 @@
 name: Release
 'on':
+  workflow_dispatch: null
   push:
     tags:
     - v*.*.*
@@ -13,7 +14,7 @@ jobs:
   acceptance:
     uses: ./.github/workflows/acceptance.yml
     with:
-      profile: release
+      profile: ${{ github.event_name == 'workflow_dispatch' && 'preflight' || 'release' }}
   attest:
     needs: acceptance
     runs-on: ubuntu-24.04
@@ -58,6 +59,16 @@ jobs:
         GH_TOKEN: ${{ github.token }}
       run: target/acceptance/control/xtask acceptance run --plan target/acceptance/control/plan.json --shard attestation
         --out target/acceptance/receipts --artifacts target/acceptance/receipts/build/artifacts
+    - name: Verify final automated acceptance
+      run: target/acceptance/control/xtask acceptance summarize --plan target/acceptance/control/plan.json
+        --receipts target/acceptance/receipts --out target/acceptance/final-summary.json
+    - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      with:
+        name: final-acceptance-summary-${{ github.run_attempt }}
+        path: target/acceptance/final-summary.json
+        if-no-files-found: error
+        retention-days: 30
+      if: always()
     - id: pack
       if: always()
       run: python3 scripts/ci_artifacts.py pack --lane attestation --shards attestation
@@ -69,7 +80,7 @@ jobs:
         retention-days: 30
       if: always()
   release:
-    if: always()
+    if: always() && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     needs:
     - acceptance
     - attest
@@ -120,6 +131,8 @@ jobs:
         python3 scripts/ci_artifacts.py receipts
         target/acceptance/control/xtask acceptance summarize --plan target/acceptance/control/plan.json --receipts target/acceptance/receipts --out target/acceptance/release-summary.json
         target/acceptance/control/xtask acceptance verify-artifact --plan target/acceptance/control/plan.json --artifacts target/acceptance/receipts/build/artifacts
+    - name: Require publication event and release profile
+      run: python3 scripts/ci_artifacts.py require-publication
     - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
       with:
         generate_release_notes: true

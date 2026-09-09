@@ -15,6 +15,57 @@ spec.loader.exec_module(module)
 
 
 class TransportTests(unittest.TestCase):
+    def test_preflight_requires_artifact_lanes_and_release_still_requires_review(self):
+        with tempfile.TemporaryDirectory() as temp:
+            previous = Path.cwd()
+            try:
+                os.chdir(temp)
+                Path("target/acceptance").mkdir(parents=True)
+                lanes = ["quality", "tests", "assurance", "performance", "build", "artifact"]
+                needs = {name: {"result": "success", "outputs": {"receipt_sha": "a" * 64}}
+                         for name in ["plan", *lanes]}
+                with patch.dict(os.environ, {"ACCEPTANCE_PROFILE": "preflight",
+                        "GITHUB_OUTPUT": str(Path(temp) / "outputs"), "NEEDS_JSON": json.dumps(needs)}), \
+                        patch("sys.argv", ["ci_artifacts.py", "expected"]):
+                    module.main()
+                    self.assertEqual(set(json.loads(Path("target/acceptance/receipt-hashes.json").read_text())), set(lanes))
+                    for lane in ["build", "artifact"]:
+                        changed = json.loads(json.dumps(needs))
+                        changed[lane]["result"] = "skipped"
+                        os.environ["NEEDS_JSON"] = json.dumps(changed)
+                        with self.assertRaises(ValueError):
+                            module.main()
+                    os.environ.update(ACCEPTANCE_PROFILE="release", NEEDS_JSON=json.dumps(needs))
+                    with self.assertRaises(ValueError):
+                        module.main()
+            finally:
+                os.chdir(previous)
+
+    def test_publication_rejects_manual_runs_and_preflight_plans(self):
+        with tempfile.TemporaryDirectory() as temp:
+            previous = Path.cwd()
+            try:
+                os.chdir(temp)
+                plan_path = Path("target/acceptance/control/plan.json")
+                plan_path.parent.mkdir(parents=True)
+                for event, ref, profile, allowed in [
+                    ("workflow_dispatch", "refs/heads/main", "preflight", False),
+                    ("workflow_dispatch", "refs/tags/v0.1.0", "release", False),
+                    ("push", "refs/heads/main", "release", False),
+                    ("push", "refs/tags/v0.1.0", "preflight", False),
+                    ("push", "refs/tags/v0.1.0", "release", True),
+                ]:
+                    with self.subTest(event=event, ref=ref, profile=profile), patch.dict(os.environ,
+                            {"GITHUB_EVENT_NAME": event, "GITHUB_REF": ref}):
+                        plan_path.write_text(json.dumps({"profile": profile}))
+                        if allowed:
+                            module.require_publication()
+                        else:
+                            with self.assertRaises(ValueError):
+                                module.require_publication()
+            finally:
+                os.chdir(previous)
+
     def test_required_lane_cannot_be_skipped_or_omit_digest(self):
         with tempfile.TemporaryDirectory() as temp, patch.dict(os.environ, {
             "ACCEPTANCE_PROFILE": "full", "GITHUB_OUTPUT": str(Path(temp) / "outputs")
