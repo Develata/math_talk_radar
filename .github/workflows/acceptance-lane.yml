@@ -63,8 +63,12 @@ jobs:
       if: inputs.lane == 'build'
       run: |
         rustup target add x86_64-unknown-linux-musl
-        sudo apt-get update
-        sudo apt-get install --yes musl-tools
+        # musl-tools is an Ubuntu package; unrelated runner repositories must
+        # not become build prerequisites. Preserve Ubuntu's Signed-By policy.
+        test -s /etc/apt/sources.list.d/ubuntu.sources
+        apt_options=(-o Dir::Etc::sourcelist=sources.list.d/ubuntu.sources -o Dir::Etc::sourceparts=-)
+        sudo apt-get "${apt_options[@]}" update
+        sudo apt-get "${apt_options[@]}" install --yes musl-tools
     - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
       with:
         path: target/acceptance/downloads
