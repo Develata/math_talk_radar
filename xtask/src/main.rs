@@ -77,57 +77,61 @@ fn run_static_release(binary: &Path) -> Result<(), Vec<String>> {
     }
 
     let file_out = Command::new("file")
+        .env("LC_ALL", "C")
+        .arg("--brief")
         .arg(binary)
         .output()
         .map_err(|e| vec![format!("failed to run `file`: {e}")])?;
     let file_text = String::from_utf8_lossy(&file_out.stdout);
     println!("file: {file_text}");
 
-    let statically_linked = file_text.contains("statically linked");
+    let statically_linked = file_out.status.success() && static_file_description(&file_text);
     if !statically_linked {
         errors.push(format!(
-            "RELS-001: `file` does not report 'statically linked'.\n\
+            "RELS-001: `file` does not report a static ELF executable.\n\
              Output: {file_text}"
         ));
     }
 
-    let ldd = Command::new("ldd").arg(binary).output();
+    let ldd = Command::new("ldd").env("LC_ALL", "C").arg(binary).output();
     match ldd {
         Ok(out) => {
-            let ldd_text = String::from_utf8_lossy(&out.stdout);
-            let ldd_err = String::from_utf8_lossy(&out.stderr);
-            if out.status.success() {
-                println!("ldd: {ldd_text}");
-                let has_deps = ldd_text
-                    .lines()
-                    .any(|l| !l.trim().is_empty() && !l.contains("not a dynamic executable"));
-                if has_deps {
-                    errors.push(format!(
-                        "RELS-001: `ldd` reports runtime shared-library dependencies.\n\
-                         Output: {ldd_text}"
-                    ));
-                }
-            } else {
-                let combined = format!("{ldd_text}{ldd_err}");
-                let not_dynamic = combined.contains("not a dynamic executable");
-                println!("ldd: {combined}");
-                if !not_dynamic {
-                    errors.push(format!(
-                        "RELS-001: `ldd` failed without 'not a dynamic executable'.\n\
-                         Output: {combined}"
-                    ));
-                }
+            let combined = format!(
+                "{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            );
+            println!("ldd: {combined}");
+            if !static_ldd_output(out.status.success(), &combined) {
+                errors.push(format!(
+                    "RELS-001: `ldd` did not confirm absence of shared-library dependencies.\n\
+                     Output: {combined}"
+                ));
             }
         }
-        Err(e) => {
-            errors.push(format!("failed to run `ldd`: {e}"));
-        }
+        Err(e) => errors.push(format!("failed to run `ldd`: {e}")),
     }
 
     if errors.is_empty() {
         Ok(())
     } else {
         Err(errors)
+    }
+}
+
+// `file --brief` omits the path so a filename cannot impersonate linkage.
+fn static_file_description(text: &str) -> bool {
+    text.starts_with("ELF ")
+        && (text.contains(", statically linked,") || text.contains(", static-pie linked,"))
+}
+
+fn static_ldd_output(success: bool, text: &str) -> bool {
+    // Static PIE has a dynamic section for self-relocation, but no loader or
+    // DT_NEEDED libraries. ldd reports it successfully as "statically linked".
+    match text.trim() {
+        "statically linked" => success,
+        "not a dynamic executable" => true,
+        _ => false,
     }
 }
 
@@ -659,4 +663,43 @@ fn validate_matrix(root: &Path) -> Vec<String> {
     }
 
     errors
+}
+
+#[cfg(test)]
+mod static_linkage_tests {
+    use super::*;
+
+    #[test]
+    fn accepts_static_elf_and_static_pie() {
+        for text in [
+            "ELF 64-bit LSB executable, x86-64, statically linked, stripped",
+            "ELF 64-bit LSB pie executable, x86-64, static-pie linked, stripped",
+        ] {
+            assert!(static_file_description(text));
+        }
+        assert!(static_ldd_output(true, "\tstatically linked\n"));
+        assert!(static_ldd_output(false, "\tnot a dynamic executable\n"));
+    }
+
+    #[test]
+    fn rejects_dynamic_non_elf_and_ambiguous_tool_output() {
+        for text in [
+            "ELF 64-bit LSB pie executable, x86-64, dynamically linked, stripped",
+            "ASCII text, statically linked, something",
+            "statically linked: ELF 64-bit LSB executable, dynamically linked, stripped",
+            "",
+        ] {
+            assert!(!static_file_description(text));
+        }
+        for text in [
+            "linux-vdso.so.1 (0x123)\nlibc.so.6 => /lib/libc.so.6 (0x456)",
+            "statically linked\nlibc.so.6 => /lib/libc.so.6 (0x456)",
+            "ldd: not found",
+            "",
+        ] {
+            assert!(!static_ldd_output(true, text));
+            assert!(!static_ldd_output(false, text));
+        }
+        assert!(!static_ldd_output(false, "statically linked"));
+    }
 }

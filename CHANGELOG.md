@@ -35,6 +35,9 @@ project adheres to [Semantic Versioning](https://semver.org/).
 - Add differential/invariant tests, Cargo-metadata architecture gates, offline
   performance JSON artifacts and real release-panic probes. Release packaging
   now runs the offline baseline; historical reports are labeled as snapshots.
+- Accept valid musl static PIE in the linkage gate while rejecting dynamic ELF
+  and ambiguous tool output. Release CI installs musl-tools and uses the same
+  xtask linkage validator as local builds.
 
 ### Added — M0 (Repository Bootstrap)
 

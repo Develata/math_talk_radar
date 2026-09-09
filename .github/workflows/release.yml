@@ -23,6 +23,8 @@ jobs:
         run: |
           rustup show
           rustup target add x86_64-unknown-linux-musl
+          sudo apt-get update
+          sudo apt-get install --yes musl-tools
 
       - uses: Swatinem/rust-cache@v2
 
@@ -46,17 +48,7 @@ jobs:
       - name: Verify static linkage (RELS-001)
         run: |
           BIN=target/x86_64-unknown-linux-musl/release/math_talk_radar
-          file "$BIN"
-          # A statically-linked musl binary has no dynamic dependencies.
-          # `ldd` returns "not a dynamic executable" and exits 1 for static
-          # binaries; the previous `|| true` swallowed that signal entirely,
-          # so a dynamically-linked binary would have passed this gate.
-          LDD_OUT=$(ldd "$BIN" 2>&1 || true)
-          echo "$LDD_OUT"
-          if ! echo "$LDD_OUT" | grep -q "not a dynamic executable"; then
-            echo "error: binary is not statically linked (RELS-001)" >&2
-            exit 1
-          fi
+          cargo xtask static-release "$BIN"
 
       - name: Verify binary size ≤30 MiB (PERF-002)
         run: |

@@ -29,3 +29,7 @@ Lands across M2 (HTTP), M7 (release/deny/coverage), M8 (final).
 crate edges. `cargo xtask perf` gates RSS, binary size, catastrophic timing
 regressions and an actual release-profile source panic; detailed timings are
 archived as JSON. Release packaging invokes the offline baseline first.
+
+RELS-001 also accepts static PIE (`file`: static-pie linked; `ldd`: statically
+linked). Unit cases reject dynamic/ambiguous tool output; the local acceptance
+run additionally rejects a real dynamically linked ELF executable.

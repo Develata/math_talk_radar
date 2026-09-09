@@ -22,6 +22,9 @@ task panics remain isolated in production, with release-profile verification.
 Canonical asset: `x86_64-unknown-linux-musl`. Acceptance: `file` + `ldd` show no
 runtime dynamic-library deps; runs on a clean Ubuntu 22.04 container with no
 Rust/Cargo/OpenSSL-dev.
+Both traditional static ELF and static PIE are valid. `cargo xtask static-release`
+owns the linkage check for local validation and release CI; dynamic binaries,
+failed inspection commands, and ambiguous dependency output must be rejected.
 
 ## Supply chain (§52)
 
