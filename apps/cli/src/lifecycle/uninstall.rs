@@ -1,6 +1,6 @@
 //! Uninstall (§35). Deletes only known app-owned paths. No `rm -rf`, no
-//! symlink following, no `$HOME` deletion. Unmanaged binaries (no manifest,
-//! under `target/`) are protected without `--force-unmanaged`.
+//! symlink following, no `$HOME` deletion. Binaries without a matching install
+//! manifest are protected without `--force-unmanaged`, regardless of location.
 use std::path::{Path, PathBuf};
 
 use crate::cli::UninstallArgs;
@@ -40,16 +40,15 @@ pub async fn run(args: UninstallArgs) -> Result<String, CliError> {
     let binary = paths::binary_path(&data_dir)
         .ok_or_else(|| CliError::uninstall("cannot resolve binary path"))?;
 
-    // §36: protect dev binaries. A stale manifest (recorded path gone) makes
-    // binary_path() fall back to current_exe(), which may be a target/ dev
-    // binary — so the guard keys on whether the manifest actually manages the
-    // resolved path, not on whether a manifest file merely exists.
+    // §36: ownership comes from a matching manifest, never a path heuristic.
+    // Cargo's target directory/profile can be arbitrary. A stale manifest can
+    // also make binary_path() fall back to an unmanaged current_exe().
     let manifest = manifest::load(&data_dir);
     let managed_by_manifest = manifest
         .as_ref()
         .map(|m| m.binary_path == binary)
         .unwrap_or(false);
-    if !managed_by_manifest && paths::is_unmanaged_binary(&binary) && !args.force_unmanaged {
+    if !managed_by_manifest && !args.force_unmanaged {
         return Err(CliError::uninstall(format!(
             "refusing to delete unmanaged binary: {} (use --force-unmanaged to override)",
             binary.display()

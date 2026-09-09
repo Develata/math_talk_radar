@@ -13,3 +13,7 @@
 
 Plan ref: `docs/plan/10_update_uninstall.md`. All verified in a temporary
 sandbox; never against the real install. Lands in M5.
+
+UNS-004 also exercises a copied executable in a custom build directory with
+absent and stale manifests. The binary and application directories must survive.
+Update rejects the same unmanaged paths before making any release HTTP request.

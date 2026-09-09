@@ -10,6 +10,9 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 - Update the locked `h2` dependency from 0.4.15 to 0.4.16 to address
   RUSTSEC-2026-0258 (unbounded empty HTTP/2 DATA frame queuing).
+- Require a matching install manifest (or explicit `--force-unmanaged`) for
+  update/uninstall in every directory. Custom Cargo target/profile paths are
+  protected; lifecycle regression tests operate on temporary executable copies.
 
 ### Engineering optimization — 2026-09-09
 

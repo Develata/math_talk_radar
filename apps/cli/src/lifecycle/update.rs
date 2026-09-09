@@ -494,15 +494,14 @@ pub async fn run(force_unmanaged: bool) -> Result<String, CliError> {
     let data_dir = paths::data_dir();
     let current_binary = paths::binary_path(&data_dir)
         .ok_or_else(|| CliError::update("cannot resolve current binary path"))?;
-    // CLI-26: align with uninstall's manifest-aware dev-binary guard. A
-    // manifest that manages a target/ path (e.g. from a prior --force-unmanaged
-    // update) should be trusted, not refused — matching uninstall's behavior.
+    // §36: as with uninstall, only a matching manifest establishes ownership.
+    // A directory name cannot distinguish installs from custom Cargo builds.
     let manifest = crate::lifecycle::manifest::load(&data_dir);
     let managed_by_manifest = manifest
         .as_ref()
         .map(|m| m.binary_path == current_binary)
         .unwrap_or(false);
-    if !managed_by_manifest && !force_unmanaged && paths::is_unmanaged_binary(&current_binary) {
+    if !managed_by_manifest && !force_unmanaged {
         return Err(CliError::update(format!(
             "refusing to update unmanaged binary: {} (use --force-unmanaged to override)",
             current_binary.display()

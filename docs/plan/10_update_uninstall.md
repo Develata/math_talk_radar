@@ -60,6 +60,10 @@ plan and changes nothing.
 Record official install path (binary, install_method, installed_version).
 Uninstall prefers install manifest + `current_exe`. `cargo run` must not
 silently delete the `target/debug` binary; unmanaged requires `--force-unmanaged`.
+Only a manifest matching the resolved binary establishes managed ownership;
+directory names cannot establish it. This also protects custom Cargo target
+directories, target triples, profiles, and coverage builds. Update applies the
+same guard before contacting the release server.
 
 ## Acceptance cases
 

@@ -95,6 +95,17 @@ impl Sandbox {
         manifest.save(&self.data_dir()).expect("save manifest");
     }
 
+    fn copy_unmanaged_binary(&self) -> PathBuf {
+        // Exercise a custom CARGO_TARGET_DIR without risking the shared test
+        // binary if the protection regresses. Only this temporary copy can go.
+        let directory = self.root.join("build-cache/debug");
+        std::fs::create_dir_all(&directory).expect("create custom build directory");
+        let binary = directory.join("math_talk_radar");
+        std::fs::copy(env!("CARGO_BIN_EXE_math_talk_radar"), &binary)
+            .expect("copy executable into sandbox");
+        binary
+    }
+
     fn setup_full(&self, binary_content: &[u8]) -> PathBuf {
         let binary = self.create_fake_binary(binary_content);
         self.write_manifest(&binary);
@@ -345,34 +356,69 @@ fn uns_003_purge_removes_all() {
 #[test]
 fn uns_004_unmanaged_binary_protected() {
     let sandbox = Sandbox::new();
-    // No manifest → binary_path falls back to current_exe (under target/debug/).
-    // is_unmanaged_binary returns true → uninstall refuses without --force-unmanaged.
+    let binary = sandbox.copy_unmanaged_binary();
 
-    let mut cmd = bin();
+    let mut cmd = Command::new(&binary);
     sandbox.set_env(&mut cmd);
     cmd.args(["uninstall", "--keep-data", "--yes"])
         .assert()
         .failure()
         .code(11);
+    assert!(binary.exists(), "unmanaged binary must survive");
 }
 
 // UNS-005: stale manifest (recorded path gone) must not bypass dev-binary
-// protection. binary_path() falls back to current_exe() (under target/), and
+// protection. binary_path() falls back to the custom build's current_exe(), and
 // the manifest no longer backs it — refuse without --force-unmanaged.
 #[test]
 fn uns_005_stale_manifest_protects_dev_binary() {
     let sandbox = Sandbox::new();
+    let binary = sandbox.copy_unmanaged_binary();
     let gone_binary = sandbox.root.join("bin").join("math_talk_radar");
     sandbox.write_manifest(&gone_binary);
     std::fs::create_dir_all(sandbox.config_dir()).expect("create config dir");
     std::fs::create_dir_all(sandbox.cache_dir()).expect("create cache dir");
 
-    let mut cmd = bin();
+    let mut cmd = Command::new(&binary);
     sandbox.set_env(&mut cmd);
     cmd.args(["uninstall", "--keep-data", "--yes"])
         .assert()
         .failure()
         .code(11);
+    assert!(
+        binary.exists(),
+        "unmanaged binary must survive stale metadata"
+    );
+    assert!(sandbox.config_dir().exists());
+    assert!(sandbox.cache_dir().exists());
+}
+
+#[tokio::test]
+async fn update_custom_target_requires_managed_manifest_before_network() {
+    let server = MockServer::start().await;
+    for stale_manifest in [false, true] {
+        let sandbox = Sandbox::new();
+        let binary = sandbox.copy_unmanaged_binary();
+        if stale_manifest {
+            sandbox.write_manifest(&sandbox.root.join("missing/math_talk_radar"));
+        }
+        let mut cmd = Command::new(&binary);
+        sandbox.set_env(&mut cmd);
+        cmd.env("MATH_TALK_RADAR_RELEASE_API", server.uri());
+        let assertion = cmd.arg("update").assert().failure().code(10);
+        assert!(
+            String::from_utf8_lossy(&assertion.get_output().stderr)
+                .contains("refusing to update unmanaged binary")
+        );
+        assert!(binary.exists());
+    }
+    assert!(
+        server
+            .received_requests()
+            .await
+            .expect("recorded requests")
+            .is_empty()
+    );
 }
 
 // R9-H12: uninstall must refuse while an update lock is held. A concurrent

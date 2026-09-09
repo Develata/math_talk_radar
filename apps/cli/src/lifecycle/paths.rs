@@ -169,13 +169,6 @@ pub fn safe_canonicalize(path: &Path) -> Result<PathBuf, String> {
     Ok(canonical)
 }
 
-/// True if `binary` looks like a `cargo run` / `target/debug` development
-/// binary (§36). Used by uninstall to protect dev binaries.
-pub fn is_unmanaged_binary(binary: &Path) -> bool {
-    let s = binary.to_string_lossy();
-    s.contains("/target/debug/") || s.contains("/target/release/")
-}
-
 fn xdg_dir(env_var: &str, default_sub: &str) -> PathBuf {
     if let Some(xdg) = std::env::var_os(env_var) {
         let p = PathBuf::from(&xdg);
