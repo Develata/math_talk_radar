@@ -30,6 +30,16 @@ redirect; no cookies; no auth; response bodies not persisted beyond the bounded
 `math_talk_radar/<version> (+public-repository)`. `respect_robots = true`;
 no robots bypass is ever provided.
 
+## Request ownership (ADR-0011)
+
+The per-source request budget and SourceHealth.requests count content attempts
+(entrypoint, detail, redirect and retry). Robots is a separate shared system
+transaction, bounded by redirect_limit + 1 requests per initialization and the
+same deadline, body cap and per-host concurrency. Its cache is keyed by origin
+and allowed-host policy; whichever source initializes it does not pay from its
+content budget. This preserves both physical deduplication and logical source
+budget determinism.
+
 ## Scan deadline (§48)
 
 Real network global default deadline = 30s. On timeout, return completed results

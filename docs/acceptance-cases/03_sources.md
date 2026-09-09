@@ -17,3 +17,8 @@
 Plan ref: `docs/plan/04_source_adapter_contract.md`. Fixture-backed (§45);
 mock-server cases (SRC-006..008) use a localhost server. Event discovery recall
 ≥ 95%, media discovery recall ≥ 95% (§47). Lands in M2 (adapters) / M6 (sites).
+
+SRC-008 regression: two sources on one host with content budget 1 both fetch
+successfully, regardless of which initializes the shared robots cache. Repeat
+with both serial initializers and concurrent admission; one physical robots
+request per shared cache. Content redirects/retries still consume budget.

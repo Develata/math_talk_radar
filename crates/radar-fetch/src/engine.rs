@@ -61,7 +61,6 @@ async fn fetch_robots_txt(
     http_policy: &HttpPolicy,
     allowed_hosts: &[String],
     deadline: Option<Instant>,
-    budget: &mut RequestBudget,
 ) -> Result<RobotsRules, FetchError> {
     if past_deadline(deadline) {
         return Err(FetchError::Timeout);
@@ -71,12 +70,9 @@ async fn fetch_robots_txt(
         if past_deadline(deadline) {
             return Err(FetchError::Timeout);
         }
-        // H01: robots.txt fetches must consume budget and acquire the
-        // per-host permit like any other request — otherwise the request
-        // count is unbounded and per-host concurrency is not respected.
-        if !budget.try_consume() {
-            return Err(FetchError::BudgetExhausted);
-        }
+        // Robots is a shared system transaction, bounded independently by
+        // redirect_limit + 1 requests, body cap and the scan deadline. It must
+        // never consume the initializing source's logical content budget.
         let _host_permit = client.acquire_host_permit(&current).await;
         let timeout = remaining_time(deadline, http_policy.request_timeout);
         if timeout.is_zero() {
@@ -156,12 +152,7 @@ async fn check_robots(
     allowed_hosts: &[String],
     robots: &RobotsCache,
     deadline: Option<Instant>,
-    budget: &mut RequestBudget,
 ) -> Result<(), FetchError> {
-    let owned_url = url.clone();
-    let client_clone = client.clone();
-    let hp = *http_policy;
-    let ah = allowed_hosts.to_vec();
     // B6-1: include a sorted allowlist hash in the cache key so sources
     // with different host policies get separate robots cache entries.
     let mut sorted_hosts = allowed_hosts.to_vec();
@@ -169,9 +160,11 @@ async fn check_robots(
     sorted_hosts.dedup();
     let allowlist_key = sorted_hosts.join(",");
     let rules = robots
-        .get_or_init(url, &allowlist_key, move || async move {
-            match robots_url_for(&owned_url) {
-                Some(ru) => fetch_robots_txt(&client_clone, ru, &hp, &ah, deadline, budget).await,
+        .get_or_init(url, &allowlist_key, || async {
+            match robots_url_for(url) {
+                Some(ru) => {
+                    fetch_robots_txt(client, ru, http_policy, allowed_hosts, deadline).await
+                }
                 None => Ok(RobotsRules::default()),
             }
         })
@@ -210,7 +203,6 @@ pub async fn fetch_one(
         &policy.allowed_hosts,
         robots,
         deadline,
-        budget,
     )
     .await?;
 
@@ -301,7 +293,6 @@ pub async fn fetch_one(
                     &policy.allowed_hosts,
                     robots,
                     deadline,
-                    budget,
                 )
                 .await?;
                 last_host = new_host;

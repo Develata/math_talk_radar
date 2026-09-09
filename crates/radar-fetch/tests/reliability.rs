@@ -315,3 +315,50 @@ async fn r9_h10_stubs_capped_before_enrichment() {
         "enrich must be invoked exactly MAX_STUBS_PER_SOURCE times (excess stubs dropped before enrichment)"
     );
 }
+
+// Each iteration explicitly changes the cache initializer, then checks the
+// contended path as well. Logical content budgets must be identical in both.
+#[tokio::test]
+async fn shared_robots_does_not_charge_the_initializing_source() {
+    use radar_fetch::{RobotsCache, fetch_source};
+    let server = MockServer::start().await;
+    Mock::given(path("/robots.txt"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(""))
+        .expect(3)
+        .mount(&server)
+        .await;
+    for i in 0..2 {
+        Mock::given(path(format!("/source_{i}")))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(3)
+            .mount(&server)
+            .await;
+    }
+    let client = FetchClient::new(HttpPolicy::default()).unwrap();
+    let sources: Vec<_> = (0..2)
+        .map(|i| {
+            let mut s = make_source(i, &server.uri());
+            s.request_budget = 1;
+            s
+        })
+        .collect();
+    for first in 0..2 {
+        let robots = RobotsCache::new();
+        for i in [first, 1 - first] {
+            let r = fetch_source(&client, &sources[i], &StubAdapter, &robots, None).await;
+            assert_eq!(
+                r.health.status,
+                SourceStatus::Ok,
+                "initializer {first}, source {i}"
+            );
+            assert_eq!(r.health.requests, 1);
+        }
+    }
+    let results = fetch_all(&client, &sources, None, |_| Box::new(StubAdapter)).await;
+    assert!(
+        results
+            .iter()
+            .all(|r| r.health.status == SourceStatus::Ok && r.health.requests == 1)
+    );
+    server.verify().await;
+}
