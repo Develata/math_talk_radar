@@ -6,6 +6,11 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Security
+
+- Update the locked `h2` dependency from 0.4.15 to 0.4.16 to address
+  RUSTSEC-2026-0258 (unbounded empty HTTP/2 DATA frame queuing).
+
 ### Engineering optimization — 2026-09-09
 
 - Ranking no longer selects canonical events or changes persistent identity;
