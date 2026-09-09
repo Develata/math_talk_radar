@@ -648,3 +648,161 @@ async fn cli_24_invalid_today_skips_network_fetch() {
     // Assert neither endpoint was hit.
     server.verify().await;
 }
+
+#[tokio::test]
+async fn source_failure_cannot_cancel_its_previous_events() {
+    let a = MockServer::start().await;
+    let b = MockServer::start().await;
+    mount_rss_feed(&a).await;
+    Mock::given(path("/robots.txt"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&b)
+        .await;
+    let body = RSS_FEED_TEMPLATE
+        .replace("{base}", &b.uri())
+        .replace("Conference on Algebra", "Conference on Topology")
+        .replace("Workshop on Graph Theory", "Workshop on Analysis");
+    Mock::given(path("/feed.xml"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(body))
+        .mount(&b)
+        .await;
+    for detail in ["/detail/algebra", "/detail/graph"] {
+        Mock::given(path(detail))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&b)
+            .await;
+    }
+    let config = write_sources_config(&[
+        (true, "a", &format!("{}/feed.xml", a.uri())),
+        (true, "b", &format!("{}/feed.xml", b.uri())),
+    ]);
+    let dir = tempfile::tempdir().unwrap();
+    let state = dir.path().join("state.redb");
+    let scan = || {
+        let output = bin()
+            .args(["scan", "--sources"])
+            .arg(config.path())
+            .arg("--state")
+            .arg(&state)
+            .args(["--today", "2026-09-01", "--mode", "both"])
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        serde_json::from_slice::<serde_json::Value>(&output).unwrap()
+    };
+    let first = scan();
+    assert_eq!(first["events"].as_array().unwrap().len(), 4);
+    a.reset().await;
+    b.reset().await;
+    for server in [&a, &b] {
+        Mock::given(path("/robots.txt"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(server)
+            .await;
+    }
+    Mock::given(path("/feed.xml")).respond_with(ResponseTemplate::new(200).set_body_string("<rss version=\"2.0\"><channel><title>Empty</title><link>https://example.org</link><description>Empty</description></channel></rss>")).mount(&a).await;
+    Mock::given(path("/feed.xml"))
+        .respond_with(ResponseTemplate::new(503))
+        .mount(&b)
+        .await;
+    let second = scan();
+    let cancelled: Vec<_> = second["changes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|c| c["kind"] == "event_cancelled")
+        .collect();
+    assert_eq!(
+        cancelled.len(),
+        2,
+        "only the authoritative source's disappeared events may be cancelled"
+    );
+    let repo = radar_state::Repository::open(&state).unwrap();
+    let remaining = repo.list_events().unwrap();
+    assert_eq!(remaining.len(), 2);
+    assert!(
+        remaining
+            .iter()
+            .all(|e| e.sources.iter().any(|s| s.source_id == "b"))
+    );
+}
+
+#[tokio::test]
+async fn interests_change_only_ranking_after_dedup_and_state() {
+    let server = MockServer::start().await;
+    let body = RSS_FEED_TEMPLATE
+        .replace("{base}", &server.uri())
+        .replace("Conference on Algebra", "Number Theory Conference")
+        .replace("Workshop on Graph Theory", "Algebraic Geometry Workshop");
+    Mock::given(path("/feed.xml"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(body))
+        .mount(&server)
+        .await;
+    for path_str in ["/robots.txt", "/detail/algebra", "/detail/graph"] {
+        Mock::given(path(path_str))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+    }
+    let url = format!("{}/feed.xml", server.uri());
+    let config = write_sources_config(&[(true, "a", &url), (true, "b", &url)]);
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("state.redb");
+    let interests = dir.path().join("interests.toml");
+    let scan = |weights: &str| {
+        std::fs::write(&interests, weights).unwrap();
+        let output = bin()
+            .args(["scan", "--sources"])
+            .arg(config.path())
+            .arg("--state")
+            .arg(&db)
+            .arg("--interests")
+            .arg(&interests)
+            .args(["--today", "2026-09-01", "--mode", "both"])
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        serde_json::from_slice::<serde_json::Value>(&output).unwrap()
+    };
+    let first = scan("[interests]\nnumber_theory = 1.0\nalgebraic_geometry = 0.0");
+    let second = scan("[interests]\nnumber_theory = 0.0\nalgebraic_geometry = 1.0");
+    assert!(second["changes"].as_array().unwrap().is_empty());
+    assert_ne!(
+        first["events"][0]["id"], second["events"][0]["id"],
+        "interests still affect presentation ordering"
+    );
+    let identity = |output: &serde_json::Value| {
+        let mut events: Vec<radar_core::Event> =
+            serde_json::from_value(output["events"].clone()).unwrap();
+        for event in &mut events {
+            event.score = 0.0;
+            event.score_components = Default::default();
+            event.rank_reasons.clear();
+            event.last_seen_at = None;
+            for source in &mut event.sources {
+                source.captured_at = None;
+            }
+            assert_eq!(
+                event.sources.len(),
+                2,
+                "both source provenances survive dedup"
+            );
+        }
+        events.sort_by(|a, b| a.id.0.cmp(&b.id.0));
+        events
+    };
+    assert_eq!(identity(&first), identity(&second));
+    let repo = radar_state::Repository::open(&db).unwrap();
+    let stored = repo.list_events().unwrap();
+    assert_eq!(stored.len(), 2);
+    assert!(
+        stored
+            .iter()
+            .all(|e| e.score == 0.0 && e.rank_reasons.is_empty()),
+        "user ranking is not persisted policy"
+    );
+}

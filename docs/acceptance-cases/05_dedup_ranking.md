@@ -23,3 +23,6 @@ seeded mixed-key corpora, including absent fields, multiple native IDs, same-ID
 ties and changing organizer keys. Explicit bridge tests preserve first-cluster
 semantics. Deterministic counters gate linear key lookups for 1k/5k/10k distinct
 inputs and bounded key updates for a 10k growing-provenance cluster.
+
+RANK-001/STATE-002: scoring occurs only after persistence reconciliation; legacy
+stored scores remain readable and cannot influence first_seen or change records.

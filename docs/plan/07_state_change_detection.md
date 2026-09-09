@@ -31,3 +31,28 @@ but history should not vanish without notice).
 - STATE-002 — second scan unchanged (integration).
 - STATE-003 — media_added (integration).
 - STATE-004 — `--no-state` no write (integration).
+
+## Scan ownership and absence authority (ADR-0011)
+
+The CLI consumes fetched candidates, enriches and deduplicates them, then gives
+state an owned current vector and the set of complete source IDs (status Ok).
+State stamps first_seen/last_seen in place and returns that same vector. It keeps
+one previous corpus for change detection; the legacy borrowed complete-snapshot
+API remains available, but the CLI uses the owned authority-aware path.
+
+Cancel an absent previous event only if it has nonempty provenance and all its
+supporting sources were authoritative. Missing, disabled, failed or partial
+sources do not establish absence. An unrelated source outage does not veto
+cancellation. Preserve failed-source provenance across partial observations;
+otherwise a later scan could lose the supporting source's veto. Conservatively
+retain missing media/talks when previous event coverage is incomplete, because
+merged resources expose only one source, not all supporting sources.
+
+The state schema remains v2 and existing Event JSON remains readable. Current
+dedup input-ID aliases transfer previous first_seen and unexpired tombstones to
+the corrected representative inside the same write transaction, coalescing
+history by the earliest timestamp. No guessed/fuzzy historical aliases are
+introduced. History whose old candidate is currently unavailable stays subject
+to the conservative provenance rule. Ranking runs after state reconciliation;
+new scan snapshots retain the compatible ranking fields at adapter defaults.
+Removing those derived fields requires a separately justified projection/migration.

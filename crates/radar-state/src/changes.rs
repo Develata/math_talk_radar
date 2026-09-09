@@ -78,6 +78,17 @@ pub fn detect_changes(
     current: &[Event],
     now: DateTime<Utc>,
 ) -> Vec<ChangeRecord> {
+    detect_changes_when(previous, current, now, |_| true)
+}
+
+/// The caller determines whether an absent previous event has authoritative
+/// coverage. Positive observations still participate in change detection.
+pub(crate) fn detect_changes_when(
+    previous: &[Event],
+    current: &[Event],
+    now: DateTime<Utc>,
+    can_cancel: impl Fn(&Event) -> bool,
+) -> Vec<ChangeRecord> {
     let prev_by_id: HashMap<&EventId, &Event> = previous.iter().map(|e| (&e.id, e)).collect();
     let curr_by_id: HashMap<&EventId, &Event> = current.iter().map(|e| (&e.id, e)).collect();
 
@@ -95,6 +106,9 @@ pub fn detect_changes(
         ));
     }
     for id in prev_ids.difference(&curr_ids) {
+        if !can_cancel(prev_by_id[id]) {
+            continue;
+        }
         records.push(ChangeRecord::new(
             ChangeKind::EventCancelled,
             (*id).clone(),

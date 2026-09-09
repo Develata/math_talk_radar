@@ -6,7 +6,6 @@
 //!
 //! Determinism: `now` is a caller-supplied timestamp — the repository never
 //! reads a wall clock, so identical inputs produce identical persisted state.
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
@@ -14,11 +13,10 @@ use radar_core::{Event, EventId, SourceHealth};
 use redb::ReadableTable;
 use serde::{Deserialize, Serialize};
 
-use crate::changes::{ChangeRecord, detect_changes};
 use crate::migrations::run_migrations;
-use crate::schema::{
-    CANCELLED_EVENTS, EVENTS, SCHEMA_VERSION, SOURCE_HEALTH, STATE_SCHEMA_VERSION,
-};
+use crate::schema::{EVENTS, SCHEMA_VERSION, SOURCE_HEALTH, STATE_SCHEMA_VERSION};
+
+mod scan;
 
 /// Tombstone retention window (ST-16). A cancelled event's `first_seen_at` is
 /// preserved for this long so a reappearance restores the original first-seen
@@ -175,120 +173,6 @@ impl Repository {
         }
         txn.commit()?;
         Ok(stored)
-    }
-
-    /// Atomically compare-and-store a scan's events (§23). Within ONE write
-    /// transaction: reads all previous events, runs change detection, upserts
-    /// each current event preserving existing `first_seen_at` and stamping
-    /// `last_seen_at = now`. Returns the stored events and the change records.
-    ///
-    /// This is the canonical scan-path write primitive. It makes read-then-
-    /// write atomic so the previous-event ordering required by change
-    /// detection cannot be violated. Unlike [`Repository::store_event`], the
-    /// previous events are deserialized exactly once — for change detection —
-    /// and the resulting in-memory map is reused for `first_seen_at` lookup,
-    /// avoiding the per-upsert full re-deserialization that `store_event`
-    /// performs (ST-2).
-    ///
-    /// Memory: both the previous and current event sets are materialized
-    /// simultaneously (peak ≈ 2× corpus) because `detect_changes` takes
-    /// `&[Event]` slices. Adequate for v0.1 batch sizes (low thousands); a
-    /// future iterator-based signature would bound peak memory.
-    /// The full scored `Event` is persisted verbatim — `score` /
-    /// `score_components` / `rank_reasons` are transient ranking output that
-    /// is recomputed each scan, so persisting them is redundant; a projected
-    /// fingerprint struct would be leaner but is deferred to avoid a schema
-    /// migration before v0.1.
-    pub fn store_scan(
-        &self,
-        events: &[Event],
-        now: DateTime<Utc>,
-    ) -> Result<(Vec<Event>, Vec<ChangeRecord>), StateError> {
-        if self.read_only {
-            return Err(StateError::ReadOnly);
-        }
-        let txn = self.db.begin_write()?;
-        let (stored, changes) = {
-            let mut table = txn.open_table(EVENTS)?;
-            let mut tombstones = txn.open_table(CANCELLED_EVENTS)?;
-            // Read all previous events once — used for both change detection
-            // and `first_seen_at` preservation (ST-2: no per-upsert re-deser).
-            let mut prev_events: Vec<Event> = Vec::new();
-            for entry in table.iter()? {
-                let (_, value) = entry?;
-                prev_events.push(serde_json::from_slice(value.value())?);
-            }
-            let prev_first_seen: HashMap<&str, Option<DateTime<Utc>>> = prev_events
-                .iter()
-                .map(|e| (e.id.0.as_str(), e.first_seen_at))
-                .collect();
-            // ST-16: read tombstones so a reappearing event restores its
-            // original `first_seen_at` instead of being treated as brand-new.
-            // Tombstones past the retention window are treated as if purged:
-            // a reappear past the window is a genuinely new event.
-            let retention_cutoff = now - chrono::Duration::days(TOMBSTONE_RETENTION_DAYS);
-            let mut tombstone_first_seen: HashMap<String, DateTime<Utc>> = HashMap::new();
-            let mut expired_tombstone_keys: Vec<String> = Vec::new();
-            for entry in tombstones.iter()? {
-                let (key, value) = entry?;
-                let t: CancelledEventTombstone = serde_json::from_slice(value.value())?;
-                if t.cancelled_at < retention_cutoff {
-                    expired_tombstone_keys.push(key.value().to_string());
-                } else {
-                    tombstone_first_seen.insert(key.value().to_string(), t.first_seen_at);
-                }
-            }
-            let changes = detect_changes(&prev_events, events, now);
-            let current_ids: std::collections::HashSet<&str> =
-                events.iter().map(|e| e.id.0.as_str()).collect();
-            let mut stored = Vec::with_capacity(events.len());
-            for event in events {
-                let mut s = event.clone();
-                let prev_first = prev_first_seen.get(event.id.0.as_str()).copied().flatten();
-                // ST-16: if the event was previously cancelled (a tombstone
-                // exists), restore its `first_seen_at` and remove the tombstone
-                // — the event is no longer cancelled.
-                let restored_first = tombstone_first_seen.get(&event.id.0).copied();
-                let first_seen = prev_first.or(restored_first).unwrap_or(now);
-                if restored_first.is_some() {
-                    tombstones.remove(event.id.0.as_str())?;
-                }
-                s.first_seen_at = Some(first_seen);
-                s.last_seen_at = Some(now);
-                let bytes = serde_json::to_vec(&s)?;
-                table.insert(event.id.0.as_str(), bytes.as_slice())?;
-                stored.push(s);
-            }
-            // ST M-1: prune events that were in the previous scan but are absent
-            // from the current one (the cancelled set). Without this, cancelled
-            // events stay in the table forever and detect_changes re-emits
-            // EventCancelled for them on every subsequent scan. Deleting here
-            // keeps the DB bounded and makes EventCancelled a one-shot signal.
-            //
-            // ST-16: when pruning, write a tombstone preserving `first_seen_at`
-            // so a future reappearance restores it instead of resetting to the
-            // reappearance scan time.
-            for prev in &prev_events {
-                if !current_ids.contains(prev.id.0.as_str()) {
-                    if let Some(first_seen) = prev.first_seen_at {
-                        let tombstone = CancelledEventTombstone {
-                            first_seen_at: first_seen,
-                            cancelled_at: now,
-                        };
-                        let bytes = serde_json::to_vec(&tombstone)?;
-                        tombstones.insert(prev.id.0.as_str(), bytes.as_slice())?;
-                    }
-                    table.remove(prev.id.0.as_str())?;
-                }
-            }
-            // ST-16: purge expired tombstones collected during the read pass.
-            for key in expired_tombstone_keys {
-                tombstones.remove(key.as_str())?;
-            }
-            (stored, changes)
-        };
-        txn.commit()?;
-        Ok((stored, changes))
     }
 
     /// Retrieve a single event by id, or `None` if absent.

@@ -99,8 +99,12 @@ fn main() {
             .then_with(|| a.id.0.cmp(&b.id.0))
     });
     let state_start = Instant::now();
-    let (events, _) = repo.store_scan(&events, now).expect("first state scan");
-    let (events, changes) = repo.store_scan(&events, now).expect("unchanged state scan");
+    let (events, _) = repo
+        .store_scan_owned(events, now)
+        .expect("first state scan");
+    let (events, changes) = repo
+        .store_scan_owned(events, now)
+        .expect("unchanged state scan");
     assert!(changes.is_empty());
     let state_ms = state_start.elapsed().as_secs_f64() * 1000.0;
     let json_start = Instant::now();

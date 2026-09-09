@@ -682,3 +682,162 @@ fn refuses_to_open_newer_schema_version() {
         "got {err:?}"
     );
 }
+
+fn supporting_event(id: &str, sources: &[&str]) -> Event {
+    let mut event = base_event(id, vec![]);
+    event.sources = sources
+        .iter()
+        .map(|id| SourceEvidence {
+            source_id: (*id).into(),
+            ..src()
+        })
+        .collect();
+    event
+}
+
+#[test]
+fn absence_requires_all_supporting_sources_and_ignores_unrelated_failures() {
+    use std::collections::{HashMap, HashSet};
+    let dir = tempfile::tempdir().unwrap();
+    let repo = Repository::open(&dir.path().join("state.redb")).unwrap();
+    repo.store_scan_owned(
+        vec![
+            supporting_event("a", &["a"]),
+            supporting_event("b", &["b"]),
+            supporting_event("ab", &["a", "b"]),
+            supporting_event("unknown", &[]),
+        ],
+        t0(),
+    )
+    .unwrap();
+    let only_a = HashSet::from(["a".to_owned()]);
+    let (_, changes) = repo
+        .store_scan_with_authority(vec![], t1(), &only_a, &HashMap::new())
+        .unwrap();
+    assert_eq!(changes.len(), 1);
+    assert_eq!(changes[0].kind, ChangeKind::EventCancelled);
+    assert_eq!(changes[0].event_id.0, "a");
+    assert!(repo.get_event(&EventId("ab".into())).unwrap().is_some());
+    assert!(repo.get_event(&EventId("b".into())).unwrap().is_some());
+    let both = HashSet::from(["a".to_owned(), "b".to_owned()]);
+    let (_, changes) = repo
+        .store_scan_with_authority(vec![], t2(), &both, &HashMap::new())
+        .unwrap();
+    assert_eq!(
+        changes
+            .iter()
+            .map(|c| c.event_id.0.as_str())
+            .collect::<Vec<_>>(),
+        ["ab", "b"]
+    );
+    assert_eq!(
+        repo.list_events().unwrap().len(),
+        1,
+        "unknown provenance is never authoritative"
+    );
+    assert!(
+        repo.store_scan_with_authority(vec![], t2(), &both, &HashMap::new())
+            .unwrap()
+            .1
+            .is_empty()
+    );
+}
+
+#[test]
+fn partial_observation_preserves_failed_source_veto_and_media() {
+    use std::collections::{HashMap, HashSet};
+    let dir = tempfile::tempdir().unwrap();
+    let repo = Repository::open(&dir.path().join("state.redb")).unwrap();
+    let mut event = supporting_event("ab", &["a", "b"]);
+    let mut medium = video("https://example.com/video");
+    // The merged medium names A, but B may also support it.
+    medium.source.source_id = "a".into();
+    event.media.push(medium);
+    repo.store_scan_owned(vec![event], t0()).unwrap();
+    let only_a = HashSet::from(["a".to_owned()]);
+    let (current, changes) = repo
+        .store_scan_with_authority(
+            vec![supporting_event("ab", &["a"])],
+            t1(),
+            &only_a,
+            &HashMap::new(),
+        )
+        .unwrap();
+    assert_eq!(current[0].sources.len(), 2);
+    assert_eq!(current[0].media.len(), 1);
+    assert!(!changes.iter().any(|c| c.kind == ChangeKind::MediaRemoved));
+    assert!(
+        repo.store_scan_with_authority(vec![], t2(), &only_a, &HashMap::new())
+            .unwrap()
+            .1
+            .is_empty()
+    );
+    assert!(repo.get_event(&current[0].id).unwrap().is_some());
+    let both = HashSet::from(["a".to_owned(), "b".to_owned()]);
+    assert_eq!(
+        repo.store_scan_with_authority(vec![], t2(), &both, &HashMap::new())
+            .unwrap()
+            .1[0]
+            .kind,
+        ChangeKind::EventCancelled
+    );
+}
+
+#[test]
+fn owned_scan_reuses_event_allocation_and_aliases_preserve_history() {
+    use std::collections::{HashMap, HashSet};
+    let dir = tempfile::tempdir().unwrap();
+    let repo = Repository::open(&dir.path().join("state.redb")).unwrap();
+    let mut old = supporting_event("old-ranking-winner", &["a", "b"]);
+    old.score = 99.0;
+    repo.store_scan(std::slice::from_ref(&old), t0()).unwrap();
+    let events = vec![supporting_event("canonical", &["a", "b"])];
+    let allocation = events.as_ptr();
+    let aliases = HashMap::from([(old.id.clone(), events[0].id.clone())]);
+    let authority = HashSet::from(["a".to_owned(), "b".to_owned()]);
+    let (events, changes) = repo
+        .store_scan_with_authority(events, t1(), &authority, &aliases)
+        .unwrap();
+    assert_eq!(
+        events.as_ptr(),
+        allocation,
+        "move and stamp the caller's Vec in place"
+    );
+    assert_eq!(events[0].first_seen_at, Some(t0()));
+    assert!(
+        changes.is_empty(),
+        "ranking and representative alias alone do not create changes"
+    );
+    assert!(repo.get_event(&old.id).unwrap().is_none());
+    assert_eq!(repo.schema_version().unwrap(), 2);
+    drop(repo);
+    let reopened = Repository::open(&dir.path().join("state.redb")).unwrap();
+    assert_eq!(
+        reopened
+            .get_event(&events[0].id)
+            .unwrap()
+            .unwrap()
+            .first_seen_at,
+        Some(t0())
+    );
+}
+
+#[test]
+fn representative_alias_restores_unexpired_tombstone() {
+    use std::collections::{HashMap, HashSet};
+    let dir = tempfile::tempdir().unwrap();
+    let repo = Repository::open(&dir.path().join("state.redb")).unwrap();
+    repo.store_scan_owned(vec![supporting_event("old", &["a"])], t0())
+        .unwrap();
+    repo.store_scan_owned(vec![], t1()).unwrap();
+    let aliases = HashMap::from([(EventId("old".into()), EventId("new".into()))]);
+    let (events, _) = repo
+        .store_scan_with_authority(
+            vec![supporting_event("new", &["a"])],
+            t2(),
+            &HashSet::from(["a".to_owned()]),
+            &aliases,
+        )
+        .unwrap();
+    assert_eq!(events[0].first_seen_at, Some(t0()));
+}
