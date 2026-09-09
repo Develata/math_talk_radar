@@ -140,12 +140,8 @@ pub async fn run_scan(args: ScanArgs) -> Result<ScanOutput, CliError> {
         .flat_map(|r| r.candidates.iter().map(|c| c.event.clone()))
         .collect();
 
-    // CORE-11/CORE-12: enrich each event before the first scoring pass so the
-    // topic (30pt) and people (10pt) components reflect real matches and
-    // influence dedup primary selection. Topic matching populates event.topics
-    // from the title + description. Scholar enrichment back-fills scholar_tags
-    // on adapter-found people and adds title-mentioned scholars not already
-    // present, so the people component can recognize important laureates.
+    // Enrichment is independent of interests. Establish canonical identity
+    // before scoring so ranking cannot influence merges or persisted fields.
     for event in &mut events {
         enrich_event_topics(event, &normalized_topics);
         enrich_event_scholars(event, scholars);
@@ -156,13 +152,6 @@ pub async fn run_scan(args: ScanArgs) -> Result<ScanOutput, CliError> {
         .iter()
         .map(|s| (s.id.clone(), s.tier))
         .collect();
-    for event in &mut events {
-        let (score, components, reasons) = score_event(event, &tiers, interests_ref);
-        event.score = score;
-        event.score_components = components;
-        event.rank_reasons = reasons;
-    }
-
     events = dedup_events(events);
 
     for event in &mut events {

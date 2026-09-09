@@ -342,7 +342,7 @@
       }
     },
     "EventId": {
-      "description": "Stable event identity. Constructed via [`deterministic_id`] over normalized `title + organizer/domain + start_date`. Never random, never time-based.",
+      "description": "Stable event identity. Constructed via [`deterministic_id`] over normalized `title + canonical_url` (ADR-0008). Never random, never time-based.",
       "type": "string"
     },
     "EventStatus": {

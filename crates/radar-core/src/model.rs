@@ -17,7 +17,7 @@ use crate::topics::TopicMatch;
 // ---- Stable deterministic IDs (§24) -------------------------------------
 
 /// Stable event identity. Constructed via [`deterministic_id`] over normalized
-/// `title + organizer/domain + start_date`. Never random, never time-based.
+/// `title + canonical_url` (ADR-0008). Never random, never time-based.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct EventId(pub String);
 

@@ -8,6 +8,7 @@
 //!
 //! Determinism: identical inputs produce identical merge decisions. No clocks,
 //! no randomness, no order-dependent ties (we sort before merging).
+use std::cmp::Ordering;
 use std::collections::HashSet;
 
 use chrono::NaiveDate;
@@ -270,16 +271,29 @@ pub fn duplicate_signal(a: &Event, b: &Event) -> Option<DedupSignal> {
         .find(|&sig| are_duplicates(a, b, sig))
 }
 
-/// Merge two duplicate events into one, preferring the higher-scored event as
-/// the primary carrier of scalar fields. Collection fields (sources, media,
-/// talks, people, topics) are unioned with dedup. Scalar fields (url, location,
-/// description, date) that are absent on the primary are filled from the
-/// secondary so genuine data from the lower-scored duplicate is not lost.
-///
-/// The returned event keeps the earliest `first_seen_at` and the latest
-/// `last_seen_at`.
+/// Ranking-independent canonical order. IDs already encode normalized title
+/// and URL; provenance breaks same-ID multi-source ties without copying strings.
+/// Exact key ties retain input order. Neither scores nor ranking reasons enter
+/// identity, and completeness is filled by merge rather than used as a weight.
+fn canonical_cmp(a: &Event, b: &Event) -> Ordering {
+    a.id.0
+        .cmp(&b.id.0)
+        .then_with(|| a.url.cmp(&b.url))
+        .then_with(|| {
+            fn key(s: &SourceEvidence) -> (&str, &str, Option<&str>) {
+                (&s.source_id, s.source_url.as_str(), s.native_id.as_deref())
+            }
+            a.sources.iter().map(key).cmp(b.sources.iter().map(key))
+        })
+        .then_with(|| a.title.cmp(&b.title))
+        .then_with(|| a.description.cmp(&b.description))
+}
+
+/// Merge duplicate events using the ranking-independent canonical order.
+/// Collections are unioned; absent scalar fields are filled from the secondary.
+/// Keeps the earliest first_seen_at and latest last_seen_at.
 pub fn merge_events(primary: Event, secondary: Event) -> Event {
-    let (mut keep, other) = if primary.score >= secondary.score {
+    let (mut keep, other) = if canonical_cmp(&primary, &secondary).is_le() {
         (primary, secondary)
     } else {
         (secondary, primary)
@@ -432,7 +446,7 @@ pub fn dedup_events(events: Vec<Event>) -> Vec<Event> {
     // Stable sort by id so the cluster representative is deterministic
     // regardless of input order.
     let mut sorted: Vec<Event> = events;
-    sorted.sort_by(|a, b| a.id.0.cmp(&b.id.0));
+    sorted.sort_by(canonical_cmp);
 
     let mut clusters: Vec<Event> = Vec::with_capacity(sorted.len());
     let mut cluster_keys: Vec<DedupKeys> = Vec::with_capacity(sorted.len());
@@ -516,6 +530,77 @@ mod tests {
             first_seen_at: None,
             last_seen_at: None,
         }
+    }
+
+    #[test]
+    fn ranking_preferences_do_not_change_canonical_identity() {
+        use crate::ranking::{InterestWeights, score_event};
+        use std::collections::HashMap;
+        let mut a = event(
+            "a",
+            "Algebra",
+            Some("https://x.com/e"),
+            None,
+            vec![src("a", "https://x.com/e", Some("1"))],
+        );
+        let mut b = event(
+            "b",
+            "Geometry",
+            Some("https://x.com/e#top"),
+            None,
+            vec![src("b", "https://y.com/e", Some("2"))],
+        );
+        a.description = Some("A".into());
+        b.description = Some("B".into());
+        for (ev, topic) in [(&mut a, "algebra"), (&mut b, "geometry")] {
+            ev.topics = vec![TopicMatch {
+                topic_id: topic.into(),
+                canonical_name: topic.into(),
+                matched_text: topic.into(),
+                confidence: 1.0,
+            }];
+        }
+        let run = |weights: &str| {
+            let interests = InterestWeights::parse(weights).unwrap();
+            let mut inputs = vec![a.clone(), b.clone()];
+            for e in &mut inputs {
+                (e.score, e.score_components, e.rank_reasons) =
+                    score_event(e, &HashMap::new(), Some(&interests));
+            }
+            let mut out = dedup_events(inputs);
+            for e in &mut out {
+                e.score = 0.0;
+                e.score_components = Default::default();
+                e.rank_reasons.clear();
+            }
+            out
+        };
+        assert_eq!(
+            run("[interests]\nalgebra = 1.0\ngeometry = 0.0"),
+            run("[interests]\nalgebra = 0.0\ngeometry = 1.0")
+        );
+    }
+
+    #[test]
+    fn equal_ids_have_stable_source_ties() {
+        let a = event(
+            "same",
+            "Talk A",
+            Some("https://x.com/e"),
+            None,
+            vec![src("a", "https://x.com/e", Some("1"))],
+        );
+        let b = event(
+            "same",
+            "Talk B",
+            Some("https://x.com/e"),
+            None,
+            vec![src("b", "https://x.com/e", Some("2"))],
+        );
+        assert_eq!(
+            dedup_events(vec![a.clone(), b.clone()]),
+            dedup_events(vec![b, a])
+        );
     }
 
     fn date(y: i32, m: u32, d: u32) -> chrono::NaiveDate {
@@ -801,7 +886,7 @@ mod tests {
         assert_eq!(out.len(), 2);
     }
 
-    // CORE-18: merge_events fills scalar gaps from the lower-scored event.
+    // CORE-18: merge_events fills scalar gaps from the secondary event.
     #[test]
     fn merge_events_fills_scalar_gaps() {
         let mut a = event(
@@ -835,7 +920,7 @@ mod tests {
         assert_eq!(merged.description.as_deref(), Some("Description from A"));
         assert!(
             merged.location.is_some(),
-            "location preserved from higher-scored"
+            "location preserved from canonical primary"
         );
     }
 

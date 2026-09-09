@@ -12,3 +12,8 @@ Plan ref: `docs/plan/06_normalization_matching.md` (DEDUP),
 `docs/plan/08_ranking.md` (RANK). Golden datasets: dedup pairs ≥ 30, ranking
 cases ≥ 20. Conservative dedup precision = 100% on labeled baseline; a wrong
 merge is a release blocker (§47). Lands in M1 (ranking primitives) / M3 (dedup).
+
+DEDUP-001 / RANK-001 regression invariants: opposite interest weights over
+identical enriched multi-source candidates must preserve every non-ranking
+field. Equal IDs from different sources must select the same representative
+under input permutation. Covered by core dedup unit tests.
