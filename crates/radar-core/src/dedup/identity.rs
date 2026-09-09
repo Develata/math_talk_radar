@@ -128,6 +128,7 @@ impl DedupKeys {
             .filter_map(|s| {
                 s.native_id
                     .as_ref()
+                    .filter(|id| !id.is_empty())
                     .map(|id| (s.source_id.clone(), id.clone()))
             })
             .collect();
@@ -239,6 +240,7 @@ pub fn are_duplicates(a: &Event, b: &Event, signal: DedupSignal) -> bool {
                 .filter_map(|s| {
                     s.native_id
                         .as_ref()
+                        .filter(|id| !id.is_empty())
                         .map(|id| (s.source_id.as_str(), id.as_str()))
                 })
                 .any(|(sa, ida)| {
@@ -305,6 +307,7 @@ pub(super) fn native_identity_keys(event: &Event) -> impl Iterator<Item = Identi
     event.sources.iter().filter_map(|s| {
         s.native_id
             .as_ref()
+            .filter(|id| !id.is_empty())
             .map(|id| IdentityKey::Native(s.source_id.clone(), id.clone()))
     })
 }

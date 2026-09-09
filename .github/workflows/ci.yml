@@ -89,3 +89,19 @@ jobs:
 
       - name: cargo deny check
         run: cargo deny check
+
+  performance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Rust toolchain
+        run: rustup show
+      - uses: Swatinem/rust-cache@v2
+      - name: Offline performance and release isolation
+        run: cargo xtask perf
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: performance-metrics
+          path: target/perf-latest.json

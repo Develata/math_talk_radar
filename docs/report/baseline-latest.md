@@ -1,6 +1,8 @@
-# Baseline — Latest
+# Baseline snapshot — 2026-08-14
 
-> Evidence only — non-authoritative. Populated by `cargo xtask baseline` (§57).
+> Historical evidence only — non-authoritative, manually recorded; not an
+> automatically refreshed latest result. The legacy filename is retained for links.
+> Current runs generate `target/perf-latest.json`; see the dated optimization reports.
 > Most recent run: 2026-08-14, after the fifth-round audit (21 fixes across 5 commits).
 
 ## B1 Functional

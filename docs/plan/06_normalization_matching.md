@@ -19,7 +19,7 @@ interests alter ranking only; they never delete other important events.
 ## Dedup (§25)
 
 Conservative deterministic dedup. Priority: canonical URL → source-declared
-canonical ID → normalized title+date+organizer → normalized title+date+location.
+nonempty canonical ID → normalized title+date+organizer → normalized title+date+location.
 Prefer keeping a suspected duplicate over merging two distinct events. Fuzzy
 semantic dedup deferred.
 

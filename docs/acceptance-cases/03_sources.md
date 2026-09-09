@@ -27,3 +27,14 @@ REL-001 / HTTP-001: jobs=3 admits at most three adapters for 60 sources,
 including an injected panic, with complete sorted source health. A same-host
 cross-port redirect succeeds at per-host concurrency 1; request timeouts are not
 extended by a later scan deadline. Skipped requested detail depth is partial.
+
+SRC-004: runtime selector cache retains at most 256 selectors per thread while
+accepting additional valid selectors without caching. Existing source fixtures
+cover unchanged media and HTML field extraction after module separation.
+
+SRC-001..005 resource regression: generated 2200-entry RSS, ICS, JSON-LD,
+configured HTML and fallback HTML inputs return exactly 2001 stubs. Existing
+fetch overflow tests verify 2000 retained candidates and Partial status.
+
+REL-002: after an inline parser reaches the deadline, no subsequent stub is
+enriched; the already completed candidate remains and the source is Partial.

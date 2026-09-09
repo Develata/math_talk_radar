@@ -450,3 +450,105 @@ async fn source_admission_is_bounded_and_panics_are_isolated() {
         );
     }
 }
+
+#[tokio::test]
+async fn cancelling_fetch_all_drops_admitted_adapters() {
+    let server = MockServer::start().await;
+    Mock::given(path("/robots.txt"))
+        .respond_with(ResponseTemplate::new(200).set_delay(std::time::Duration::from_secs(30)))
+        .mount(&server)
+        .await;
+    let client = FetchClient::new(HttpPolicy {
+        global_concurrency: 3,
+        ..Default::default()
+    })
+    .unwrap();
+    let sources: Vec<_> = (0..20).map(|i| make_source(i, &server.uri())).collect();
+    let live = Arc::new(AtomicU32::new(0));
+    let admitted = tokio::sync::Notify::new();
+    let mut work = Box::pin(fetch_all(&client, &sources, None, |_| {
+        live.fetch_add(1, Ordering::SeqCst);
+        admitted.notify_one();
+        Box::new(TrackedAdapter {
+            live: live.clone(),
+            panic_on_discover: false,
+        })
+    }));
+    tokio::select! {
+        _ = admitted.notified() => {},
+        _ = &mut work => panic!("blocked source unexpectedly completed"),
+    }
+    assert_eq!(live.load(Ordering::SeqCst), 3);
+    drop(work);
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        while live.load(Ordering::SeqCst) != 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("JoinSet must abort and drop admitted tasks on cancellation");
+}
+
+struct DeadlineAdapter {
+    inner: ManyStubsAdapter,
+    deadline: std::time::Instant,
+}
+impl SourceAdapter for DeadlineAdapter {
+    fn discover(
+        &self,
+        doc: &FetchedDocument,
+        source: &SourceSpec,
+    ) -> Result<Vec<EventStub>, AdapterError> {
+        self.inner.discover(doc, source)
+    }
+    fn plan_enrichment(&self, _: &EventStub, _: &SourceSpec) -> Vec<FetchPlan> {
+        vec![]
+    }
+    fn enrich(
+        &self,
+        stub: EventStub,
+        docs: &[FetchedDocument],
+        source: &SourceSpec,
+    ) -> Result<EventCandidate, AdapterError> {
+        // Simulate one bounded synchronous parser finishing at the deadline.
+        if self.inner.enrich_calls.load(Ordering::SeqCst) == 0 {
+            std::thread::sleep(
+                self.deadline
+                    .saturating_duration_since(std::time::Instant::now())
+                    + std::time::Duration::from_millis(1),
+            );
+        }
+        self.inner.enrich(stub, docs, source)
+    }
+}
+
+#[tokio::test]
+async fn deadline_stops_further_inline_enrichment_without_losing_completed_event() {
+    let server = MockServer::start().await;
+    for target in ["/robots.txt", "/source_0"] {
+        Mock::given(path(target))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+    }
+    let client = FetchClient::new(Default::default()).unwrap();
+    let calls = Arc::new(AtomicU32::new(0));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    let adapter = DeadlineAdapter {
+        inner: ManyStubsAdapter {
+            enrich_calls: calls.clone(),
+        },
+        deadline,
+    };
+    let result = radar_fetch::fetch_source(
+        &client,
+        &make_source(0, &server.uri()),
+        &adapter,
+        &radar_fetch::RobotsCache::new(),
+        Some(deadline),
+    )
+    .await;
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(result.candidates.len(), 1);
+    assert_eq!(result.health.status, SourceStatus::Partial);
+}

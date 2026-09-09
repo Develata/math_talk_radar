@@ -7,6 +7,7 @@
 //! to [`Talk`] structs with [`PersonRole::Speaker`] (structured-source
 //! evidence, §P-2 / §6.2 — a name in a structured field may yield Speaker,
 //! unlike a name in body text or a title).
+use radar_core::adapter::MAX_DISCOVERED_STUBS;
 use radar_core::date::parse_date;
 use radar_core::{
     AccessInfo, AdapterError, Event, EventCandidate, EventDate, EventStatus, EventStub, FetchPlan,
@@ -75,6 +76,9 @@ impl SourceAdapter for JsonLdAdapter {
                         native_id: None,
                     },
                 });
+                if stubs.len() == MAX_DISCOVERED_STUBS {
+                    return Ok(stubs);
+                }
                 global_idx += 1;
             }
         }

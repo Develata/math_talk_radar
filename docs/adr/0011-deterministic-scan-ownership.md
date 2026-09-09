@@ -42,6 +42,12 @@
    a different candidate. Redundant persisted ranking fields remain until a
    separately justified schema migration.
 
+7. The fetch-side candidate cap runs only after adapters materialize their
+   entire stub vector. Move the shared limit to the core adapter contract and
+   stop stub construction at limit + 1; the extra stub preserves fetch's Partial
+   overflow signal and the existing first-2000 selection. DOM/feed parsing stays
+   bounded by the HTTP body cap, and existing parser depth guards remain.
+
 ## Boundaries, compatibility, and verification
 
 The existing core ← fetch/adapters/state ← CLI DAG remains unchanged. Core owns

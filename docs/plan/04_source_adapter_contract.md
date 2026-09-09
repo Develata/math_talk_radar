@@ -68,3 +68,16 @@ selector against live HTML without a fixture.
 - SRC-001..005 — RSS, ICS, JSON-LD, configured HTML, generic fallback.
 - SRC-006..008 — detail depth ≤2, host allowlist, request budget (mock server).
 - MED-001..003 — video detection, slides detection, public access status.
+
+## Shared parsing utilities
+
+Media-link recognition and selector caching have separate internal owners.
+Runtime CSS selector caching is capped at 256 entries per thread; additional
+valid selectors are parsed without retention, so the cap never changes parser
+results. This bounds repeated library scans with changing source configs.
+
+The core adapter contract owns MAX_STUBS_PER_SOURCE=2000. Discovery constructs
+at most 2001 stubs (one overflow sentinel); fetch keeps the first 2000 and reports
+Partial. All five implemented adapters enforce this before building the entire
+stub vector. HTTP's response-body cap and ICS/JSON parsing depth limits still
+bound the upstream DOM/feed parse; this does not claim streaming DOM parsing.

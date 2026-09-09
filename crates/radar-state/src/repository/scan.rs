@@ -58,7 +58,11 @@ impl Repository {
         let changes = {
             let mut table = txn.open_table(EVENTS)?;
             let mut tombstones = txn.open_table(CANCELLED_EVENTS)?;
-            let current_ids: HashSet<&EventId> = events.iter().map(|e| &e.id).collect();
+            let current_ids: HashSet<&EventId> = if aliases.is_empty() {
+                HashSet::new()
+            } else {
+                events.iter().map(|e| &e.id).collect()
+            };
             let canonical_id = |id: &EventId| {
                 aliases
                     .get(id)
@@ -66,25 +70,32 @@ impl Repository {
                     .cloned()
                     .unwrap_or_else(|| id.clone())
             };
-            let mut previous: HashMap<EventId, Event> = HashMap::new();
+            let mut previous = Vec::new();
             let mut obsolete_ids = Vec::new();
             for entry in table.iter()? {
                 let (_, value) = entry?;
                 let mut event: Event = serde_json::from_slice(value.value())?;
-                let canonical = canonical_id(&event.id);
-                if canonical != event.id {
+                if let Some(canonical) = aliases.get(&event.id).filter(|target| {
+                    !current_ids.contains(&event.id) && current_ids.contains(target)
+                }) {
                     obsolete_ids.push(event.id.clone());
-                    event.id = canonical;
+                    event.id = canonical.clone();
                 }
-                if let Some(other) = previous.remove(&event.id) {
-                    event = radar_core::dedup::merge_events(other, event);
-                }
-                previous.insert(event.id.clone(), event);
+                previous.push(event);
             }
-            // Tables iterate by key, but alias coalescing uses a HashMap.
-            // Restore stable ordering before any evidence merge or change output.
-            let mut previous: Vec<Event> = previous.into_values().collect();
-            previous.sort_by(|a, b| a.id.0.cmp(&b.id.0));
+            // The normal path is already in table key order. Only an actual
+            // alias transfer needs coalescing and another sort.
+            if !obsolete_ids.is_empty() {
+                let mut grouped = HashMap::new();
+                for mut event in previous {
+                    if let Some(other) = grouped.remove(&event.id) {
+                        event = radar_core::dedup::merge_events(other, event);
+                    }
+                    grouped.insert(event.id.clone(), event);
+                }
+                previous = grouped.into_values().collect();
+                previous.sort_by(|a, b| a.id.0.cmp(&b.id.0));
+            }
 
             let cutoff = now - chrono::Duration::days(TOMBSTONE_RETENTION_DAYS);
             let mut tombstone_first: HashMap<EventId, DateTime<Utc>> = HashMap::new();

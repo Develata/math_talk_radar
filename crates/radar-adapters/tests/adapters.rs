@@ -313,3 +313,53 @@ fn s67_malformed_ics_does_not_panic() {
         Err(other) => panic!("expected Ok or Parse error, got {other:?}"),
     }
 }
+
+#[test]
+fn all_implemented_adapters_bound_candidate_materialization() {
+    let count = 2200;
+    let mut rss = "<rss version=\"2.0\"><channel><title>Math</title><link>https://example.org</link><description>Math</description>".to_owned();
+    let mut ics = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:probe\r\n".to_owned();
+    let mut html = "<div class=\"events\">".to_owned();
+    let mut json = Vec::new();
+    for i in 0..count {
+        rss.push_str(&format!(
+            "<item><title>Seminar {i}</title><link>https://example.org/{i}</link></item>"
+        ));
+        ics.push_str(&format!("BEGIN:VEVENT\r\nUID:{i}\r\nSUMMARY:Seminar {i}\r\nURL:https://example.org/{i}\r\nEND:VEVENT\r\n"));
+        html.push_str(&format!("<a href=\"/{i}\">Seminar {i}</a>"));
+        json.push(serde_json::json!({"@type":"Event", "name":format!("Seminar {i}"), "url":format!("https://example.org/{i}")}));
+    }
+    rss.push_str("</channel></rss>");
+    ics.push_str("END:VCALENDAR\r\n");
+    html.push_str("</div>");
+    let jsonld = format!(
+        "<script type=\"application/ld+json\">{}</script>",
+        serde_json::to_string(&json).unwrap()
+    );
+    for (kind, body) in [
+        (AdapterKind::Rss, &rss),
+        (AdapterKind::Ics, &ics),
+        (AdapterKind::JsonLd, &jsonld),
+        (AdapterKind::HtmlConfig, &html),
+        (AdapterKind::HtmlGeneric, &html),
+    ] {
+        let mut source = make_source("limit", kind, SourceKind::Other);
+        source.selectors = Some(HtmlSelectors {
+            list: ".events".into(),
+            list_link: "a".into(),
+            detail_title: "h1".into(),
+            detail_date: "time".into(),
+            ..Default::default()
+        });
+        let stubs = radar_adapters::default_adapter(kind)
+            .discover(&make_doc(body, "text/plain"), &source)
+            .unwrap();
+        assert_eq!(
+            stubs.len(),
+            radar_core::adapter::MAX_DISCOVERED_STUBS,
+            "{kind:?}"
+        );
+        assert_eq!(stubs[0].title, "Seminar 0");
+        assert_eq!(stubs.last().unwrap().title, "Seminar 2000");
+    }
+}

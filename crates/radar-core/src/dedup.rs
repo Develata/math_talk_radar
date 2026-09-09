@@ -7,7 +7,7 @@
 //! release blocker (§47). Fuzzy/semantic dedup is deferred.
 //!
 //! Determinism: identical inputs produce identical merge decisions. No clocks,
-//! no randomness, no order-dependent ties (we sort before merging).
+//! no randomness. Canonical keys are sorted; exact key ties retain input order.
 use crate::model::Event;
 use std::collections::{BTreeSet, HashMap};
 
@@ -98,14 +98,11 @@ fn dedup_indexed(
     events.sort_by(canonical_cmp);
     let mut clusters = Vec::with_capacity(events.len());
     let mut cluster_keys: Vec<Vec<IdentityKey>> = Vec::with_capacity(events.len());
-    let mut origins = Vec::new();
-    let mut merge_indices: Vec<Option<MergeIndex>> = Vec::with_capacity(events.len());
+    let mut id_aliases = HashMap::new();
+    let mut merge_indices: Vec<Option<Box<MergeIndex>>> = Vec::with_capacity(events.len());
     for event in events {
         let keys = DedupKeys::from_event(&event).identity_keys();
         let position = index.first_match(&keys).unwrap_or(clusters.len());
-        if aliases {
-            origins.push((event.id.clone(), position));
-        }
         if position == clusters.len() {
             index.insert(position, &keys);
             cluster_keys.push(
@@ -117,6 +114,11 @@ fn dedup_indexed(
             merge_indices.push(None);
         } else {
             let keep = &mut clusters[position];
+            // Ascending input IDs guarantee the cluster ID never changes.
+            // Keep only actual aliases, without copying distinct input IDs.
+            if aliases && event.id != keep.id {
+                id_aliases.insert(event.id.clone(), keep.id.clone());
+            }
             let replacing = canonical_cmp(keep, &event).is_gt();
             if replacing {
                 // Rare equal-ID tie replacement may discard old native IDs under
@@ -125,7 +127,7 @@ fn dedup_indexed(
             }
             let old_sources = keep.sources.len();
             merge_indices[position]
-                .get_or_insert_with(|| MergeIndex::new(keep))
+                .get_or_insert_with(|| Box::new(MergeIndex::new(keep)))
                 .merge(keep, event);
             let keys = scalar_identity_keys(keep);
             let old = &cluster_keys[position];
@@ -138,7 +140,7 @@ fn dedup_indexed(
             cluster_keys[position] = keys;
             let start = if replacing { 0 } else { old_sources };
             for source in &keep.sources[start..] {
-                if let Some(native) = &source.native_id {
+                if let Some(native) = source.native_id.as_ref().filter(|id| !id.is_empty()) {
                     index.insert(
                         position,
                         &[IdentityKey::Native(
@@ -150,14 +152,7 @@ fn dedup_indexed(
             }
         }
     }
-    let aliases = origins
-        .into_iter()
-        .filter_map(|(id, pos)| {
-            let canonical = &clusters[pos].id;
-            (id != *canonical).then(|| (id, canonical.clone()))
-        })
-        .collect();
-    (clusters, aliases)
+    (clusters, id_aliases)
 }
 
 #[cfg(test)]
@@ -375,6 +370,29 @@ mod tests {
                     e.description = Some(format!("Description {}", next() % 3));
                 }
                 e.score = (next() % 100) as f32;
+                for _ in 0..next() % 3 {
+                    let key = next() % 5;
+                    e.media.push(crate::MediaResource {
+                        id: crate::MediaId(format!("m{key}")),
+                        media_type: crate::MediaType::Video,
+                        title: None,
+                        url: Url::parse(&format!("https://media.org/{key}")).unwrap(),
+                        platform: None,
+                        public_access: PublicAccess::Open,
+                        published_at: None,
+                        source: src("media", "https://media.org", None),
+                    });
+                    e.talks.push(Talk {
+                        id: TalkId(format!("t{}", next() % 4)),
+                        title: format!("Session {key}"),
+                        speaker: e.people.clone(),
+                        date_time: None,
+                        abstract_text: e.description.clone(),
+                        topics: vec![],
+                        media: e.media.clone(),
+                        source: src("talk", "https://talk.org", None),
+                    });
+                }
                 events.push(e);
             }
             assert_eq!(
@@ -492,6 +510,26 @@ mod tests {
             "must not reindex the entire growing representative: {}",
             index.updates
         );
+    }
+
+    #[test]
+    fn empty_native_ids_are_not_identity_evidence() {
+        let a = event(
+            "a",
+            "Algebra",
+            Some("https://x.org/a"),
+            None,
+            vec![src("x", "https://x.org/feed", Some(""))],
+        );
+        let b = event(
+            "b",
+            "Geometry",
+            Some("https://x.org/b"),
+            None,
+            vec![src("x", "https://x.org/feed", Some(""))],
+        );
+        assert_eq!(duplicate_signal(&a, &b), None);
+        assert_eq!(dedup_events(vec![a, b]).len(), 2);
     }
 
     #[test]

@@ -12,3 +12,5 @@ publish = false
 unsafe_code = "forbid"
 
 [dependencies]
+# Existing workspace dependency: parse Cargo metadata and performance artifacts.
+serde_json.workspace = true

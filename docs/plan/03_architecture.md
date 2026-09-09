@@ -26,7 +26,9 @@ cli → core, fetch, adapters, state   (only composition root)
 ```
 
 Forbid: core→{reqwest,redb,scraper}; adapters→reqwest; state→reqwest;
-fetch→scraper. Enforce via Cargo dependencies.
+fetch→scraper. `cargo xtask check` validates production dependency edges from
+Cargo metadata against these boundaries. Test-only fixture dependencies remain
+separate from production edges.
 
 ## Technology stack (§37)
 
@@ -36,7 +38,8 @@ tracing, thiserror (libs), anyhow (CLI composition).
 
 ## Dependency policy (§38)
 
-std first → small maintained crate → large framework last. `Cargo.lock`
+std first → small maintained crate → large framework last. Tokio enables only
+rt-multi-thread, sync, time and net in production; macros are test-only. `Cargo.lock`
 committed. `cargo deny check` (advisories, license, banned, duplicate, registry).
 
 ## Unsafe policy (§39)

@@ -20,14 +20,7 @@ pub struct SourceFetchResult {
     pub health: SourceHealth,
 }
 
-/// R9-H10: per-source upper bound on discovered stubs that proceed to
-/// enrichment. Output caps (`--max-events`/`--max-talks`) only truncate the
-/// final output; without this cap a single runaway source listing tens of
-/// thousands of events would drive unbounded enrichment fetches, dedup,
-/// scoring, and state writes before any output cap fires. The limit is
-/// generous for legitimate calendars (the largest real source in the
-/// registry lists ~600 events) while bounding worst-case resource use.
-pub const MAX_STUBS_PER_SOURCE: usize = 2000;
+pub use radar_core::adapter::MAX_STUBS_PER_SOURCE;
 
 /// Fetch a single source: entrypoint -> discover -> enrich (Oracle #4: inline enrich).
 pub async fn fetch_source(
@@ -131,6 +124,12 @@ pub async fn fetch_source(
     let mut candidates = Vec::new();
     let mut enrichment_failures = 0u32;
     for stub in stubs {
+        // Inline enrichment may perform no await at all. Check between bounded
+        // parser calls so CPU-only sources also respect the scan deadline.
+        if past_deadline(deadline) {
+            enrichment_failures += 1;
+            break;
+        }
         let plans = adapter.plan_enrichment(&stub, source);
         let mut docs = Vec::new();
         for plan in &plans {

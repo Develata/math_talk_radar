@@ -4,6 +4,7 @@
 //! Selectors are never hardcoded here: every query reads from `source.selectors`.
 //! A configured-HTML source without `selectors` fails fast with `AdapterError`
 //! (Metis D5: no automatic fallback to the generic HTML adapter).
+use radar_core::adapter::MAX_DISCOVERED_STUBS;
 use scraper::{ElementRef, Html, Node, Selector};
 
 use chrono::Datelike;
@@ -80,6 +81,9 @@ impl SourceAdapter for HtmlConfigAdapter {
                         native_id: None,
                     },
                 });
+                if stubs.len() == MAX_DISCOVERED_STUBS {
+                    return Ok(stubs);
+                }
             }
         }
         Ok(stubs)

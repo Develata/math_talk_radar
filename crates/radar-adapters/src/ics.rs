@@ -5,6 +5,7 @@
 //! to prevent a stack-overflow DoS in `icalendar`'s nom recursive-descent
 //! parser. The guard tracks actual BEGIN/END nesting depth (not flat component
 //! count) so legitimate calendars with many flat VEVENTs are not rejected.
+use radar_core::adapter::MAX_DISCOVERED_STUBS;
 use radar_core::{
     AccessInfo, AdapterError, DateTimeOrDate, Event, EventCandidate, EventDate, EventStatus,
     EventStub, FetchPlan, FetchedDocument, Location, OnlineAvailability, PublicAccess,
@@ -101,6 +102,9 @@ impl SourceAdapter for IcsAdapter {
                     native_id: uid,
                 },
             });
+            if stubs.len() == MAX_DISCOVERED_STUBS {
+                return Ok(stubs);
+            }
         }
 
         Ok(stubs)

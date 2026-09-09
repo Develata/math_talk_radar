@@ -69,7 +69,8 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace
 cargo xtask check          # source-registry + acceptance-matrix + doc coverage
 cargo xtask check-matrix   # acceptance-matrix structural validation
-cargo xtask baseline       # functional + quality + perf (RSS memory ≤128 MiB)
+cargo xtask baseline       # functional + quality + architecture + offline perf
+cargo xtask perf           # JSON metrics in target/perf-latest.json; wide resource gates
 cargo deny check           # supply chain (licenses + advisories + bans)
 ```
 

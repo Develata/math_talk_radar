@@ -37,6 +37,9 @@ jobs:
             exit 1
           fi
 
+      - name: Verify offline baseline before packaging
+        run: cargo xtask baseline
+
       - name: Build static release binary
         run: cargo build --release --target x86_64-unknown-linux-musl
 

@@ -7,6 +7,7 @@
 //! (§47: precision ≥90%). `enrich` extracts fields from the detail page using
 //! the shared HTML helpers.
 
+use radar_core::adapter::MAX_DISCOVERED_STUBS;
 use scraper::Html;
 
 use radar_core::date::parse_date;
@@ -237,6 +238,9 @@ impl SourceAdapter for HtmlGenericAdapter {
                     native_id: None,
                 },
             });
+            if stubs.len() == MAX_DISCOVERED_STUBS {
+                return Ok(stubs);
+            }
         }
         Ok(stubs)
     }

@@ -10,6 +10,9 @@
 //! `static-release`.
 #![forbid(unsafe_code)]
 
+mod architecture;
+mod perf;
+
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -22,6 +25,7 @@ fn main() -> ExitCode {
         "check" => run_check(&root),
         "check-matrix" => run_check_matrix(&root),
         "baseline" => run_baseline(&root),
+        "perf" => perf::run(&root),
         "static-release" => {
             let binary = args.get(1).map(Path::new);
             match binary {
@@ -31,7 +35,7 @@ fn main() -> ExitCode {
         }
         other => {
             eprintln!("unknown xtask command: {other}");
-            eprintln!("available: check | check-matrix | baseline | static-release");
+            eprintln!("available: check | check-matrix | baseline | perf | static-release");
             return ExitCode::from(2);
         }
     };
@@ -175,48 +179,11 @@ fn run_baseline(root: &Path) -> Result<(), Vec<String>> {
         Err(e) => errors.push(format!("quality: failed to run cargo clippy: {e}")),
     }
 
-    println!("baseline: perf (RSS adapter memory, PERF-001 ≤128 MiB)");
-    let perf = Command::new("cargo")
-        .args([
-            "run",
-            "-p",
-            "radar-adapters",
-            "--example",
-            "perf_rss",
-            "--release",
-        ])
-        .current_dir(root)
-        .output();
-    match perf {
-        Ok(out) if out.status.success() => {
-            let stdout = String::from_utf8_lossy(&out.stdout);
-            let peak_kb: Option<u64> = stdout
-                .lines()
-                .find_map(|l| l.strip_prefix("PERF_RSS_PEAK_KB:"))
-                .and_then(|v| v.trim().parse().ok());
-            let events: Option<u64> = stdout
-                .lines()
-                .find_map(|l| l.strip_prefix("PERF_RSS_EVENTS:"))
-                .and_then(|v| v.trim().parse().ok());
-            match (peak_kb, events) {
-                (Some(kb), Some(ev)) => {
-                    let mib = kb as f64 / 1024.0;
-                    println!("baseline: perf peak RSS = {kb} KiB ({mib:.1} MiB), {ev} events");
-                    let limit_kb: u64 = 128 * 1024;
-                    if kb > limit_kb {
-                        errors.push(format!(
-                            "PERF-001: peak RSS {kb} KiB exceeds 128 MiB ({limit_kb} KiB)"
-                        ));
-                    }
-                }
-                _ => errors.push(format!("perf: failed to parse perf_rss output:\n{stdout}")),
-            }
-        }
-        Ok(out) => {
-            let stderr = String::from_utf8_lossy(&out.stderr);
-            errors.push(format!("perf: perf_rss exited non-zero\n{stderr}"));
-        }
-        Err(e) => errors.push(format!("perf: failed to run perf_rss: {e}")),
+    if let Err(meta_errors) = run_check(root) {
+        errors.extend(meta_errors);
+    }
+    if let Err(perf_errors) = perf::run(root) {
+        errors.extend(perf_errors);
     }
 
     if errors.is_empty() {
@@ -235,6 +202,7 @@ fn run_check(root: &Path) -> Result<(), Vec<String>> {
     errors.extend(validate_source_registry(root));
     errors.extend(validate_matrix(root));
     errors.extend(validate_schema_drift(root));
+    errors.extend(architecture::validate(root));
     if errors.is_empty() {
         Ok(())
     } else {

@@ -57,7 +57,8 @@ respect the scan deadline; per-request timeouts are the minimum of the request
 limit and remaining scan time. Release old responses/permits before redirect
 robots checks and retry backoff. Enrichment borrows the entrypoint document for
 inline parsing instead of copying its full body per event. Skipped requested
-depth is Partial, never evidence of authoritative completion.
+depth is Partial, never evidence of authoritative completion. Inline enrichment
+checks the deadline between parser calls, even when no awaited request occurs.
 
 ## Acceptance cases
 

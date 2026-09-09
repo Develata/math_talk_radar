@@ -11,6 +11,12 @@ use crate::date::EventDate;
 use crate::document::{FetchPlan, FetchedDocument};
 use crate::model::{Event, SourceEvidence};
 
+/// Maximum candidates enriched per source. Parsers may return one extra stub
+/// to report overflow without materializing the complete oversized list.
+pub const MAX_STUBS_PER_SOURCE: usize = 2000;
+/// Bounded discovery result, including the truncation sentinel.
+pub const MAX_DISCOVERED_STUBS: usize = MAX_STUBS_PER_SOURCE + 1;
+
 /// A partial event discovered from a list/feed page, to be enriched later.
 #[derive(Debug, Clone)]
 pub struct EventStub {

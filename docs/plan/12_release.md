@@ -10,11 +10,12 @@
 opt-level = 3
 lto = "thin"
 codegen-units = 1
-panic = "abort"
+panic = "unwind"
 strip = "symbols"
 ```
 
-Modifiable by ADR if benchmarks justify it.
+Modifiable by ADR if benchmarks justify it. ADR-0011 requires unwind so source
+task panics remain isolated in production, with release-profile verification.
 
 ## Static release (§51)
 

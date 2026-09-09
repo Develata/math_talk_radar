@@ -6,6 +6,28 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Engineering optimization — 2026-09-09
+
+- Ranking no longer selects canonical events or changes persistent identity;
+  score once after dedup and state reconciliation.
+- Shared robots requests have a separate bounded system transaction, independent
+  of the initializing source's content budget. Fix redirect host-permit deadlock
+  and request timeouts extended by a later global deadline.
+- Hash-indexed first-cluster dedup replaces quadratic distinct-event scans;
+  incremental provenance union avoids repeatedly rebuilding growing clusters.
+  Empty native IDs no longer merge unrelated events. Inline enrichment checks
+  the deadline between parser calls.
+- Source task admission is bounded by jobs, with complete deterministic health
+  reporting and release-profile panic isolation (unwind).
+- Owned state scans preserve failed-source provenance, require per-event source
+  authority for cancellation, and transfer first_seen through current dedup
+  aliases. Existing v2 state and public JSON 1.0 remain compatible.
+- Candidate materialization and selector caches have explicit bounds. Narrow
+  Tokio features and remove unused dependency declarations.
+- Add differential/invariant tests, Cargo-metadata architecture gates, offline
+  performance JSON artifacts and real release-panic probes. Release packaging
+  now runs the offline baseline; historical reports are labeled as snapshots.
+
 ### Added — M0 (Repository Bootstrap)
 
 - Rust 2024 workspace: `radar-core`, `radar-fetch`, `radar-adapters`,

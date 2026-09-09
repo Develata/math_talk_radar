@@ -26,3 +26,6 @@ inputs and bounded key updates for a 10k growing-provenance cluster.
 
 RANK-001/STATE-002: scoring occurs only after persistence reconciliation; legacy
 stored scores remain readable and cannot influence first_seen or change records.
+
+DEDUP-002: an empty native ID is missing evidence; it must not merge unrelated
+URLs/titles. Both pairwise matching and indexed candidate matching reject it.

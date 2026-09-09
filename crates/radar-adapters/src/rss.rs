@@ -7,6 +7,7 @@
 //! shared HTML helpers. Speakers come from feed-level `entry.authors`
 //! (`<dc:creator>` / `<author>`) and are intentionally not promoted from title
 //! text (§P-2, §6.2).
+use radar_core::adapter::MAX_DISCOVERED_STUBS;
 use url::Url;
 
 use radar_core::date::parse_date;
@@ -57,6 +58,7 @@ impl SourceAdapter for RssAdapter {
                     },
                 })
             })
+            .take(MAX_DISCOVERED_STUBS)
             .collect();
         Ok(stubs)
     }
