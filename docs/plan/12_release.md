@@ -28,10 +28,54 @@ failed inspection commands, and ambiguous dependency output must be rejected.
 
 ## Supply chain (§52)
 
-Workflow: fmt → clippy → test → coverage → cargo-deny → acceptance matrix →
-baseline → musl build → static check → smoke → SHA-256 → artifact attestation →
-GitHub Release. Minimal permissions; pin third-party actions by full SHA;
-Dependabot for Cargo + Actions; release must not skip baseline.
+ADR-0012 replaces incidental serial ordering with dependencies: independent
+fmt/clippy, tests, coverage, cargo-deny, acceptance/architecture and performance
+checks may run concurrently with the musl build. All remain required. Static
+check, clean-Ubuntu smoke and checksum verification consume that exact musl
+artifact. An always-running fan-in rejects missing, skipped, failed, cancelled,
+stale or mismatched required evidence before attestation/publication. Downloaded
+release assets are explicitly rehashed before publication. Minimal permissions;
+pin third-party actions by full SHA; Dependabot for Cargo + Actions. Release
+must not skip the complete baseline, even if another workflow was green.
+
+## Acceptance orchestration
+
+The existing Rust xtask owns plan/run/summarize. Case definitions under
+`docs/acceptance-cases/` own the required IDs; registry rows map them to checks,
+not historical success. Receipts are per-run artifacts with source, toolchain,
+profile, module/case/shard, fixture digest, command, timing and exit status.
+The CLI public schema remains `1.0`; development evidence has its own version.
+
+Selection is whole-crate plus every reverse consumer, using all Cargo dependency
+kinds and conservative target/feature unions. Shared configuration, public
+contracts, authority, workspace/dependencies, toolchain, CI/acceptance rules and
+unknown changes force full. Invalid or incomplete case/shard/graph catalogs fail
+closed. Main CI, daily full, release and future deployment/restore always run
+full. Local selective execution is allowed on the main-only checkout. PR CI
+initially runs in shadow (plans selection, executes full); no branch workflow is
+introduced. Manual full is the recovery path when a trusted change base is absent.
+
+The first selector deliberately treats every non-Rust input (including fixtures
+and golden data) as shared by the whole workspace. This conservative input edge
+avoids inferring I/O dependencies from strings or stale compiler dep-info. Core
+domain definitions, state authority, lifecycle trust, scan composition and CLI
+public surfaces also force full. Only private Rust implementation/test changes
+with a known crate owner may use the smaller reverse-dependency closure. More
+precise fixture selection requires a separately verified input-consumer catalog.
+MSRV is derived from Cargo metadata, not duplicated in workflow configuration.
+
+Each application instance owns its temporary XDG directories, state database,
+identity, writable fixtures and logs; mock servers bind OS-assigned ports.
+Runner and program paths are runtime inputs. A receipt is valid only for its
+source snapshot, run/attempt, command and actual artifact hashes. Missing receipts
+and zero/ignored tests cannot be converted into passes. Human security review
+remains a release requirement and must reference the release source commit.
+
+Do not add Docker packaging or remote per-case shards at this stage. Reuse a
+build only within an identical toolchain/target/profile/features/lock/flags tuple.
+If packaging or restore is later introduced, use the already verified binary
+digest, verify packaged read-back, and restore a specified snapshot into a new
+directory. Cache entries never serve as acceptance evidence.
 
 ## release.yml (§53)
 

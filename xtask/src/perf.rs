@@ -1,7 +1,8 @@
 //! Small offline performance gate. Timings are trends; only broad catastrophic
 //! limits and relatively stable resource properties fail CI.
 use serde_json::{Value, json};
-use std::path::Path;
+use sha2::{Digest, Sha256};
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Instant, SystemTime};
 
@@ -9,6 +10,7 @@ fn cargo(root: &Path, args: &[&str]) -> Result<String, Vec<String>> {
     println!("perf: cargo {}", args.join(" "));
     let output = Command::new("cargo")
         .args(args)
+        .envs(crate::FIXTURE_NO_PROXY)
         .current_dir(root)
         .output()
         .map_err(|e| vec![format!("cargo {}: {e}", args.join(" "))])?;
@@ -41,7 +43,68 @@ fn startup_ms(binary: &Path, flag: &str) -> Result<f64, Vec<String>> {
 }
 
 pub(super) fn run(root: &Path) -> Result<(), Vec<String>> {
-    cargo(
+    let metadata = super::architecture::metadata(root).map_err(|e| vec![e])?;
+    let target = metadata["target_directory"]
+        .as_str()
+        .ok_or_else(|| vec!["Cargo target_directory missing".into()])?;
+    let output_path = Path::new(target).join("perf-latest.json");
+    run_to(root, &output_path)
+}
+
+pub(super) fn run_to(root: &Path, output_path: &Path) -> Result<(), Vec<String>> {
+    // Replace stale success before any build/probe can fail. Acceptance supplies
+    // a run-owned path so concurrent invocations cannot exchange reports.
+    write_report(
+        output_path,
+        &json!({"schema_version": 1, "status": "running"}),
+    )?;
+    let started = Instant::now();
+    let result = run_probes(root);
+    let report = match &result {
+        Ok(report) => report.clone(),
+        Err(errors) => json!({"schema_version": 1, "status": "fail", "errors": errors}),
+    };
+    let mut report = report;
+    report["duration_ms"] = json!(started.elapsed().as_millis());
+    write_report(output_path, &report)?;
+    println!("perf: metrics {}", output_path.display());
+    result.map(|_| ())
+}
+
+fn write_report(path: &Path, report: &Value) -> Result<(), Vec<String>> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| vec![e.to_string()])?;
+    }
+    let temporary = path.with_extension(format!("{}.tmp", std::process::id()));
+    std::fs::write(
+        &temporary,
+        serde_json::to_vec_pretty(report).map_err(|e| vec![e.to_string()])?,
+    )
+    .and_then(|()| std::fs::rename(temporary, path))
+    .map_err(|e| vec![e.to_string()])
+}
+
+fn built_executable(messages: &str) -> Result<PathBuf, Vec<String>> {
+    let mut executables = Vec::new();
+    for line in messages.lines() {
+        let message: Value = serde_json::from_str(line).map_err(|e| vec![e.to_string()])?;
+        if message["reason"] == "compiler-artifact"
+            && message["target"]["name"] == "math_talk_radar"
+            && let Some(path) = message["executable"].as_str()
+        {
+            executables.push(PathBuf::from(path));
+        }
+    }
+    match executables.as_slice() {
+        [executable] => Ok(executable.clone()),
+        _ => Err(vec![
+            "build must identify exactly one math_talk_radar executable".into(),
+        ]),
+    }
+}
+
+fn run_probes(root: &Path) -> Result<Value, Vec<String>> {
+    let build_messages = cargo(
         root,
         &[
             "build",
@@ -50,14 +113,14 @@ pub(super) fn run(root: &Path) -> Result<(), Vec<String>> {
             "--release",
             "-p",
             "math_talk_radar",
+            "--message-format=json",
         ],
     )?;
-    let metadata = super::architecture::metadata(root).map_err(|e| vec![e])?;
-    let target = metadata["target_directory"]
-        .as_str()
-        .ok_or_else(|| vec!["Cargo target_directory missing".into()])?;
-    let target = Path::new(target);
-    let binary = target.join("release/math_talk_radar");
+    let binary = built_executable(&build_messages)?;
+    let binary_sha256 = format!(
+        "{:x}",
+        Sha256::digest(std::fs::read(&binary).map_err(|e| vec![e.to_string()])?)
+    );
     let size = std::fs::metadata(&binary)
         .map_err(|e| vec![e.to_string()])?
         .len();
@@ -153,23 +216,62 @@ pub(super) fn run(root: &Path) -> Result<(), Vec<String>> {
         .ok()
         .filter(|o| o.status.success())
         .map(|o| String::from_utf8_lossy(&o.stdout).into_owned());
-    let report = json!({"schema_version": 1, "revision": revision, "worktree_status": worktree_status,
+    let rustc = Command::new("rustc")
+        .arg("-vV")
+        .current_dir(root)
+        .output()
+        .map_err(|e| vec![e.to_string()])?;
+    if !rustc.status.success() {
+        return Err(vec!["rustc -vV failed".into()]);
+    }
+    let report = json!({"schema_version": 1, "status": if errors.is_empty() { "pass" } else { "fail" },
+        "revision": revision, "worktree_status": worktree_status,
+        "toolchain": String::from_utf8_lossy(&rustc.stdout), "profile": "release",
+        "binary": binary, "binary_sha256": binary_sha256,
         "generated_at_unix_seconds": SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map_err(|e| vec![e.to_string()])?.as_secs(),
         "binary_bytes": size, "startup_help_ms": help_ms, "startup_version_ms": version_ms,
         "adapter_rss_kb": rss_kb, "workload": workload, "scan": scan, "hard_gate_errors": errors});
-    let output_path = target.join("perf-latest.json");
-    std::fs::write(
-        &output_path,
-        serde_json::to_vec_pretty(&report).map_err(|e| vec![e.to_string()])?,
-    )
-    .map_err(|e| vec![e.to_string()])?;
-    println!("perf: metrics {}", output_path.display());
     println!(
         "perf: binary {size} bytes; help {help_ms:.2} ms; version {version_ms:.2} ms; adapter RSS {rss_kb} KiB"
     );
     if errors.is_empty() {
-        Ok(())
+        Ok(report)
     } else {
         Err(errors)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn failed_run_invalidates_only_its_owned_report() {
+        let directory = tempfile::tempdir().unwrap();
+        let report = directory.path().join("run/performance.json");
+        let other = directory.path().join("other/performance.json");
+        write_report(&report, &json!({"status": "pass"})).unwrap();
+        write_report(&other, &json!({"status": "pass"})).unwrap();
+        // No Cargo manifest: build fails before any expensive probes run.
+        assert!(run_to(directory.path(), &report).is_err());
+        let status =
+            |path| -> Value { serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap() };
+        assert_eq!(status(report)["status"], "fail");
+        assert_eq!(status(other)["status"], "pass");
+    }
+
+    #[test]
+    fn build_path_comes_from_cargo_not_native_target_assumptions() {
+        let messages = concat!(
+            "{\"reason\":\"compiler-artifact\",\"target\":{\"name\":\"dep\"},\"executable\":null}\n",
+            "{\"reason\":\"compiler-artifact\",\"target\":{\"name\":\"math_talk_radar\"},\"executable\":\"/custom/x86_64-unknown-linux-musl/release/math_talk_radar\"}\n",
+            "{\"reason\":\"build-finished\",\"success\":true}\n"
+        );
+        assert_eq!(
+            built_executable(messages).unwrap(),
+            PathBuf::from("/custom/x86_64-unknown-linux-musl/release/math_talk_radar")
+        );
+        assert!(built_executable("").is_err());
+        assert!(built_executable(&format!("{messages}{messages}")).is_err());
     }
 }

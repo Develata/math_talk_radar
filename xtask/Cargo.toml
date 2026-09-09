@@ -14,3 +14,7 @@ unsafe_code = "forbid"
 [dependencies]
 # Existing workspace dependency: parse Cargo metadata and performance artifacts.
 serde_json.workspace = true
+sha2.workspace = true
+serde.workspace = true
+quick-xml = "0.41"
+tempfile.workspace = true

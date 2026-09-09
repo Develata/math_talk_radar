@@ -109,9 +109,20 @@ async fn run() {
         first
             .source_health
             .iter()
-            .all(|h| h.status == radar_core::SourceStatus::Ok)
+            .all(|h| h.status == radar_core::SourceStatus::Ok),
+        "source health: {:?}",
+        first.source_health
     );
     let second = scan_engine::run_scan(arguments()).await.unwrap();
+    assert_eq!(second.events.len(), 400);
+    assert!(
+        second
+            .source_health
+            .iter()
+            .all(|h| h.status == radar_core::SourceStatus::Ok),
+        "second scan source health: {:?}",
+        second.source_health
+    );
     assert!(second.changes.is_empty());
     let rendered = output::render(
         second,

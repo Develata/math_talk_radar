@@ -1,67 +1,72 @@
-case_id	requirement	plan_ref	test_surface	automation	gate	evidence	status
-CLI-001	--help complete	docs/plan/09_cli_output_contract.md	integration	cargo test --test integration	hard		pass
-CLI-002	--version zero network	docs/plan/09_cli_output_contract.md	integration	cargo test --test integration	hard		pass
-CLI-003	scan stdout pure JSON	docs/plan/09_cli_output_contract.md	integration	cargo test --test integration	hard		pass
-CLI-004	stderr/stdout separated	docs/plan/09_cli_output_contract.md	integration	cargo test --test integration	hard		pass
-CFG-001	embedded default config	docs/plan/03_architecture.md	unit	cargo test -p radar-core	hard		pass
-CFG-002	invalid config fails closed	docs/plan/03_architecture.md	integration	cargo test --test integration	hard		pass
-DATE-001	same-month range	docs/plan/02_domain_model.md	unit	cargo test -p radar-core	hard		pass
-DATE-002	cross-month range	docs/plan/02_domain_model.md	unit	cargo test -p radar-core	hard		pass
-DATE-003	US date format	docs/plan/02_domain_model.md	unit	cargo test -p radar-core	hard		pass
-DATE-004	interval overlap	docs/plan/02_domain_model.md	unit	cargo test -p radar-core	hard		pass
-DATE-005	unparsed date retained	docs/plan/02_domain_model.md	unit	cargo test -p radar-core	hard		pass
-SRC-001	RSS adapter	docs/plan/04_source_adapter_contract.md	fixture	cargo test -p radar-adapters --test adapters	hard		pass
-
-SRC-002	ICS adapter	docs/plan/04_source_adapter_contract.md	fixture	cargo test -p radar-adapters --test adapters	hard		pass
-SRC-003	JSON-LD adapter	docs/plan/04_source_adapter_contract.md	fixture	cargo test -p radar-adapters --test adapters	hard		pass
-SRC-004	configured HTML adapter	docs/plan/04_source_adapter_contract.md	fixture	cargo test -p radar-adapters --test adapters	hard		pass
-SRC-005	generic fallback	docs/plan/04_source_adapter_contract.md	fixture	cargo test -p radar-adapters --test adapters	hard		pass
-SRC-006	detail depth <=2	docs/plan/04_source_adapter_contract.md	mock server	cargo test -p radar-fetch --test http_mock	hard		pass
-SRC-007	host allowlist	docs/plan/04_source_adapter_contract.md	mock server	cargo test -p radar-fetch --test http_mock	hard		pass
-SRC-008	request budget	docs/plan/04_source_adapter_contract.md	mock server	cargo test -p radar-fetch --test http_mock	hard		pass
-HTTP-001	timeout isolation	docs/plan/05_fetching_reliability.md	mock server	cargo test -p radar-fetch --test http_mock	hard		pass
-HTTP-002	retry transient once	docs/plan/05_fetching_reliability.md	mock server	cargo test -p radar-fetch --test http_mock	hard		pass
-HTTP-003	404 no retry	docs/plan/05_fetching_reliability.md	mock server	cargo test -p radar-fetch --test http_mock	hard		pass
-HTTP-004	partial source failure exit 0	docs/plan/05_fetching_reliability.md	integration	cargo test --test integration	hard		pass
-HTTP-005	zero usable source exit 4	docs/plan/05_fetching_reliability.md	integration	cargo test --test integration	hard		pass
-PER-001	scholar alias	docs/plan/06_normalization_matching.md	golden	cargo test --test golden	hard		pass
-PER-002	multilingual alias	docs/plan/06_normalization_matching.md	golden	cargo test --test golden	hard		pass
-PER-003	concept name not speaker	docs/plan/06_normalization_matching.md	golden	cargo test --test golden	hard		pass
-TOP-001	topic alias matching	docs/plan/06_normalization_matching.md	golden	cargo test --test golden	hard		pass
-TALK-001	talk + speaker extraction	docs/plan/02_domain_model.md	fixture	cargo test -p radar-adapters --test adapters	hard		pass
-MED-001	video detection	docs/plan/04_source_adapter_contract.md	fixture	cargo test -p radar-adapters --test adapters	hard		pass
-MED-002	slides detection	docs/plan/04_source_adapter_contract.md	fixture	cargo test -p radar-adapters --test adapters	hard		pass
-MED-003	public access status	docs/plan/04_source_adapter_contract.md	fixture	cargo test -p radar-adapters --test adapters	hard		pass
-DEDUP-001	identical event merge	docs/plan/06_normalization_matching.md	golden	cargo test -p radar-core --test golden dedup_golden	hard		pass
-DEDUP-002	distinct event not merge	docs/plan/06_normalization_matching.md	golden	cargo test -p radar-core --test golden dedup_golden	hard		pass
-RANK-001	topic score	docs/plan/08_ranking.md	golden	cargo test --test golden	hard		pass
-RANK-002	recording score	docs/plan/08_ranking.md	golden	cargo test --test golden	hard		pass
-RANK-003	title-only scholar no boost	docs/plan/08_ranking.md	golden	cargo test --test golden	hard		pass
-STATE-001	first_seen persisted	docs/plan/07_state_change_detection.md	integration	cargo test -p radar-state --test integration state_001	hard		pass
-STATE-002	second scan unchanged	docs/plan/07_state_change_detection.md	integration	cargo test -p radar-state --test integration state_002	hard		pass
-STATE-003	media_added	docs/plan/07_state_change_detection.md	integration	cargo test -p radar-state --test integration state_003	hard		pass
-STATE-004	--no-state no write	docs/plan/07_state_change_detection.md	integration	cargo test -p radar-state --test integration state_004	hard		pass
-UPD-001	update check no write	docs/plan/10_update_uninstall.md	mock release	cargo test --test lifecycle_sandbox	hard		pass
-UPD-002	checksum failure preserves binary	docs/plan/10_update_uninstall.md	sandbox	cargo test --test lifecycle_sandbox	hard		pass
-UPD-003	valid update replaces binary	docs/plan/10_update_uninstall.md	sandbox	cargo test --test lifecycle_sandbox	hard		pass
-UPD-004	broken candidate rollback	docs/plan/10_update_uninstall.md	sandbox	cargo test --test lifecycle_sandbox	hard		pass
-UNS-001	dry-run zero mutation	docs/plan/10_update_uninstall.md	sandbox	cargo test --test lifecycle_sandbox	hard		pass
-UNS-002	keep-data preserves only data	docs/plan/10_update_uninstall.md	sandbox	cargo test --test lifecycle_sandbox	hard		pass
-UNS-003	purge removes owned paths	docs/plan/10_update_uninstall.md	sandbox	cargo test --test lifecycle_sandbox	hard		pass
-UNS-004	unmanaged binary protection	docs/plan/10_update_uninstall.md	sandbox	cargo test --test lifecycle_sandbox	hard		pass
-SEC-001	no unsafe	docs/plan/11_security.md	lint	cargo clippy -D warnings	hard		pass
-SEC-002	cargo-deny	docs/plan/11_security.md	CI	cargo deny check	hard		pass
-SEC-003	no secret logging	docs/plan/11_security.md	review/test	cargo test + review	hard		pass
-PERF-001	offline RSS <=128 MiB	docs/plan/13_performance_budget.md	baseline	cargo xtask baseline	hard		pass
-PERF-002	binary <=30 MiB	docs/plan/12_release.md	release	release.yml	hard		pass
-REL-001	30% source failure isolation	docs/plan/05_fetching_reliability.md	fault injection	cargo test -p radar-fetch --test reliability	hard		pass
-REL-002	global deadline	docs/plan/05_fetching_reliability.md	mock server	cargo test -p radar-fetch --test http_mock	hard		pass
-REL-003	stable deterministic IDs	docs/plan/05_fetching_reliability.md	golden	cargo test -p radar-core --test golden rel_003	hard		pass
-DOC-001	every plan has acceptance mapping	docs/plan/00_engineering_constitution.md	xtask	cargo xtask check-matrix	hard		pass
-DOC-002	every hard case has automation	docs/plan/00_engineering_constitution.md	xtask	cargo xtask check-matrix	hard		pass
-RELS-001	static musl binary	docs/plan/12_release.md	container	release.yml (clean ubuntu)	hard		pass
-RELS-002	checksum asset	docs/plan/12_release.md	release	release.yml	hard		pass
-RELS-003	artifact provenance	docs/plan/12_release.md	release	release.yml	hard		pass
-LIVE-001	>=20 audited sources	docs/plan/01_product_scope.md	registry	cargo xtask check	hard		pass
-LIVE-002	>=10 enabled fixture-backed sources	docs/plan/01_product_scope.md	registry	cargo xtask check	hard		pass
-LIVE-003	live source health ratio	docs/plan/01_product_scope.md	scheduled	live-smoke.yml	advisory		pass
+case_id	requirement	plan_ref	test_surface	check	module	binary	test	scope	gate
+CLI-001	--help complete	docs/plan/09_cli_output_contract.md	integration	tests	math_talk_radar	math_talk_radar::integration	cli_001_help_lists_all_subcommands	baseline	hard
+CLI-002	--version zero network	docs/plan/09_cli_output_contract.md	integration	tests	math_talk_radar	math_talk_radar::integration	cli_002_version_exits_zero	baseline	hard
+CLI-003	scan stdout pure JSON	docs/plan/09_cli_output_contract.md	integration	tests	math_talk_radar	math_talk_radar::integration	cli_003_scan_stdout_is_pure_json	baseline	hard
+CLI-004	stderr/stdout separated	docs/plan/09_cli_output_contract.md	integration	tests	math_talk_radar	math_talk_radar::integration	cli_004_stderr_stdout_separated	baseline	hard
+CFG-001	embedded default config	docs/plan/03_architecture.md	unit	tests	radar-core	radar-core	config::tests::cfg_001_embedded_default_config_parses	baseline	hard
+CFG-002	invalid config fails closed	docs/plan/03_architecture.md	integration	tests	math_talk_radar	math_talk_radar::integration	cfg_002_invalid_config_fails_closed	baseline	hard
+DATE-001	same-month range	docs/plan/02_domain_model.md	unit	tests	radar-core	radar-core	date::tests::date_001_same_month_range	baseline	hard
+DATE-002	cross-month range	docs/plan/02_domain_model.md	unit	tests	radar-core	radar-core	date::tests::date_002_cross_month_range	baseline	hard
+DATE-003	US date format	docs/plan/02_domain_model.md	unit	tests	radar-core	radar-core	date::tests::date_003_us_format	baseline	hard
+DATE-004	interval overlap	docs/plan/02_domain_model.md	unit	tests	radar-core	radar-core	date::tests::date_004_interval_overlap	baseline	hard
+DATE-005	unparsed date retained	docs/plan/02_domain_model.md	unit	tests	radar-core	radar-core	date::tests::date_005_unparsed_retained	baseline	hard
+SRC-001	RSS adapter	docs/plan/04_source_adapter_contract.md	fixture	tests	radar-adapters	radar-adapters::adapters	src_001_rss_discovers_at_least_ten	baseline	hard
+SRC-002	ICS adapter	docs/plan/04_source_adapter_contract.md	fixture	tests	radar-adapters	radar-adapters::adapters	src_002_ics_discovers_at_least_ten	baseline	hard
+SRC-003	JSON-LD adapter	docs/plan/04_source_adapter_contract.md	fixture	tests	radar-adapters	radar-adapters::adapters	src_003_jsonld_discovers_at_least_ten	baseline	hard
+SRC-004	configured HTML adapter	docs/plan/04_source_adapter_contract.md	fixture	tests	radar-adapters	radar-adapters::adapters	src_004_html_config_discovers_at_least_ten	baseline	hard
+SRC-005	generic fallback	docs/plan/04_source_adapter_contract.md	fixture	tests	radar-adapters	radar-adapters::adapters	src_005_html_generic_filters_nav_and_finds_events	baseline	hard
+SRC-006	detail depth <=2	docs/plan/04_source_adapter_contract.md	mock server	tests	radar-fetch	radar-fetch::http_mock	src006_depth_boundary_skips_deep_plans	baseline	hard
+SRC-007	host allowlist	docs/plan/04_source_adapter_contract.md	mock server	tests	radar-fetch	radar-fetch::http_mock	src007_redirect_to_disallowed_host_rejected	baseline	hard
+SRC-008	request budget	docs/plan/04_source_adapter_contract.md	mock server	tests	radar-fetch	radar-fetch::http_mock	src008_request_budget_caps_fetches	baseline	hard
+HTTP-001	timeout isolation	docs/plan/05_fetching_reliability.md	mock server	tests	radar-fetch	radar-fetch::http_mock	http001_request_timeout	baseline	hard
+HTTP-002	retry transient once	docs/plan/05_fetching_reliability.md	mock server	tests	radar-fetch	radar-fetch::http_mock	http002_retry_once_on_503	baseline	hard
+HTTP-003	404 no retry	docs/plan/05_fetching_reliability.md	mock server	tests	radar-fetch	radar-fetch::http_mock	http003_404_no_retry	baseline	hard
+HTTP-004	partial source failure exit 0	docs/plan/05_fetching_reliability.md	integration	tests	math_talk_radar	math_talk_radar::integration	http_004_partial_failure_exit_0	baseline	hard
+HTTP-005	zero usable source exit 4	docs/plan/05_fetching_reliability.md	integration	tests	math_talk_radar	math_talk_radar::integration	http_005_zero_usable_sources_exit_4	baseline	hard
+PER-001	scholar alias	docs/plan/06_normalization_matching.md	golden	tests	radar-core	radar-core	people::tests::per_001_structured_field_canonical_and_alias	baseline	hard
+PER-002	multilingual alias	docs/plan/06_normalization_matching.md	golden	tests	radar-core	radar-core	people::tests::per_002_multilingual_alias_cjk	baseline	hard
+PER-003	concept name not speaker	docs/plan/06_normalization_matching.md	golden	tests	radar-core	radar-core	people::tests::per_003_concept_name_not_speaker_body_text	baseline	hard
+TOP-001	topic alias matching	docs/plan/06_normalization_matching.md	golden	tests	radar-core	radar-core	topics::tests::top_001_alias_match_via_shimura_varieties	baseline	hard
+TALK-001	talk + speaker extraction	docs/plan/02_domain_model.md	fixture	tests	radar-adapters	radar-adapters::adapters	talk_001_speaker_extraction_from_jsonld	baseline	hard
+MED-001	video detection	docs/plan/04_source_adapter_contract.md	fixture	tests	radar-adapters	radar-adapters::adapters	med_001_youtube_video_detected	baseline	hard
+MED-002	slides detection	docs/plan/04_source_adapter_contract.md	fixture	tests	radar-adapters	radar-adapters::adapters	med_002_pdf_slides_detected	baseline	hard
+MED-003	public access status	docs/plan/04_source_adapter_contract.md	fixture	tests	radar-adapters	radar-adapters::adapters	med_003_access_registration_required	baseline	hard
+DEDUP-001	identical event merge	docs/plan/06_normalization_matching.md	golden	tests	radar-core	radar-core::golden	dedup_golden	baseline	hard
+DEDUP-002	distinct event not merge	docs/plan/06_normalization_matching.md	golden	tests	radar-core	radar-core::golden	dedup_golden	baseline	hard
+RANK-001	topic score	docs/plan/08_ranking.md	golden	tests	radar-core	radar-core	ranking::tests::rank_001_topic_no_interests	baseline	hard
+RANK-002	recording score	docs/plan/08_ranking.md	golden	tests	radar-core	radar-core	ranking::tests::rank_002_open_video	baseline	hard
+RANK-003	title-only scholar no boost	docs/plan/08_ranking.md	golden	tests	radar-core	radar-core	ranking::tests::rank_003_title_mention_no_boost	baseline	hard
+STATE-001	first_seen persisted	docs/plan/07_state_change_detection.md	integration	tests	radar-state	radar-state::integration	state_001_first_seen_persisted	baseline	hard
+STATE-002	second scan unchanged	docs/plan/07_state_change_detection.md	integration	tests	radar-state	radar-state::integration	state_002_second_scan_unchanged	baseline	hard
+STATE-003	media_added	docs/plan/07_state_change_detection.md	integration	tests	radar-state	radar-state::integration	state_003_media_added	baseline	hard
+STATE-004	--no-state no write	docs/plan/07_state_change_detection.md	integration	tests	math_talk_radar	math_talk_radar::integration	state_004_no_state_does_not_touch_explicit_database	baseline	hard
+UPD-001	update check no write	docs/plan/10_update_uninstall.md	mock release	tests	math_talk_radar	math_talk_radar::lifecycle_sandbox	upd_001_check_no_write	baseline	hard
+UPD-002	checksum failure preserves binary	docs/plan/10_update_uninstall.md	sandbox	tests	math_talk_radar	math_talk_radar::lifecycle_sandbox	upd_002_checksum_failure_preserves_binary	baseline	hard
+UPD-003	valid update replaces binary	docs/plan/10_update_uninstall.md	sandbox	tests	math_talk_radar	math_talk_radar::lifecycle_sandbox	upd_003_valid_update_replaces_binary	baseline	hard
+UPD-004	broken candidate rollback	docs/plan/10_update_uninstall.md	sandbox	tests	math_talk_radar	math_talk_radar::lifecycle_sandbox	upd_004_broken_candidate_preserves_binary	baseline	hard
+UNS-001	dry-run zero mutation	docs/plan/10_update_uninstall.md	sandbox	tests	math_talk_radar	math_talk_radar::lifecycle_sandbox	uns_001_dry_run_zero_mutation	baseline	hard
+UNS-002	keep-data preserves only data	docs/plan/10_update_uninstall.md	sandbox	tests	math_talk_radar	math_talk_radar::lifecycle_sandbox	uns_002_keep_data_preserves_data	baseline	hard
+UNS-003	purge removes owned paths	docs/plan/10_update_uninstall.md	sandbox	tests	math_talk_radar	math_talk_radar::lifecycle_sandbox	uns_003_purge_removes_all	baseline	hard
+UNS-004	unmanaged binary protection	docs/plan/10_update_uninstall.md	sandbox	tests	math_talk_radar	math_talk_radar::lifecycle_sandbox	uns_004_unmanaged_binary_protected	baseline	hard
+SEC-001	no unsafe	docs/plan/11_security.md	lint	quality				baseline	hard
+SEC-002	cargo-deny	docs/plan/11_security.md	CI	security				baseline	hard
+SEC-003	no secret logging	docs/plan/11_security.md	review/test	review				release	hard
+PERF-001	offline RSS <=128 MiB	docs/plan/13_performance_budget.md	baseline	performance				baseline	hard
+PERF-002	binary <=30 MiB	docs/plan/12_release.md	release	artifact				release	hard
+REL-001	30% source failure isolation	docs/plan/05_fetching_reliability.md	fault injection	tests	radar-fetch	radar-fetch::reliability	rel_001_fault_isolation_does_not_abort_scan	baseline	hard
+REL-002	global deadline	docs/plan/05_fetching_reliability.md	mock server	tests	radar-fetch	radar-fetch::http_mock	rel002_global_deadline_bounds_fetch	baseline	hard
+REL-003	stable deterministic IDs	docs/plan/05_fetching_reliability.md	golden	tests	radar-core	radar-core::golden	rel_003_stable_deterministic_ids	baseline	hard
+DOC-001	every plan has acceptance mapping	docs/plan/00_engineering_constitution.md	xtask	meta				baseline	hard
+DOC-002	every hard case has automation	docs/plan/00_engineering_constitution.md	xtask	meta				baseline	hard
+RELS-001	static musl binary	docs/plan/12_release.md	container	artifact				release	hard
+RELS-002	checksum asset	docs/plan/12_release.md	release	artifact				release	hard
+RELS-003	artifact provenance	docs/plan/12_release.md	release	attestation				release	hard
+LIVE-001	>=20 audited sources	docs/plan/01_product_scope.md	registry	meta				baseline	hard
+LIVE-002	>=10 enabled fixture-backed sources	docs/plan/01_product_scope.md	registry	meta				baseline	hard
+LIVE-003	live source health ratio	docs/plan/01_product_scope.md	scheduled	live				live	advisory
+CI-001	selection includes reverse dev and conditional consumers	docs/plan/12_release.md	unit	tests	xtask	xtask::bin/xtask	acceptance::tests::ci_001_selection_includes_reverse_dev_and_conditional_consumers	baseline	hard
+CI-002	unknown and contract changes force full	docs/plan/12_release.md	unit	tests	xtask	xtask::bin/xtask	acceptance::tests::ci_002_unknown_and_contract_changes_force_full	baseline	hard
+CI-003	missing case or shard mapping is rejected	docs/plan/12_release.md	unit	tests	xtask	xtask::bin/xtask	acceptance::tests::ci_003_missing_case_or_shard_mapping_is_rejected	baseline	hard
+CI-004	zero missing skipped and duplicate tests are rejected	docs/plan/12_release.md	unit	tests	xtask	xtask::bin/xtask	acceptance::tests::ci_004_zero_missing_skipped_and_duplicate_tests_are_rejected	baseline	hard
+CI-005	fanin rejects missing stale and changed evidence	docs/plan/12_release.md	unit	tests	xtask	xtask::bin/xtask	acceptance::tests::ci_005_fanin_rejects_missing_stale_and_changed_evidence	baseline	hard
+CI-006	wrong artifact digest and unreviewed release are rejected	docs/plan/12_release.md	unit	tests	xtask	xtask::bin/xtask	acceptance::tests::ci_006_wrong_artifact_digest_and_unreviewed_release_are_rejected	baseline	hard

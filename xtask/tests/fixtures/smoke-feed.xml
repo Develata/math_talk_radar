@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel>
+<title>Offline artifact acceptance</title><link>{base}</link><description>Fixture</description>
+<item><title>Conference on Algebra</title><link>{base}/detail/algebra</link><pubDate>Tue, 01 Sep 2026 00:00:00 +0000</pubDate></item>
+<item><title>Workshop on Graph Theory</title><link>{base}/detail/graph</link><pubDate>Wed, 02 Sep 2026 00:00:00 +0000</pubDate></item>
+</channel></rss>

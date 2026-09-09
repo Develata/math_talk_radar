@@ -1,0 +1,111 @@
+name: Acceptance lane
+'on':
+  workflow_call:
+    inputs:
+      lane:
+        type: string
+        required: true
+      shards:
+        type: string
+        required: true
+      control-sha:
+        type: string
+        required: true
+      build-sha:
+        type: string
+        default: ''
+    outputs:
+      receipt_sha:
+        value: ${{ jobs.run.outputs.receipt_sha }}
+permissions:
+  contents: read
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_TARGET_DIR: target/cargo
+  RUSTFLAGS: -D warnings
+jobs:
+  run:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    outputs:
+      receipt_sha: ${{ steps.pack.outputs.sha256 }}
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      with:
+        fetch-depth: 0
+        persist-credentials: false
+    - uses: ./.github/actions/acceptance-control
+      with:
+        sha256: ${{ inputs.control-sha }}
+        lane: ${{ inputs.lane }}
+        prepare-build: 'true'
+    - uses: taiki-e/install-action@c3ec0de9ae7f1019cea21aa96aa0a895b9552063 # v2
+      if: inputs.lane == 'tests'
+      with:
+        tool: cargo-nextest@0.9.143
+        fallback: none
+    - uses: taiki-e/install-action@c3ec0de9ae7f1019cea21aa96aa0a895b9552063 # v2
+      if: inputs.lane == 'assurance'
+      with:
+        tool: cargo-deny@0.20.2,cargo-llvm-cov@0.9.1
+        fallback: none
+    - name: Coverage and MSRV toolchains
+      if: inputs.lane == 'assurance'
+      run: |
+        rustup component add llvm-tools-preview
+        python3 - <<'MSRV'
+        import json, subprocess
+        with open('target/acceptance/control/plan.json') as stream:
+            msrv = json.load(stream)['msrv']
+        subprocess.run(['rustup', 'toolchain', 'install', msrv, '--profile', 'minimal'], check=True)
+        MSRV
+    - name: Static target
+      if: inputs.lane == 'build'
+      run: |
+        rustup target add x86_64-unknown-linux-musl
+        sudo apt-get update
+        sudo apt-get install --yes musl-tools
+    - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+      with:
+        path: target/acceptance/downloads
+        name: receipts-build-${{ github.run_attempt }}
+      if: inputs.build-sha != ''
+    - name: Verify upstream build before extraction
+      env:
+        RECEIPT_HASHES: '{"build":"${{ inputs.build-sha }}"}'
+      if: inputs.build-sha != ''
+      run: python3 scripts/ci_artifacts.py receipts
+    - name: Read maintainer review declaration
+      env:
+        RELEASE_REVIEW: ${{ vars.RELEASE_REVIEW }}
+      if: inputs.lane == 'review'
+      run: |
+        python3 - <<'REVIEW'
+        import os
+        from pathlib import Path
+        Path('target/acceptance/review-input.json').write_text(os.environ['RELEASE_REVIEW'])
+        REVIEW
+    - name: Execute required shards
+      env:
+        SHARDS: ${{ inputs.shards }}
+      run: |
+        failed=0
+        for shard in $SHARDS; do
+          if ! target/acceptance/control/xtask acceptance run --plan target/acceptance/control/plan.json --shard "$shard" --out target/acceptance/receipts --artifacts target/acceptance/receipts/build/artifacts --review target/acceptance/review-input.json; then
+            failed=1
+          fi
+        done
+        exit "$failed"
+    - id: pack
+      env:
+        LANE: ${{ inputs.lane }}
+        SHARDS: ${{ inputs.shards }}
+      if: always()
+      run: python3 scripts/ci_artifacts.py pack --lane "$LANE" --shards "$SHARDS"
+    - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      with:
+        name: receipts-${{ inputs.lane }}-${{ github.run_attempt }}
+        path: target/acceptance/receipts-${{ inputs.lane }}.tar.gz
+        if-no-files-found: error
+        retention-days: 14
+      if: always()

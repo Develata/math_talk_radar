@@ -1,107 +1,19 @@
 name: CI
-
-on:
+'on':
   push:
-    branches: [main]
+    branches:
+    - main
   pull_request:
-    branches: [main]
-
+    branches:
+    - main
+  schedule:
+  - cron: 0 3 * * *
+  workflow_dispatch: null
 permissions:
   contents: read
-
-env:
-  CARGO_TERM_COLOR: always
-  RUSTFLAGS: "-D warnings"
-
 jobs:
-  quality:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Install Rust toolchain
-        run: |
-          rustup show
-          rustup component add rustfmt clippy
-
-      - uses: Swatinem/rust-cache@v2
-
-      - name: fmt
-        run: cargo fmt --check
-
-      - name: clippy
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
-
-      - name: test
-        run: cargo test --workspace
-
   acceptance:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Install Rust toolchain
-        run: rustup show
-
-      - uses: Swatinem/rust-cache@v2
-
-      - name: check
-        run: cargo xtask check
-
-      - name: check-matrix
-        run: cargo xtask check-matrix
-
-  forbid-unsafe:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Install Rust toolchain
-        run: rustup show
-
-      - uses: Swatinem/rust-cache@v2
-
-      - name: Verify forbid(unsafe_code) in every crate
-        run: |
-          for f in crates/*/src/lib.rs apps/cli/src/lib.rs; do
-            grep -q "forbid(unsafe_code)" "$f" || {
-              echo "Missing #![forbid(unsafe_code)] in $f" >&2
-              exit 1
-            }
-          done
-
-  supply-chain:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Install Rust toolchain
-        run: rustup show
-
-      - uses: Swatinem/rust-cache@v2
-
-      - name: Install cargo-deny
-        run: cargo install cargo-deny --locked || cargo install cargo-deny --locked --version 0.20.2
-
-      - name: cargo deny check
-        run: cargo deny check
-
-  performance:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v7
-      - name: Install Rust toolchain
-        run: rustup show
-      - uses: Swatinem/rust-cache@v2
-      - name: Offline performance and release isolation
-        run: cargo xtask perf
-      - uses: actions/upload-artifact@v7
-        if: always()
-        with:
-          name: performance-metrics
-          path: target/perf-latest.json
+    uses: ./.github/workflows/acceptance.yml
+    with:
+      profile: ${{ github.event_name == 'pull_request' && 'shadow' || 'full' }}
+      base: ${{ github.event.pull_request.base.sha || github.event.before || '' }}

@@ -1,15 +1,14 @@
 # Acceptance Cases — Index
 
-> Machine-readable source of truth: `docs/registry/acceptance-matrix.tsv`.
-> This human index mirrors it. Keep both synchronized (enforced by
-> `cargo xtask check-matrix`).
+> Case tables in this directory own required IDs and gate strength. The machine-readable
+> `docs/registry/acceptance-matrix.tsv` maps each to an executable check and exact
+> test ID where applicable. `cargo xtask check-matrix` verifies both sets match.
 
-## Status legend
-
-- `pending` — not yet implemented (M0 default).
-- `pass` — implemented and verified by the listed automation.
-- `fail` — implemented but verification failed (release blocker).
-- `skipped` — explicitly waived with a recorded reason.
+Static definitions do not assert execution status. Per-run plans and receipts
+under `target/acceptance/` distinguish pass, fail, not-selected, not-run and
+advisory outcomes. A required skipped/missing check blocks its profile. Baseline
+scope does not claim release-only or live cases passed; security review remains
+required for release. Historical reports apply only to their recorded revision.
 
 ## Gate legend
 
@@ -29,5 +28,6 @@
 | [07_update_uninstall.md](07_update_uninstall.md) | UPD-001..004, UNS-001..004 |
 | [08_release_security.md](08_release_security.md) | SEC-001..003, PERF-001..002, REL-001..003, RELS-001..003, DOC-001..002, HTTP-001..003 |
 | [09_live_smoke.md](09_live_smoke.md) | LIVE-001..003 |
+| [10_ci.md](10_ci.md) | CI-001..006 |
 
-All cases are `pending` as of M0.
+Case IDs remain stable; current results come only from a verified run summary.

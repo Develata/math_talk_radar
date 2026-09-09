@@ -132,6 +132,38 @@ fn cfg_002_invalid_config_fails_closed() {
         .code(3);
 }
 
+// STATE-004: --no-state must not open or modify an explicit database.
+#[tokio::test]
+async fn state_004_no_state_does_not_touch_explicit_database() {
+    let server = MockServer::start().await;
+    mount_rss_feed(&server).await;
+    let config = write_sources_config(&[(true, "ok", &format!("{}/feed.xml", server.uri()))]);
+    let directory = tempfile::tempdir().expect("sandbox");
+    let database = directory.path().join("state.redb");
+    // Invalid database bytes prove --no-state neither opens nor rewrites it.
+    std::fs::write(&database, b"must remain untouched").expect("sentinel");
+    bin()
+        .args(["scan", "--no-state", "--sources"])
+        .arg(config.path())
+        .arg("--state")
+        .arg(&database)
+        .env("XDG_DATA_HOME", directory.path().join("data"))
+        .env("XDG_CONFIG_HOME", directory.path().join("config"))
+        .env("XDG_CACHE_HOME", directory.path().join("cache"))
+        .assert()
+        .success();
+    assert_eq!(
+        std::fs::read(&database).expect("sentinel preserved"),
+        b"must remain untouched"
+    );
+    assert_eq!(
+        std::fs::read_dir(directory.path())
+            .expect("sandbox files")
+            .count(),
+        1
+    );
+}
+
 // HTTP-005: zero usable sources → exit 4.
 #[test]
 fn http_005_zero_usable_sources_exit_4() {

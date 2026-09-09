@@ -5,11 +5,13 @@
 //!   cargo xtask check-matrix   — acceptance-matrix structural + doc-coverage validation
 //!   cargo xtask baseline       — functional/quality/perf baseline orchestration (M7/M8)
 //!   cargo xtask static-release <binary> — musl/static-link checks (M7)
+//!   cargo xtask acceptance plan|run|summarize — run-bound acceptance evidence
 //!
 //! M0 ships `check` and `check-matrix`; M7 ships `baseline` and
 //! `static-release`.
 #![forbid(unsafe_code)]
 
+mod acceptance;
 mod architecture;
 mod perf;
 
@@ -17,15 +19,47 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+// Fixture HTTP must stay on loopback even when the shell has HTTP proxies.
+// Apply only to offline test/probe children, never to the product or live scans.
+const FIXTURE_NO_PROXY: [(&str, &str); 2] = [
+    ("NO_PROXY", "localhost,127.0.0.1,::1"),
+    ("no_proxy", "localhost,127.0.0.1,::1"),
+];
+
 fn main() -> ExitCode {
-    let root = workspace_root();
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().is_some_and(|arg| arg == "artifact-smoke") {
+        let result = if args.len() == 4 {
+            acceptance::smoke::run(Path::new(&args[1]), &args[2], Path::new(&args[3]))
+        } else {
+            Err("usage: artifact-smoke <binary> <sha256> <output.json>".into())
+        };
+        return match result {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("error: {error}");
+                ExitCode::FAILURE
+            }
+        };
+    }
+    let root = match workspace_root(&mut args) {
+        Ok(root) => root,
+        Err(error) => {
+            eprintln!("error: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
     let cmd = args.first().map(String::as_str).unwrap_or("check");
     let result = match cmd {
         "check" => run_check(&root),
         "check-matrix" => run_check_matrix(&root),
         "baseline" => run_baseline(&root),
-        "perf" => perf::run(&root),
+        "perf" => match &args[1..] {
+            [] => perf::run(&root),
+            [option, path] if option == "--out" => perf::run_to(&root, Path::new(path)),
+            _ => Err(vec!["usage: perf [--out <report.json>]".into()]),
+        },
+        "acceptance" => acceptance::cli(&root, &args[1..]).map_err(|error| vec![error]),
         "static-release" => {
             let binary = args.get(1).map(Path::new);
             match binary {
@@ -35,7 +69,9 @@ fn main() -> ExitCode {
         }
         other => {
             eprintln!("unknown xtask command: {other}");
-            eprintln!("available: check | check-matrix | baseline | perf | static-release");
+            eprintln!(
+                "available: check | check-matrix | baseline | perf | static-release | acceptance | artifact-smoke"
+            );
             return ExitCode::from(2);
         }
     };
@@ -54,13 +90,32 @@ fn main() -> ExitCode {
     }
 }
 
-fn workspace_root() -> PathBuf {
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    // Compile-time invariant: xtask lives directly under the workspace root.
-    manifest_dir
-        .parent()
-        .expect("xtask must live directly under the workspace root")
-        .to_path_buf()
+fn workspace_root(args: &mut Vec<String>) -> Result<PathBuf, String> {
+    let explicit = args.first().is_some_and(|arg| arg == "--workspace-root");
+    let start = if explicit {
+        if args.len() < 2 {
+            return Err("--workspace-root requires a directory".into());
+        }
+        let path = PathBuf::from(&args[1]);
+        args.drain(..2);
+        path
+    } else {
+        std::env::current_dir().map_err(|e| e.to_string())?
+    };
+    let start = start.canonicalize().map_err(|e| e.to_string())?;
+    for candidate in start.ancestors() {
+        if candidate.join("xtask/Cargo.toml").is_file()
+            && candidate
+                .join("docs/plan/00_engineering_constitution.md")
+                .is_file()
+        {
+            return Ok(candidate.to_owned());
+        }
+        if explicit {
+            break;
+        }
+    }
+    Err("workspace not found; use --workspace-root <checkout>".into())
 }
 
 // ---------------------------------------------------------------------------
@@ -147,6 +202,7 @@ fn run_baseline(root: &Path) -> Result<(), Vec<String>> {
     println!("baseline: functional (cargo test --workspace)");
     let test = Command::new("cargo")
         .args(["test", "--workspace"])
+        .envs(FIXTURE_NO_PROXY)
         .current_dir(root)
         .status();
     match test {
@@ -527,142 +583,8 @@ fn validate_source_registry(root: &Path) -> Vec<String> {
 // acceptance-matrix validation (§55, §56, DOC-001, DOC-002)
 // ---------------------------------------------------------------------------
 
-const MATRIX_COLS: &[&str] = &[
-    "case_id",
-    "requirement",
-    "plan_ref",
-    "test_surface",
-    "automation",
-    "gate",
-    "evidence",
-    "status",
-];
-const MATRIX_REQUIRED: &[&str] = &[
-    "case_id",
-    "requirement",
-    "plan_ref",
-    "test_surface",
-    "automation",
-    "gate",
-    "status",
-];
-const VALID_GATES: &[&str] = &["hard", "advisory"];
-const VALID_STATUS: &[&str] = &["pending", "pass", "fail", "skipped"];
-
 fn validate_matrix(root: &Path) -> Vec<String> {
-    let mut errors = Vec::new();
-    let path = root.join("docs/registry/acceptance-matrix.tsv");
-    let content = match std::fs::read_to_string(&path) {
-        Ok(c) => c,
-        Err(e) => return vec![format!("cannot read {}: {e}", path.display())],
-    };
-    let lines: Vec<&str> = content.lines().filter(|l| !l.trim().is_empty()).collect();
-    if lines.is_empty() {
-        return vec!["acceptance-matrix.tsv is empty".into()];
-    }
-    let header: Vec<&str> = lines[0].split('\t').collect();
-    for col in MATRIX_COLS {
-        if !header.contains(col) {
-            errors.push(format!(
-                "acceptance-matrix: missing required column '{col}'"
-            ));
-        }
-    }
-    let idx = |name: &str| header.iter().position(|h| *h == name);
-    let i_case = idx("case_id");
-    let i_plan = idx("plan_ref");
-    let i_ts = idx("test_surface");
-    let i_auto = idx("automation");
-    let i_gate = idx("gate");
-    let i_status = idx("status");
-    let i_ev = idx("evidence");
-
-    let mut seen = HashSet::new();
-    let mut referenced_plans: HashSet<String> = HashSet::new();
-    for (i, line) in lines.iter().enumerate().skip(1) {
-        let row: Vec<&str> = line.split('\t').collect();
-        let cell = |ri: Option<usize>| ri.and_then(|x| row.get(x)).copied().unwrap_or("");
-        let case_id = cell(i_case);
-        let plan_ref = cell(i_plan);
-        let test_surface = cell(i_ts);
-        let automation = cell(i_auto);
-        let gate = cell(i_gate);
-        let status = cell(i_status);
-        let evidence = cell(i_ev);
-
-        for col in MATRIX_REQUIRED {
-            let ci = idx(col);
-            if cell(ci).is_empty() {
-                errors.push(format!(
-                    "matrix row {i} ({case_id}): empty required column '{col}'"
-                ));
-            }
-        }
-        if !seen.insert(case_id.to_string()) {
-            errors.push(format!("matrix row {i}: duplicate case_id '{case_id}'"));
-        }
-        if !VALID_GATES.contains(&gate) {
-            errors.push(format!("matrix row {i} ({case_id}): invalid gate '{gate}'"));
-        }
-        if !VALID_STATUS.contains(&status) {
-            errors.push(format!(
-                "matrix row {i} ({case_id}): invalid status '{status}'"
-            ));
-        }
-        if gate == "hard" {
-            if test_surface.is_empty() {
-                errors.push(format!(
-                    "matrix row {i} ({case_id}): hard gate with empty test_surface"
-                ));
-            }
-            if automation.is_empty() {
-                errors.push(format!(
-                    "matrix row {i} ({case_id}): hard gate with empty automation (DOC-002)"
-                ));
-            }
-        }
-        if !plan_ref.is_empty() {
-            let p = root.join(plan_ref);
-            if !p.exists() {
-                errors.push(format!(
-                    "matrix row {i} ({case_id}): plan_ref not found: {plan_ref}"
-                ));
-            } else {
-                referenced_plans.insert(plan_ref.to_string());
-            }
-        }
-        if !evidence.is_empty() {
-            let p = root.join(evidence);
-            if !p.exists() {
-                errors.push(format!(
-                    "matrix row {i} ({case_id}): evidence not found: {evidence}"
-                ));
-            }
-        }
-    }
-
-    // DOC-001: every plan file must be referenced by ≥1 acceptance case.
-    let plan_dir = root.join("docs/plan");
-    if let Ok(rd) = std::fs::read_dir(&plan_dir) {
-        let mut all_plans: HashSet<String> = HashSet::new();
-        for entry in rd.flatten() {
-            let p = entry.path();
-            if p.extension().and_then(|e| e.to_str()) == Some("md")
-                && let Ok(rel) = p.strip_prefix(root)
-            {
-                all_plans.insert(rel.to_string_lossy().replace('\\', "/"));
-            }
-        }
-        for plan in &all_plans {
-            if !referenced_plans.contains(plan) {
-                errors.push(format!(
-                    "DOC-001: plan '{plan}' has no acceptance case referencing it"
-                ));
-            }
-        }
-    }
-
-    errors
+    acceptance::catalog::validate(root)
 }
 
 #[cfg(test)]

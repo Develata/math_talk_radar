@@ -9,8 +9,9 @@ v0.1 is a pure Rust CLI — no LLM, no browser automation, no JS runtime.
 
 ## Status
 
-v0.1.0 ready. M0–M7 complete; 65/65 acceptance cases pass. See
-`docs/report/implementation-status.md`.
+v0.1.0 implementation is present. Acceptance definitions are not a current-run
+pass claim; use the verified acceptance summary for the tested revision/profile.
+Historical milestone evidence is in `docs/report/implementation-status.md`.
 
 ## Install
 
@@ -73,6 +74,11 @@ cargo xtask baseline       # functional + quality + architecture + offline perf
 cargo xtask perf           # JSON metrics in target/perf-latest.json; wide resource gates
 cargo deny check           # supply chain (licenses + advisories + bans)
 ```
+
+For evidence bound to one source snapshot, use `xtask acceptance plan`, `run`,
+and `summarize`. The full profile also requires coverage and MSRV checks.
+See the [acceptance recipes](docs/runbook.md#acceptance-and-ci) for prerequisites,
+local selection, CI recovery, and release review declarations.
 
 We work on `main` with one atomic commit per verified milestone (M0–M8). No
 feature branches, no PRs.

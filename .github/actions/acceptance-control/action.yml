@@ -1,0 +1,34 @@
+name: Restore verified acceptance control
+description: Verify the upstream archive digest before executing xtask
+inputs:
+  sha256:
+    required: true
+    description: Digest from the plan job
+  lane:
+    required: true
+    description: Build-cache namespace
+  prepare-build:
+    default: 'true'
+    description: Restore build cache and fetch dependencies
+runs:
+  using: composite
+  steps:
+  - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+    with:
+      path: target/acceptance/downloads
+      name: acceptance-control-${{ github.run_attempt }}
+  - shell: bash
+    env:
+      CONTROL_SHA: ${{ inputs.sha256 }}
+    run: python3 scripts/ci_artifacts.py control --sha256 "$CONTROL_SHA"
+  - shell: bash
+    run: rustup show
+  - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+    if: inputs.prepare-build == 'true'
+    with:
+      prefix-key: acceptance-v1-${{ inputs.lane }}
+      workspaces: . -> target/cargo
+      save-if: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
+  - shell: bash
+    if: inputs.prepare-build == 'true'
+    run: cargo fetch --locked

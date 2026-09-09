@@ -1,0 +1,198 @@
+name: Acceptance DAG
+'on':
+  workflow_call:
+    inputs:
+      profile:
+        type: string
+        default: full
+      base:
+        type: string
+        default: ''
+    outputs:
+      control_sha:
+        value: ${{ jobs.plan.outputs.control_sha }}
+      receipt_hashes:
+        value: ${{ jobs.gate.outputs.receipt_hashes }}
+permissions:
+  contents: read
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_TARGET_DIR: target/cargo
+  RUSTFLAGS: -D warnings
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      control_sha: ${{ steps.bundle.outputs.sha256 }}
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      with:
+        fetch-depth: 0
+        persist-credentials: false
+    - run: rustup show
+    - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      with:
+        prefix-key: acceptance-v1-control
+        workspaces: . -> target/cargo
+        save-if: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
+    - name: Require matching release tag
+      if: inputs.profile == 'release'
+      run: |
+        python3 - <<'VERSION'
+        import os, tomllib
+        with open('Cargo.toml', 'rb') as stream:
+            version = tomllib.load(stream)['workspace']['package']['version']
+        assert os.environ['GITHUB_REF'] == 'refs/tags/v' + version, 'release tag/version mismatch'
+        VERSION
+    - name: Build the control runner once and bind the plan
+      env:
+        PROFILE: ${{ inputs.profile }}
+        BASE: ${{ inputs.base }}
+      run: |
+        cargo build --locked -p xtask
+        mkdir -p target/acceptance/control
+        cp target/cargo/debug/xtask target/acceptance/control/xtask
+        target/acceptance/control/xtask acceptance plan --profile "$PROFILE" --base "$BASE" --out target/acceptance/control/plan.json
+    - id: bundle
+      run: |
+        tar -czf target/acceptance/control.tar.gz -C target/acceptance/control xtask plan.json
+        echo "sha256=$(sha256sum target/acceptance/control.tar.gz | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+    - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      with:
+        name: acceptance-control-${{ github.run_attempt }}
+        path: target/acceptance/control.tar.gz
+        if-no-files-found: error
+        retention-days: 14
+  quality:
+    needs:
+    - plan
+    if: inputs.profile != 'live'
+    uses: ./.github/workflows/acceptance-lane.yml
+    with:
+      lane: quality
+      shards: meta quality
+      control-sha: ${{ needs.plan.outputs.control_sha }}
+  tests:
+    needs:
+    - plan
+    if: inputs.profile != 'live'
+    uses: ./.github/workflows/acceptance-lane.yml
+    with:
+      lane: tests
+      shards: tests
+      control-sha: ${{ needs.plan.outputs.control_sha }}
+  assurance:
+    needs:
+    - plan
+    if: inputs.profile != 'live'
+    uses: ./.github/workflows/acceptance-lane.yml
+    with:
+      lane: assurance
+      shards: security coverage msrv
+      control-sha: ${{ needs.plan.outputs.control_sha }}
+  performance:
+    needs:
+    - plan
+    if: inputs.profile != 'live'
+    uses: ./.github/workflows/acceptance-lane.yml
+    with:
+      lane: performance
+      shards: performance
+      control-sha: ${{ needs.plan.outputs.control_sha }}
+  build:
+    needs:
+    - plan
+    if: inputs.profile == 'release' || inputs.profile == 'live'
+    uses: ./.github/workflows/acceptance-lane.yml
+    with:
+      lane: build
+      shards: build
+      control-sha: ${{ needs.plan.outputs.control_sha }}
+  artifact:
+    needs:
+    - plan
+    - build
+    if: inputs.profile == 'release'
+    uses: ./.github/workflows/acceptance-lane.yml
+    with:
+      lane: artifact
+      shards: artifact
+      control-sha: ${{ needs.plan.outputs.control_sha }}
+      build-sha: ${{ needs.build.outputs.receipt_sha }}
+  review:
+    needs:
+    - plan
+    if: inputs.profile == 'release'
+    uses: ./.github/workflows/acceptance-lane.yml
+    with:
+      lane: review
+      shards: review
+      control-sha: ${{ needs.plan.outputs.control_sha }}
+  live:
+    needs:
+    - plan
+    - build
+    if: inputs.profile == 'live'
+    uses: ./.github/workflows/acceptance-lane.yml
+    with:
+      lane: live
+      shards: live
+      control-sha: ${{ needs.plan.outputs.control_sha }}
+      build-sha: ${{ needs.build.outputs.receipt_sha }}
+  gate:
+    if: always()
+    needs:
+    - plan
+    - quality
+    - tests
+    - assurance
+    - performance
+    - build
+    - artifact
+    - review
+    - live
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      receipt_hashes: ${{ steps.expected.outputs.receipt_hashes }}
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      with:
+        fetch-depth: 0
+        persist-credentials: false
+    - uses: ./.github/actions/acceptance-control
+      with:
+        sha256: ${{ needs.plan.outputs.control_sha }}
+        lane: gate
+        prepare-build: 'false'
+    - id: expected
+      name: Reject failed, skipped or missing required lanes
+      env:
+        NEEDS_JSON: ${{ toJSON(needs) }}
+        ACCEPTANCE_PROFILE: ${{ inputs.profile }}
+      run: python3 scripts/ci_artifacts.py expected
+    - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+      with:
+        path: target/acceptance/downloads
+        pattern: receipts-*-${{ github.run_attempt }}
+        merge-multiple: true
+    - name: Verify transport and execution evidence
+      env:
+        RECEIPT_HASHES: ${{ steps.expected.outputs.receipt_hashes }}
+        PROFILE: ${{ inputs.profile }}
+      run: |
+        python3 scripts/ci_artifacts.py receipts
+        stage=final
+        if [ "$PROFILE" = release ]; then stage=pre-attestation; fi
+        target/acceptance/control/xtask acceptance summarize --plan target/acceptance/control/plan.json --receipts target/acceptance/receipts --stage "$stage" --out target/acceptance/summary.json
+    - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      with:
+        name: acceptance-summary-${{ github.run_attempt }}
+        path: |-
+          target/acceptance/summary.json
+          target/acceptance/needs.json
+          target/acceptance/receipt-hashes.json
+        if-no-files-found: error
+        retention-days: 14
+      if: always()

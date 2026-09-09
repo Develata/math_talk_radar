@@ -1,23 +1,23 @@
 # 08 — Release, Security, Reliability
 
-| ID | Requirement | Gate | Status |
-|---|---|---|---|
-| SEC-001 | no `unsafe` (`forbid(unsafe_code)`) | hard | pass |
-| SEC-002 | `cargo deny check` passes | hard | pass |
-| SEC-003 | no secret logging | hard | pass |
-| PERF-001 | offline RSS scan peak RSS ≤ 128 MiB | hard | pass |
-| PERF-002 | release binary ≤ 30 MiB | hard | pass |
-| REL-001 | 30% source failure isolation | hard | pass |
-| REL-002 | global scan deadline enforced | hard | pass |
-| REL-003 | stable deterministic IDs | hard | pass |
-| RELS-001 | static musl binary | hard | pass |
-| RELS-002 | checksum asset present | hard | pass |
-| RELS-003 | artifact provenance attestation | hard | pass |
-| DOC-001 | every plan has an acceptance mapping | hard | pass |
-| DOC-002 | every hard case has automation | hard | pass |
-| HTTP-001 | timeout isolation | hard | pending |
-| HTTP-002 | retry transient once | hard | pending |
-| HTTP-003 | 404 no retry | hard | pending |
+| ID | Requirement | Gate |
+| --- | --- | --- |
+| SEC-001 | no `unsafe` (`forbid(unsafe_code)`) | hard |
+| SEC-002 | `cargo deny check` passes | hard |
+| SEC-003 | no secret logging | hard |
+| PERF-001 | offline RSS scan peak RSS ≤ 128 MiB | hard |
+| PERF-002 | release binary ≤ 30 MiB | hard |
+| REL-001 | 30% source failure isolation | hard |
+| REL-002 | global scan deadline enforced | hard |
+| REL-003 | stable deterministic IDs | hard |
+| RELS-001 | static musl binary | hard |
+| RELS-002 | checksum asset present | hard |
+| RELS-003 | artifact provenance attestation | hard |
+| DOC-001 | every plan has an acceptance mapping | hard |
+| DOC-002 | every hard case has automation | hard |
+| HTTP-001 | timeout isolation | hard |
+| HTTP-002 | retry transient once | hard |
+| HTTP-003 | 404 no retry | hard |
 
 Plan refs: `docs/plan/11_security.md` (SEC), `docs/plan/13_performance_budget.md`
 (PERF-001), `docs/plan/12_release.md` (PERF-002, RELS), `docs/plan/05_fetching_reliability.md`

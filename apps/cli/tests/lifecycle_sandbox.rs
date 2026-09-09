@@ -101,7 +101,7 @@ impl Sandbox {
         let directory = self.root.join("build-cache/debug");
         std::fs::create_dir_all(&directory).expect("create custom build directory");
         let binary = directory.join("math_talk_radar");
-        std::fs::copy(env!("CARGO_BIN_EXE_math_talk_radar"), &binary)
+        std::fs::copy(assert_cmd::cargo::cargo_bin("math_talk_radar"), &binary)
             .expect("copy executable into sandbox");
         binary
     }

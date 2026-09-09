@@ -1,12 +1,12 @@
 # 04 — People & Topics
 
-| ID | Requirement | Gate | Status |
-|---|---|---|---|
-| PER-001 | scholar alias match | hard | pending |
-| PER-002 | multilingual alias match | hard | pending |
-| PER-003 | concept name not promoted to speaker | hard | pending |
-| TOP-001 | topic alias matching | hard | pending |
-| TALK-001 | talk + speaker extraction | hard | pending |
+| ID | Requirement | Gate |
+| --- | --- | --- |
+| PER-001 | scholar alias match | hard |
+| PER-002 | multilingual alias match | hard |
+| PER-003 | concept name not promoted to speaker | hard |
+| TOP-001 | topic alias matching | hard |
+| TALK-001 | talk + speaker extraction | hard |
 
 Plan ref: `docs/plan/06_normalization_matching.md` (PER, TOP),
 `docs/plan/02_domain_model.md` (TALK). Golden datasets (§46): person/entity

@@ -27,10 +27,29 @@ pub(super) fn metadata(root: &Path) -> Result<Value, String> {
 }
 
 pub(super) fn validate(root: &Path) -> Vec<String> {
-    match metadata(root) {
+    let mut errors = match metadata(root) {
         Ok(metadata) => validate_packages(&metadata),
         Err(error) => vec![error],
+    };
+    // Preserve the former CI forbid-unsafe gate, including both executable roots.
+    for relative in [
+        "crates/radar-core/src/lib.rs",
+        "crates/radar-fetch/src/lib.rs",
+        "crates/radar-adapters/src/lib.rs",
+        "crates/radar-state/src/lib.rs",
+        "apps/cli/src/lib.rs",
+        "apps/cli/src/main.rs",
+        "xtask/src/main.rs",
+    ] {
+        match std::fs::read_to_string(root.join(relative)) {
+            Ok(source)
+                if source
+                    .lines()
+                    .any(|line| line.trim() == "#![forbid(unsafe_code)]") => {}
+            _ => errors.push(format!("missing forbid(unsafe_code): {relative}")),
+        }
     }
+    errors
 }
 
 fn validate_packages(metadata: &Value) -> Vec<String> {

@@ -1,108 +1,143 @@
 name: Release
-
-on:
+'on':
   push:
-    tags: ["v*.*.*"]
-
+    tags:
+    - v*.*.*
 permissions:
-  contents: write
-  attestations: write
-  id-token: write
-
+  contents: read
 env:
   CARGO_TERM_COLOR: always
-
+  CARGO_TARGET_DIR: target/cargo
+  RUSTFLAGS: -D warnings
 jobs:
-  build-musl:
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Install Rust toolchain + musl target
-        run: |
-          rustup show
-          rustup target add x86_64-unknown-linux-musl
-          sudo apt-get update
-          sudo apt-get install --yes musl-tools
-
-      - uses: Swatinem/rust-cache@v2
-
-      - name: Verify tag version matches Cargo.toml (§53)
-        run: |
-          TAG="${GITHUB_REF_NAME#v}"
-          CARGO=$(grep '^version' Cargo.toml | head -1 | sed -E 's/.*"([0-9.]+)".*/\1/')
-          echo "tag version: $TAG"
-          echo "Cargo.toml version: $CARGO"
-          if [ "$TAG" != "$CARGO" ]; then
-            echo "error: tag version ($TAG) != Cargo.toml version ($CARGO)" >&2
-            exit 1
-          fi
-
-      - name: Verify offline baseline before packaging
-        run: cargo xtask baseline
-
-      - name: Build static release binary
-        run: cargo build --release --target x86_64-unknown-linux-musl
-
-      - name: Verify static linkage (RELS-001)
-        run: |
-          BIN=target/x86_64-unknown-linux-musl/release/math_talk_radar
-          cargo xtask static-release "$BIN"
-
-      - name: Verify binary size ≤30 MiB (PERF-002)
-        run: |
-          BIN=target/x86_64-unknown-linux-musl/release/math_talk_radar
-          SIZE=$(stat --format=%s "$BIN")
-          LIMIT=$((30 * 1024 * 1024))
-          echo "binary size: $SIZE bytes ($(( SIZE / 1024 / 1024 )) MiB)"
-          echo "limit: $LIMIT bytes (30 MiB)"
-          if [ "$SIZE" -gt "$LIMIT" ]; then
-            echo "error: binary size $SIZE exceeds 30 MiB ($LIMIT)" >&2
-            exit 1
-          fi
-
-      - name: Stage release assets with target-triple names
-        run: |
-          # B1: update.rs find_assets expects assets named with the target
-          # triple so self-update can select the correct architecture. The
-          # previous step uploaded the bare `math_talk_radar` name, which
-          # never matched find_assets' BINARY_NAME constant, so every
-          # self-update would fail with "release missing asset".
-          cd target/x86_64-unknown-linux-musl/release
-          cp math_talk_radar math_talk_radar-x86_64-unknown-linux-musl
-          sha256sum math_talk_radar-x86_64-unknown-linux-musl > math_talk_radar-x86_64-unknown-linux-musl.sha256
-
-      - name: Attest build provenance (RELS-003)
-        uses: actions/attest-build-provenance@v1
-        with:
-          subject-path: |
-            target/x86_64-unknown-linux-musl/release/math_talk_radar-x86_64-unknown-linux-musl
-            target/x86_64-unknown-linux-musl/release/math_talk_radar-x86_64-unknown-linux-musl.sha256
-
-      - uses: actions/upload-artifact@v7
-        with:
-          name: math_talk_radar-musl
-          path: |
-            target/x86_64-unknown-linux-musl/release/math_talk_radar-x86_64-unknown-linux-musl
-            target/x86_64-unknown-linux-musl/release/math_talk_radar-x86_64-unknown-linux-musl.sha256
-
-  release:
-    needs: build-musl
-    runs-on: ubuntu-latest
+  acceptance:
+    uses: ./.github/workflows/acceptance.yml
+    with:
+      profile: release
+  attest:
+    needs: acceptance
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
+    permissions:
+      contents: read
+      attestations: write
+      id-token: write
+    outputs:
+      receipt_sha: ${{ steps.pack.outputs.sha256 }}
     steps:
-      - uses: actions/checkout@v7
-
-      - uses: actions/download-artifact@v8
-        with:
-          name: math_talk_radar-musl
-          path: release-assets
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v3
-        with:
-          generate_release_notes: true
-          files: |
-            release-assets/math_talk_radar-x86_64-unknown-linux-musl
-            release-assets/math_talk_radar-x86_64-unknown-linux-musl.sha256
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      with:
+        fetch-depth: 0
+        persist-credentials: false
+    - uses: ./.github/actions/acceptance-control
+      with:
+        sha256: ${{ needs.acceptance.outputs.control_sha }}
+        lane: release
+        prepare-build: 'false'
+    - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+      with:
+        pattern: receipts-*-${{ github.run_attempt }}
+        merge-multiple: true
+        path: target/acceptance/downloads
+    - name: Reverify the complete pre-attestation gate
+      env:
+        RECEIPT_HASHES: ${{ needs.acceptance.outputs.receipt_hashes }}
+      run: |
+        python3 scripts/ci_artifacts.py receipts
+        target/acceptance/control/xtask acceptance summarize --plan target/acceptance/control/plan.json --receipts target/acceptance/receipts --stage pre-attestation --out target/acceptance/pre-attestation.json
+        target/acceptance/control/xtask acceptance verify-artifact --plan target/acceptance/control/plan.json --artifacts target/acceptance/receipts/build/artifacts
+        gh attestation verify --help
+    - uses: actions/attest-build-provenance@ef244123eb79f2f7a7e75d99086184180e6d0018 # v1.4.4
+      with:
+        subject-path: |-
+          target/acceptance/receipts/build/artifacts/math_talk_radar-x86_64-unknown-linux-musl
+          target/acceptance/receipts/build/artifacts/math_talk_radar-x86_64-unknown-linux-musl.sha256
+      name: Attest the verified release assets
+    - name: Verify attestation signer, source commit and exact subjects
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: target/acceptance/control/xtask acceptance run --plan target/acceptance/control/plan.json --shard attestation
+        --out target/acceptance/receipts --artifacts target/acceptance/receipts/build/artifacts
+    - id: pack
+      if: always()
+      run: python3 scripts/ci_artifacts.py pack --lane attestation --shards attestation
+    - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      with:
+        name: receipts-attestation-${{ github.run_attempt }}
+        path: target/acceptance/receipts-attestation.tar.gz
+        if-no-files-found: error
+        retention-days: 30
+      if: always()
+  release:
+    if: always()
+    needs:
+    - acceptance
+    - attest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+    - name: Final dependency gate
+      env:
+        NEEDS_JSON: ${{ toJSON(needs) }}
+      run: |
+        python3 - <<'CHECK'
+        import json, os
+        needs=json.loads(os.environ['NEEDS_JSON'])
+        assert all(needs[name]['result']=='success' for name in ['acceptance','attest']), 'release prerequisites did not succeed'
+        CHECK
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      with:
+        fetch-depth: 0
+        persist-credentials: false
+    - uses: ./.github/actions/acceptance-control
+      with:
+        sha256: ${{ needs.acceptance.outputs.control_sha }}
+        lane: release
+        prepare-build: 'false'
+    - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+      with:
+        pattern: receipts-*-${{ github.run_attempt }}
+        merge-multiple: true
+        path: target/acceptance/downloads
+    - id: hashes
+      env:
+        BASE_HASHES: ${{ needs.acceptance.outputs.receipt_hashes }}
+        ATTESTATION_SHA: ${{ needs.attest.outputs.receipt_sha }}
+      run: |
+        python3 - <<'HASHES'
+        import json, os
+        hashes=json.loads(os.environ['BASE_HASHES'])
+        hashes['attestation']=os.environ['ATTESTATION_SHA']
+        with open(os.environ['GITHUB_OUTPUT'],'a') as output:
+            print('hashes='+json.dumps(hashes,separators=(',',':')), file=output)
+        HASHES
+    - name: Verify all final receipts and rehash downloaded assets
+      env:
+        RECEIPT_HASHES: ${{ steps.hashes.outputs.hashes }}
+      run: |
+        python3 scripts/ci_artifacts.py receipts
+        target/acceptance/control/xtask acceptance summarize --plan target/acceptance/control/plan.json --receipts target/acceptance/receipts --out target/acceptance/release-summary.json
+        target/acceptance/control/xtask acceptance verify-artifact --plan target/acceptance/control/plan.json --artifacts target/acceptance/receipts/build/artifacts
+    - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
+      with:
+        generate_release_notes: true
+        fail_on_unmatched_files: true
+        files: |-
+          target/acceptance/receipts/build/artifacts/math_talk_radar-x86_64-unknown-linux-musl
+          target/acceptance/receipts/build/artifacts/math_talk_radar-x86_64-unknown-linux-musl.sha256
+      name: Publish verified assets
+    - name: Read back published bytes
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: python3 scripts/ci_artifacts.py published-readback
+    - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      with:
+        name: release-acceptance-summary-${{ github.run_attempt }}
+        path: |
+          target/acceptance/release-summary.json
+          target/acceptance/published-readback.json
+        if-no-files-found: error
+        retention-days: 30
+      if: always()

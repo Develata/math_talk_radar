@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 use clap::Parser;
 use math_talk_radar_cli::{cli::Cli, runtime};
 
