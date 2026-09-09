@@ -362,3 +362,91 @@ async fn shared_robots_does_not_charge_the_initializing_source() {
     );
     server.verify().await;
 }
+
+struct TrackedAdapter {
+    live: Arc<AtomicU32>,
+    panic_on_discover: bool,
+}
+
+impl Drop for TrackedAdapter {
+    fn drop(&mut self) {
+        self.live.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+impl SourceAdapter for TrackedAdapter {
+    fn discover(
+        &self,
+        document: &FetchedDocument,
+        source: &SourceSpec,
+    ) -> Result<Vec<EventStub>, AdapterError> {
+        assert!(!self.panic_on_discover, "injected adapter panic");
+        StubAdapter.discover(document, source)
+    }
+    fn plan_enrichment(&self, event: &EventStub, source: &SourceSpec) -> Vec<FetchPlan> {
+        StubAdapter.plan_enrichment(event, source)
+    }
+    fn enrich(
+        &self,
+        event: EventStub,
+        documents: &[FetchedDocument],
+        source: &SourceSpec,
+    ) -> Result<EventCandidate, AdapterError> {
+        StubAdapter.enrich(event, documents, source)
+    }
+}
+
+#[tokio::test]
+async fn source_admission_is_bounded_and_panics_are_isolated() {
+    let server = MockServer::start().await;
+    Mock::given(path("/robots.txt"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&server)
+        .await;
+    Mock::given(wiremock::matchers::method("GET"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&server)
+        .await;
+    let client = FetchClient::new(HttpPolicy {
+        global_concurrency: 3,
+        ..Default::default()
+    })
+    .unwrap();
+    let live = Arc::new(AtomicU32::new(0));
+    let peak = AtomicU32::new(0);
+    let sources: Vec<_> = (0..60)
+        .rev()
+        .map(|i| make_source(i, &server.uri()))
+        .collect();
+    let results = fetch_all(&client, &sources, None, |source| {
+        let current = live.fetch_add(1, Ordering::SeqCst) + 1;
+        peak.fetch_max(current, Ordering::SeqCst);
+        Box::new(TrackedAdapter {
+            live: live.clone(),
+            panic_on_discover: source.id == "src-7",
+        })
+    })
+    .await;
+    assert!(
+        peak.load(Ordering::SeqCst) <= 3,
+        "admitted {} adapters for jobs=3",
+        peak.load(Ordering::SeqCst)
+    );
+    assert_eq!(live.load(Ordering::SeqCst), 0);
+    assert_eq!(results.len(), sources.len());
+    assert!(
+        results
+            .windows(2)
+            .all(|pair| pair[0].health.source < pair[1].health.source)
+    );
+    for result in results {
+        assert_eq!(
+            result.health.status,
+            if result.health.source == "src-7" {
+                SourceStatus::ParseError
+            } else {
+                SourceStatus::Ok
+            }
+        );
+    }
+}

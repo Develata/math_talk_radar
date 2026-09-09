@@ -585,3 +585,50 @@ async fn sec002_redirect_to_new_host_rechecks_robots() {
         "expected RobotsDenied after redirect to host with disallow-all robots, got {err:?}"
     );
 }
+
+#[tokio::test]
+async fn redirect_to_same_host_new_port_releases_permit_before_robots() {
+    let a = MockServer::start().await;
+    let b = MockServer::start().await;
+    for server in [&a, &b] {
+        Mock::given(path("/robots.txt"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(server)
+            .await;
+    }
+    Mock::given(path("/entry"))
+        .respond_with(
+            ResponseTemplate::new(302).insert_header("location", format!("{}/detail", b.uri())),
+        )
+        .mount(&a)
+        .await;
+    Mock::given(path("/detail"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&b)
+        .await;
+    let client = FetchClient::new(HttpPolicy {
+        per_host_concurrency: 1,
+        ..Default::default()
+    })
+    .unwrap();
+    let mut budget = RequestBudget::default();
+    let url = format!("{}/entry", a.uri()).parse().unwrap();
+    let result = tokio::time::timeout(
+        Duration::from_secs(1),
+        fetch_one(
+            &client,
+            &url,
+            &allow_server_host(&url),
+            &client.policy(),
+            &mut budget,
+            None,
+            &RobotsCache::new(),
+        ),
+    )
+    .await;
+    assert!(
+        result.is_ok(),
+        "held the old host permit while waiting for the same host's robots permit"
+    );
+    assert!(result.unwrap().is_ok());
+}

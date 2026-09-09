@@ -22,3 +22,8 @@ SRC-008 regression: two sources on one host with content budget 1 both fetch
 successfully, regardless of which initializes the shared robots cache. Repeat
 with both serial initializers and concurrent admission; one physical robots
 request per shared cache. Content redirects/retries still consume budget.
+
+REL-001 / HTTP-001: jobs=3 admits at most three adapters for 60 sources,
+including an injected panic, with complete sorted source health. A same-host
+cross-port redirect succeeds at per-host concurrency 1; request timeouts are not
+extended by a later scan deadline. Skipped requested detail depth is partial.

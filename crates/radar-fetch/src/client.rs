@@ -69,7 +69,11 @@ impl FetchClient {
 
     /// Acquire a per-host concurrency permit for the host of `url` (FS-2).
     /// The permit is released when the returned guard is dropped.
-    pub(crate) async fn acquire_host_permit(&self, url: &Url) -> Option<OwnedSemaphorePermit> {
+    pub(crate) async fn acquire_host_permit(
+        &self,
+        url: &Url,
+        deadline: Option<std::time::Instant>,
+    ) -> Result<OwnedSemaphorePermit, crate::FetchError> {
         let host = url.host_str().unwrap_or("").to_string();
         let sem = {
             let mut map = self.host_sems.lock().await;
@@ -77,7 +81,15 @@ impl FetchClient {
                 .or_insert_with(|| Arc::new(Semaphore::new(self.policy.per_host_concurrency)))
                 .clone()
         };
-        sem.acquire_owned().await.ok()
+        let acquire = sem.acquire_owned();
+        let result = match deadline {
+            Some(deadline) => tokio::time::timeout_at(deadline.into(), acquire)
+                .await
+                .map_err(|_| crate::FetchError::Timeout)?,
+            None => acquire.await,
+        };
+        // Semaphores are private and never closed; fail closed if that changes.
+        result.map_err(|_| crate::FetchError::Timeout)
     }
 }
 
@@ -98,5 +110,27 @@ pub fn make_document(
         content_type,
         body,
         fetched_at,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[tokio::test]
+    async fn waiting_for_host_permit_obeys_deadline() {
+        let client = FetchClient::new(HttpPolicy {
+            per_host_concurrency: 1,
+            ..Default::default()
+        })
+        .unwrap();
+        let url = Url::parse("https://example.org").unwrap();
+        let permit = client.acquire_host_permit(&url, None).await.unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(10);
+        assert!(matches!(
+            client.acquire_host_permit(&url, Some(deadline)).await,
+            Err(crate::FetchError::Timeout)
+        ));
+        drop(permit);
+        assert!(client.acquire_host_permit(&url, None).await.is_ok());
     }
 }

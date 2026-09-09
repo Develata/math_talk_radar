@@ -8,6 +8,7 @@
 pub mod client;
 pub mod engine;
 pub mod error;
+mod http;
 pub mod policy;
 
 pub(crate) mod budget;

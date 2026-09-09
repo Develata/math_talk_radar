@@ -48,6 +48,16 @@ rather than waiting indefinitely.
 ## Failure isolation (§32)
 
 30% source failure → still exit 0. All enabled sources failing → exit 4.
+At most jobs source tasks/adapters are admitted; each completion admits the next
+source in stable source-ID order. Source task IDs retain failure ownership even
+on panic. Release uses unwind, because abort defeats this isolation.
+
+HTTP transaction and source scheduling are separate modules. Host-permit waits
+respect the scan deadline; per-request timeouts are the minimum of the request
+limit and remaining scan time. Release old responses/permits before redirect
+robots checks and retry backoff. Enrichment borrows the entrypoint document for
+inline parsing instead of copying its full body per event. Skipped requested
+depth is Partial, never evidence of authoritative completion.
 
 ## Acceptance cases
 
