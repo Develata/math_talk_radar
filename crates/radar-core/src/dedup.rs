@@ -8,441 +8,160 @@
 //!
 //! Determinism: identical inputs produce identical merge decisions. No clocks,
 //! no randomness, no order-dependent ties (we sort before merging).
-use std::cmp::Ordering;
-use std::collections::HashSet;
+use crate::model::Event;
+use std::collections::{BTreeSet, HashMap};
 
-use chrono::NaiveDate;
-use serde::{Deserialize, Serialize};
-use url::Url;
+mod identity;
+mod merge;
 
-use crate::model::{Event, Location, MediaResource, SourceEvidence, Talk};
-use crate::normalize::{canonicalize_url, normalize_name};
-use crate::people::{PersonHit, PersonRole};
-use crate::topics::TopicMatch;
+use identity::{DedupKeys, IdentityKey, native_identity_keys, scalar_identity_keys};
+pub use identity::{DedupSignal, are_duplicates, duplicate_signal};
+pub use merge::merge_events;
+#[cfg(test)]
+use merge::merge_in_place;
+use merge::{MergeIndex, canonical_cmp};
 
-/// Identity signal used to decide whether two events are the same (§25).
-/// Listed weakest-to-strongest by the algorithm's preference; the actual
-/// matching order is strongest-to-weakest (CanonicalUrl first).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum DedupSignal {
-    /// Identical canonical URL.
-    CanonicalUrl,
-    /// Source declares the same canonical ID (e.g. Indico event id).
-    SourceCanonicalId,
-    /// Normalized title + start date + organizer match.
-    TitleDateOrganizer,
-    /// Normalized title + start date + location match.
-    TitleDateLocation,
+/// A key can belong to multiple clusters after a representative acquires new
+/// fields. Keep their ordered IDs so removing an obsolete key reveals the next
+/// earliest cluster instead of losing it. No iteration order of HashMap leaks.
+#[derive(Default)]
+struct DedupIndex {
+    clusters: HashMap<IdentityKey, BTreeSet<usize>>,
+    #[cfg(test)]
+    lookups: usize,
+    #[cfg(test)]
+    updates: usize,
 }
 
-impl DedupSignal {
-    /// Strongest-to-weakest matching order per §25.
-    pub const PRIORITY: [DedupSignal; 4] = [
-        DedupSignal::CanonicalUrl,
-        DedupSignal::SourceCanonicalId,
-        DedupSignal::TitleDateOrganizer,
-        DedupSignal::TitleDateLocation,
-    ];
-}
-
-/// Earliest calendar start date among an event's sources, or `None` if the
-/// event has no parseable start.
-fn start_date(event: &Event) -> Option<NaiveDate> {
-    event.date.start_date()
-}
-
-/// First organizer name (normalized) found among the event's people, else the
-/// registrable domain of the first source (the "organizer/domain" fallback of
-/// §24). Returns `None` only if there are no sources and no organizer person.
-fn organizer_key(event: &Event) -> Option<String> {
-    for p in &event.people {
-        if p.role == PersonRole::Organizer {
-            return Some(normalize_name(&p.canonical_name));
-        }
-    }
-    // Fall back to the eTLD+1 of the first source's URL (the domain acts as
-    // organizer per §24's "canonical organizer/domain" identity field).
-    event
-        .sources
-        .first()
-        .and_then(|s| domain_key(&s.source_url))
-}
-
-/// Second-level domains that act as effective TLDs (e.g. `ac.uk`, `co.jp`).
-/// When the host ends with one of these, the registrable domain is the last
-/// three labels (e.g. `maths.ox.ac.uk` → `ox.ac.uk`); otherwise the last two.
-const MULTI_PART_TLDS: &[&str] = &[
-    "ac.uk", "co.uk", "gov.uk", "org.uk", "me.uk", "edu.au", "com.au", "org.au", "net.au",
-    "gov.au", "ac.jp", "co.jp", "go.jp", "or.jp", "ne.jp", "ac.kr", "co.kr", "go.kr", "or.kr",
-    "edu.cn", "ac.cn", "gov.cn", "com.cn", "org.cn", "edu.tw", "ac.tw", "gov.tw", "ac.nz", "co.nz",
-    "govt.nz", "edu.sg", "com.sg", "org.sg", "gov.sg", "ac.il", "co.il", "com.br", "org.br",
-    "edu.br", "gov.br", "com.hk", "org.hk", "edu.hk", "gov.hk", "com.mx", "org.mx", "edu.mx",
-];
-
-/// Extract the registrable domain (eTLD+1 approximation): for multi-part TLD
-/// suffixes (e.g. `.ac.uk`), return the last three labels; otherwise the last
-/// two. This is a coarse, suffix-list-free approximation suitable only for
-/// dedup grouping, not security.
-fn domain_key(url: &Url) -> Option<String> {
-    let host = url.host_str()?.to_lowercase();
-    let labels: Vec<&str> = host.split('.').collect();
-    for suffix in MULTI_PART_TLDS {
-        if (host.ends_with(suffix)
-            && host.len() > suffix.len()
-            && host.as_bytes()[host.len() - suffix.len() - 1] == b'.'
-            || host == *suffix)
-            && labels.len() >= 3
-        {
-            return Some(labels[labels.len() - 3..].join("."));
-        }
-    }
-    if labels.len() <= 2 {
-        Some(host)
-    } else {
-        Some(labels[labels.len() - 2..].join("."))
-    }
-}
-
-/// Normalized location key: city (if present) else venue name (if present) else
-/// the full location name, all normalized. Returns `None` if no location.
-fn location_key(loc: &Location) -> Option<String> {
-    let raw = loc
-        .city
-        .as_deref()
-        .filter(|s| !s.trim().is_empty())
-        .or_else(|| loc.venue.as_deref().filter(|s| !s.trim().is_empty()))
-        .unwrap_or(&loc.name);
-    if raw.trim().is_empty() {
-        None
-    } else {
-        Some(normalize_name(raw))
-    }
-}
-
-/// Precomputed dedup identity fields for one event. Computed once per event
-/// and reused across the O(n²) cluster scan in `dedup_events`, instead of
-/// re-normalizing title/organizer/location/URL on every pairwise comparison.
-/// Must be recomputed for a cluster representative after a merge, since the
-/// merge can union in new sources, location, or people.
-struct DedupKeys {
-    canonical_url: Option<String>,
-    source_ids: Vec<(String, String)>,
-    title: String,
-    start_date: Option<NaiveDate>,
-    organizer: Option<String>,
-    location: Option<String>,
-}
-
-impl DedupKeys {
-    fn from_event(event: &Event) -> DedupKeys {
-        let source_ids = event
-            .sources
-            .iter()
-            .filter_map(|s| {
-                s.native_id
-                    .as_ref()
-                    .map(|id| (s.source_id.clone(), id.clone()))
-            })
-            .collect();
-        DedupKeys {
-            canonical_url: event.url.as_ref().map(canonicalize_url),
-            source_ids,
-            title: normalize_name(&event.title),
-            start_date: start_date(event),
-            organizer: organizer_key(event),
-            location: event.location.as_ref().and_then(location_key),
-        }
-    }
-
-    fn duplicate_signal(&self, other: &DedupKeys) -> Option<DedupSignal> {
-        DedupSignal::PRIORITY
-            .into_iter()
-            .find(|&sig| self.are_duplicates(other, sig))
-    }
-
-    fn are_duplicates(&self, other: &DedupKeys, signal: DedupSignal) -> bool {
-        match signal {
-            DedupSignal::CanonicalUrl => match (&self.canonical_url, &other.canonical_url) {
-                (Some(ua), Some(ub)) => ua == ub,
-                _ => false,
-            },
-            DedupSignal::SourceCanonicalId => self.source_ids.iter().any(|(sa, ida)| {
-                other
-                    .source_ids
-                    .iter()
-                    .any(|(sb, idb)| sb == sa && idb == ida)
-            }),
-            DedupSignal::TitleDateOrganizer => {
-                let (Some(da), Some(db)) = (self.start_date, other.start_date) else {
-                    return false;
-                };
-                da == db
-                    && self.title == other.title
-                    && match (&self.organizer, &other.organizer) {
-                        (Some(oa), Some(ob)) => oa == ob,
-                        _ => false,
-                    }
-            }
-            DedupSignal::TitleDateLocation => {
-                let (Some(da), Some(db)) = (self.start_date, other.start_date) else {
-                    return false;
-                };
-                da == db
-                    && self.title == other.title
-                    && match (&self.location, &other.location) {
-                        (Some(la), Some(lb)) => la == lb,
-                        _ => false,
-                    }
-            }
-        }
-    }
-}
-
-/// Decide whether two events are duplicates under the given signal.
-///
-/// Conservative: signals 3 and 4 (TitleDateOrganizer / TitleDateLocation)
-/// require the start dates to be equal. Signals 1 and 2 (URL / source ID) are
-/// strong enough to merge regardless of date — a source that republishes the
-/// same event id at a changed date is treated as a corrected record of the
-/// same event.
-pub fn are_duplicates(a: &Event, b: &Event, signal: DedupSignal) -> bool {
-    match signal {
-        DedupSignal::CanonicalUrl => match (a.url.as_ref(), b.url.as_ref()) {
-            (Some(ua), Some(ub)) => canonicalize_url(ua) == canonicalize_url(ub),
-            _ => false,
-        },
-        DedupSignal::SourceCanonicalId => {
-            // Two events share a source canonical id iff some source of `a`
-            // and some source of `b` declare the same (source_id, native_id)
-            // pair with a non-empty native_id.
-            a.sources
-                .iter()
-                .filter_map(|s| {
-                    s.native_id
-                        .as_ref()
-                        .map(|id| (s.source_id.as_str(), id.as_str()))
-                })
-                .any(|(sa, ida)| {
-                    b.sources.iter().any(|sb| {
-                        sb.native_id
-                            .as_deref()
-                            .is_some_and(|idb| sb.source_id == sa && idb == ida)
-                    })
-                })
-        }
-        DedupSignal::TitleDateOrganizer => {
-            let (Some(da), Some(db)) = (start_date(a), start_date(b)) else {
-                return false;
-            };
-            if da != db {
-                return false;
-            }
-            if normalize_name(&a.title) != normalize_name(&b.title) {
-                return false;
-            }
-            organizer_key(a).is_some_and(|oa| organizer_key(b).is_some_and(|ob| oa == ob))
-        }
-        DedupSignal::TitleDateLocation => {
-            let (Some(da), Some(db)) = (start_date(a), start_date(b)) else {
-                return false;
-            };
-            if da != db {
-                return false;
-            }
-            if normalize_name(&a.title) != normalize_name(&b.title) {
-                return false;
-            }
-            match (a.location.as_ref(), b.location.as_ref()) {
-                (Some(la), Some(lb)) => {
-                    location_key(la).is_some_and(|ka| location_key(lb).is_some_and(|kb| ka == kb))
+impl DedupIndex {
+    fn first_match(&mut self, keys: &[IdentityKey]) -> Option<usize> {
+        keys.iter()
+            .filter_map(|key| {
+                #[cfg(test)]
+                {
+                    self.lookups += 1;
                 }
-                _ => false,
+                self.clusters.get(key).and_then(|ids| ids.first()).copied()
+            })
+            .min()
+    }
+
+    fn insert(&mut self, id: usize, keys: &[IdentityKey]) {
+        for key in keys {
+            #[cfg(test)]
+            {
+                self.updates += 1;
+            }
+            self.clusters.entry(key.clone()).or_default().insert(id);
+        }
+    }
+
+    fn remove(&mut self, id: usize, keys: &[IdentityKey]) {
+        for key in keys {
+            #[cfg(test)]
+            {
+                self.updates += 1;
+            }
+            if let std::collections::hash_map::Entry::Occupied(mut entry) =
+                self.clusters.entry(key.clone())
+            {
+                entry.get_mut().remove(&id);
+                if entry.get().is_empty() {
+                    entry.remove();
+                }
             }
         }
     }
 }
 
-/// Strongest signal (if any) under which `a` and `b` are duplicates. Tries
-/// signals in §25 priority order and returns the first match.
-pub fn duplicate_signal(a: &Event, b: &Event) -> Option<DedupSignal> {
-    DedupSignal::PRIORITY
-        .into_iter()
-        .find(|&sig| are_duplicates(a, b, sig))
-}
-
-/// Ranking-independent canonical order. IDs already encode normalized title
-/// and URL; provenance breaks same-ID multi-source ties without copying strings.
-/// Exact key ties retain input order. Neither scores nor ranking reasons enter
-/// identity, and completeness is filled by merge rather than used as a weight.
-fn canonical_cmp(a: &Event, b: &Event) -> Ordering {
-    a.id.0
-        .cmp(&b.id.0)
-        .then_with(|| a.url.cmp(&b.url))
-        .then_with(|| {
-            fn key(s: &SourceEvidence) -> (&str, &str, Option<&str>) {
-                (&s.source_id, s.source_url.as_str(), s.native_id.as_deref())
-            }
-            a.sources.iter().map(key).cmp(b.sources.iter().map(key))
-        })
-        .then_with(|| a.title.cmp(&b.title))
-        .then_with(|| a.description.cmp(&b.description))
-}
-
-/// Merge duplicate events using the ranking-independent canonical order.
-/// Collections are unioned; absent scalar fields are filled from the secondary.
-/// Keeps the earliest first_seen_at and latest last_seen_at.
-pub fn merge_events(primary: Event, secondary: Event) -> Event {
-    let (mut keep, other) = if canonical_cmp(&primary, &secondary).is_le() {
-        (primary, secondary)
-    } else {
-        (secondary, primary)
-    };
-
-    keep.sources = union_sources(keep.sources, other.sources);
-    keep.media = union_media(keep.media, other.media);
-    keep.talks = union_talks(keep.talks, other.talks);
-    keep.people = union_people(keep.people, other.people);
-    keep.topics = union_topics(keep.topics, other.topics);
-
-    if keep.url.is_none() {
-        keep.url = other.url;
-    }
-    if keep.location.is_none() {
-        keep.location = other.location;
-    }
-    if keep.description.is_none() {
-        keep.description = other.description;
-    }
-    if keep.date.start.is_none() && other.date.start.is_some() {
-        keep.date = other.date;
-    }
-
-    keep.first_seen_at = earliest(keep.first_seen_at, other.first_seen_at);
-    keep.last_seen_at = latest(keep.last_seen_at, other.last_seen_at);
-
-    keep
-}
-
-fn union_sources(a: Vec<SourceEvidence>, b: Vec<SourceEvidence>) -> Vec<SourceEvidence> {
-    let mut out = a;
-    let mut seen: HashSet<(String, String)> = out
-        .iter()
-        .map(|s| (s.source_id.clone(), s.source_url.to_string()))
-        .collect();
-    for s in b {
-        let key = (s.source_id.clone(), s.source_url.to_string());
-        if seen.insert(key) {
-            out.push(s);
-        }
-    }
-    out
-}
-
-fn union_media(a: Vec<MediaResource>, b: Vec<MediaResource>) -> Vec<MediaResource> {
-    let mut out = a;
-    let mut seen: HashSet<Url> = out.iter().map(|m| m.url.clone()).collect();
-    for m in b {
-        if seen.insert(m.url.clone()) {
-            out.push(m);
-        }
-    }
-    out
-}
-
-fn union_talks(a: Vec<Talk>, b: Vec<Talk>) -> Vec<Talk> {
-    let mut out = a;
-    let mut index: std::collections::HashMap<String, usize> = out
-        .iter()
-        .enumerate()
-        .map(|(i, t)| (t.id.0.clone(), i))
-        .collect();
-    for t in b {
-        if let Some(&pos) = index.get(&t.id.0) {
-            out[pos] = merge_talk(out[pos].clone(), t);
-        } else {
-            index.insert(t.id.0.clone(), out.len());
-            out.push(t);
-        }
-    }
-    out
-}
-
-/// Merge two talks sharing the same ID. The primary carries scalar fields;
-/// the secondary fills gaps and unions collection fields (speakers, media,
-/// topics). H07: previously `union_talks` dropped the secondary entirely on
-/// ID collision, losing its speakers/media/abstract when the primary lacked
-/// them.
-fn merge_talk(primary: Talk, secondary: Talk) -> Talk {
-    let mut keep = primary;
-    keep.speaker = union_people(keep.speaker, secondary.speaker);
-    keep.media = union_media(keep.media, secondary.media);
-    keep.topics = union_topics(keep.topics, secondary.topics);
-    if keep.date_time.is_none() {
-        keep.date_time = secondary.date_time;
-    }
-    if keep.abstract_text.is_none() {
-        keep.abstract_text = secondary.abstract_text;
-    }
-    keep
-}
-
-fn union_people(a: Vec<PersonHit>, b: Vec<PersonHit>) -> Vec<PersonHit> {
-    let mut out = a;
-    let mut seen: HashSet<(String, PersonRole)> = out
-        .iter()
-        .map(|p| (p.canonical_name.clone(), p.role))
-        .collect();
-    for p in b {
-        if seen.insert((p.canonical_name.clone(), p.role)) {
-            out.push(p);
-        }
-    }
-    out
-}
-
-fn union_topics(a: Vec<TopicMatch>, b: Vec<TopicMatch>) -> Vec<TopicMatch> {
-    let mut out = a;
-    let mut seen: HashSet<String> = out.iter().map(|t| t.topic_id.clone()).collect();
-    for t in b {
-        if seen.insert(t.topic_id.clone()) {
-            out.push(t);
-        }
-    }
-    out
-}
-
-fn earliest(
-    a: Option<chrono::DateTime<chrono::Utc>>,
-    b: Option<chrono::DateTime<chrono::Utc>>,
-) -> Option<chrono::DateTime<chrono::Utc>> {
-    match (a, b) {
-        (Some(x), Some(y)) => Some(x.min(y)),
-        (Some(x), None) | (None, Some(x)) => Some(x),
-        (None, None) => None,
-    }
-}
-
-fn latest(
-    a: Option<chrono::DateTime<chrono::Utc>>,
-    b: Option<chrono::DateTime<chrono::Utc>>,
-) -> Option<chrono::DateTime<chrono::Utc>> {
-    match (a, b) {
-        (Some(x), Some(y)) => Some(x.max(y)),
-        (Some(x), None) | (None, Some(x)) => Some(x),
-        (None, None) => None,
-    }
-}
-
-/// Deduplicate a batch of events. Events are processed in a stable order (by
-/// id) and merged greedily: each event is compared against existing clusters'
-/// representatives using the §25 signal priority, and merged into the first
-/// cluster it matches. Events that match no cluster start their own.
-///
-/// This is a single-pass O(n²) algorithm — adequate for the v0.1 batch sizes
-/// (low thousands of events per scan). A hash-indexed pass is a later
-/// optimization that must not change merge decisions.
+/// Stable canonical ordering followed by first-matching-cluster deduplication.
+/// Expected O(n log n + k log n), where k counts processed identity keys,
+/// including representative key updates. Does not compute transitive closure.
 pub fn dedup_events(events: Vec<Event>) -> Vec<Event> {
+    dedup_indexed(events, false, &mut DedupIndex::default()).0
+}
+
+/// Also report input IDs replaced by a different canonical representative.
+/// State uses these aliases to preserve history after representative correction;
+/// they are scan-local and do not change the persisted schema or ID hash.
+pub fn dedup_events_with_aliases(
+    events: Vec<Event>,
+) -> (Vec<Event>, HashMap<crate::EventId, crate::EventId>) {
+    dedup_indexed(events, true, &mut DedupIndex::default())
+}
+
+fn dedup_indexed(
+    mut events: Vec<Event>,
+    aliases: bool,
+    index: &mut DedupIndex,
+) -> (Vec<Event>, HashMap<crate::EventId, crate::EventId>) {
+    events.sort_by(canonical_cmp);
+    let mut clusters = Vec::with_capacity(events.len());
+    let mut cluster_keys: Vec<Vec<IdentityKey>> = Vec::with_capacity(events.len());
+    let mut origins = Vec::new();
+    let mut merge_indices: Vec<Option<MergeIndex>> = Vec::with_capacity(events.len());
+    for event in events {
+        let keys = DedupKeys::from_event(&event).identity_keys();
+        let position = index.first_match(&keys).unwrap_or(clusters.len());
+        if aliases {
+            origins.push((event.id.clone(), position));
+        }
+        if position == clusters.len() {
+            index.insert(position, &keys);
+            cluster_keys.push(
+                keys.into_iter()
+                    .filter(|key| !matches!(key, IdentityKey::Native(..)))
+                    .collect(),
+            );
+            clusters.push(event);
+            merge_indices.push(None);
+        } else {
+            let keep = &mut clusters[position];
+            let replacing = canonical_cmp(keep, &event).is_gt();
+            if replacing {
+                // Rare equal-ID tie replacement may discard old native IDs under
+                // existing source-URL conflict rules; rebuild this cluster only.
+                index.remove(position, &native_identity_keys(keep).collect::<Vec<_>>());
+            }
+            let old_sources = keep.sources.len();
+            merge_indices[position]
+                .get_or_insert_with(|| MergeIndex::new(keep))
+                .merge(keep, event);
+            let keys = scalar_identity_keys(keep);
+            let old = &cluster_keys[position];
+            for key in old.iter().filter(|key| !keys.contains(key)) {
+                index.remove(position, std::slice::from_ref(key));
+            }
+            for key in keys.iter().filter(|key| !old.contains(key)) {
+                index.insert(position, std::slice::from_ref(key));
+            }
+            cluster_keys[position] = keys;
+            let start = if replacing { 0 } else { old_sources };
+            for source in &keep.sources[start..] {
+                if let Some(native) = &source.native_id {
+                    index.insert(
+                        position,
+                        &[IdentityKey::Native(
+                            source.source_id.clone(),
+                            native.clone(),
+                        )],
+                    );
+                }
+            }
+        }
+    }
+    let aliases = origins
+        .into_iter()
+        .filter_map(|(id, pos)| {
+            let canonical = &clusters[pos].id;
+            (id != *canonical).then(|| (id, canonical.clone()))
+        })
+        .collect();
+    (clusters, aliases)
+}
+
+#[cfg(test)]
+fn reference_dedup_events(events: Vec<Event>) -> Vec<Event> {
     // Stable sort by id so the cluster representative is deterministic
     // regardless of input order.
     let mut sorted: Vec<Event> = events;
@@ -458,8 +177,7 @@ pub fn dedup_events(events: Vec<Event>) -> Vec<Event> {
                 break;
             };
             if rep_keys.duplicate_signal(&remaining_keys).is_some() {
-                let old = rep.clone();
-                *rep = merge_events(old, remaining);
+                merge_in_place(rep, remaining);
                 *rep_keys = DedupKeys::from_event(rep);
             } else {
                 current = Some((remaining, remaining_keys));
@@ -475,12 +193,17 @@ pub fn dedup_events(events: Vec<Event>) -> Vec<Event> {
 
 #[cfg(test)]
 mod tests {
+    use super::identity::domain_key;
     use super::*;
     use crate::date::{DatePrecision, EventDate};
+    use crate::model::Location;
     use crate::model::{
         AccessInfo, EventId, EventStatus, EventType, OnlineAvailability, PublicAccess,
         SourceEvidence, Talk, TalkId,
     };
+    use crate::normalize::canonicalize_url;
+    use crate::people::{PersonHit, PersonRole};
+    use crate::topics::TopicMatch;
     use url::Url;
 
     fn src(source_id: &str, url: &str, native_id: Option<&str>) -> SourceEvidence {
@@ -601,6 +324,184 @@ mod tests {
             dedup_events(vec![a.clone(), b.clone()]),
             dedup_events(vec![b, a])
         );
+    }
+
+    #[test]
+    fn indexed_matches_linear_reference_on_generated_corpora() {
+        let mut seed = 0x5eed_cafe_1234_5678u64;
+        let mut next = || {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+            seed >> 32
+        };
+        for case in 0..1200 {
+            let size = (next() % 65) as usize;
+            let mut events = Vec::new();
+            for _ in 0..size {
+                let id = format!("{:04}", next() % 24);
+                let title = format!("Talk {}", next() % 8);
+                let url = (next() % 4 != 0).then(|| format!("https://events.org/{}", next() % 20));
+                let day = (next() % 3 != 0).then(|| date(2026, 9, (next() % 4 + 1) as u32));
+                let sources = (0..next() % 4)
+                    .map(|_| {
+                        src(
+                            &format!("s{}", next() % 4),
+                            &format!("https://host{}.edu/{}", next() % 4, next() % 6),
+                            (next() % 3 != 0)
+                                .then(|| format!("{}", next() % 8))
+                                .as_deref(),
+                        )
+                    })
+                    .collect();
+                let mut e = event(&id, &title, url.as_deref(), day, sources);
+                if next() % 3 != 0 {
+                    e.location = Some(Location {
+                        name: format!("Venue {}", next() % 3),
+                        city: None,
+                        country: None,
+                        venue: None,
+                    });
+                }
+                if next() % 3 == 0 {
+                    e.people.push(PersonHit {
+                        canonical_name: format!("Org {}", next() % 3),
+                        matched_text: "organizer".into(),
+                        role: PersonRole::Organizer,
+                        evidence: None,
+                        confidence: 1.0,
+                        scholar_tags: vec![],
+                    });
+                }
+                if next() % 2 == 0 {
+                    e.description = Some(format!("Description {}", next() % 3));
+                }
+                e.score = (next() % 100) as f32;
+                events.push(e);
+            }
+            assert_eq!(
+                dedup_events(events.clone()),
+                reference_dedup_events(events),
+                "seeded case {case}"
+            );
+        }
+    }
+
+    #[test]
+    fn indexed_chooses_earliest_cluster_and_drops_obsolete_keys() {
+        let mut a = event(
+            "a",
+            "Talk",
+            Some("https://a.org/e"),
+            Some(date(2026, 9, 1)),
+            vec![src("a", "https://a.org/e", None)],
+        );
+        let b = event(
+            "b",
+            "Other",
+            Some("https://b.org/e"),
+            None,
+            vec![src("b", "https://b.org/e", Some("native"))],
+        );
+        let mut bridge = a.clone();
+        bridge.id = EventId("c".into());
+        bridge.sources = b.sources.clone();
+        bridge.people.push(PersonHit {
+            canonical_name: "New organizer".into(),
+            matched_text: "".into(),
+            role: PersonRole::Organizer,
+            evidence: None,
+            confidence: 1.0,
+            scholar_tags: vec![],
+        });
+        // This event matches A's old domain organizer but not the new explicit one.
+        a.id = EventId("d".into());
+        a.url = Some(Url::parse("https://a.org/different").unwrap());
+        let inputs = vec![
+            event(
+                "a",
+                "Talk",
+                Some("https://a.org/e"),
+                Some(date(2026, 9, 1)),
+                vec![src("a", "https://a.org/e", None)],
+            ),
+            b,
+            bridge,
+            a,
+        ];
+        let result = dedup_events(inputs.clone());
+        assert_eq!(result, reference_dedup_events(inputs));
+        assert_eq!(
+            result.len(),
+            3,
+            "bridge must not fuse existing clusters or retain an obsolete organizer key"
+        );
+        assert_eq!(result[0].sources.len(), 2);
+    }
+
+    #[test]
+    fn index_removal_reveals_next_cluster_and_distinct_work_is_linear() {
+        let key = IdentityKey::Url("https://example.org/e".into());
+        let mut index = DedupIndex::default();
+        index.insert(5, std::slice::from_ref(&key));
+        index.insert(2, std::slice::from_ref(&key));
+        assert_eq!(index.first_match(std::slice::from_ref(&key)), Some(2));
+        index.remove(2, std::slice::from_ref(&key));
+        assert_eq!(index.first_match(&[key]), Some(5));
+        for n in [1000, 5000, 10000] {
+            let inputs = (0..n)
+                .map(|i| {
+                    event(
+                        &format!("{i:05}"),
+                        "Talk",
+                        Some(&format!("https://example.org/{i}")),
+                        None,
+                        vec![],
+                    )
+                })
+                .collect();
+            let mut index = DedupIndex::default();
+            assert_eq!(dedup_indexed(inputs, false, &mut index).0.len(), n);
+            assert_eq!(index.lookups, n, "one URL key lookup per distinct event");
+        }
+    }
+
+    #[test]
+    fn growing_provenance_has_bounded_index_work() {
+        let n = 10_000;
+        let inputs = (0..n)
+            .map(|i| {
+                event(
+                    &format!("{i:05}"),
+                    "Talk",
+                    Some("https://example.org/e"),
+                    None,
+                    vec![src(
+                        &format!("s{i}"),
+                        &format!("https://example.org/{i}"),
+                        Some(&i.to_string()),
+                    )],
+                )
+            })
+            .collect();
+        let mut index = DedupIndex::default();
+        let output = dedup_indexed(inputs, false, &mut index).0;
+        assert_eq!(output.len(), 1);
+        assert_eq!(output[0].sources.len(), n);
+        assert_eq!(index.lookups, 2 * n);
+        assert!(
+            index.updates <= 3 * n,
+            "must not reindex the entire growing representative: {}",
+            index.updates
+        );
+    }
+
+    #[test]
+    fn aliases_point_to_final_representatives() {
+        let a = event("a", "Talk", Some("https://a.org/e"), None, vec![]);
+        let b = event("b", "Talk", Some("https://a.org/e"), None, vec![]);
+        let (events, aliases) = dedup_events_with_aliases(vec![b, a]);
+        assert_eq!(events.len(), 1);
+        assert_eq!(aliases.get(&EventId("b".into())), Some(&events[0].id));
+        assert!(!aliases.contains_key(&events[0].id));
     }
 
     fn date(y: i32, m: u32, d: u32) -> chrono::NaiveDate {

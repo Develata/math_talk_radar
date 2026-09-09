@@ -48,3 +48,16 @@ fields and presentation order/filtering.
 - TOP-001 — topic alias matching (golden).
 - DEDUP-001 — identical event merge (golden).
 - DEDUP-002 — distinct event not merge (golden).
+
+## Indexed implementation (ADR-0011)
+
+Process candidates in canonical order, and merge into the earliest existing
+cluster matching any sanctioned key. A key maps to an ordered set of cluster
+indices because merges can make multiple representatives share a key. Updating
+scalar keys removes obsolete memberships; newly retained native IDs are added
+incrementally. There is no transitive union of existing clusters. Expected
+O(n log n + k log n) work for sorting and k identity-key operations; growing
+provenance uses incremental membership caches, not repeated full-cluster scans.
+Exact equal-ID canonical replacements rebuild only the affected cluster.
+Scan-local input-ID aliases let state preserve first_seen when a representative
+changes; these aliases are not new identity signals or a persisted schema.
