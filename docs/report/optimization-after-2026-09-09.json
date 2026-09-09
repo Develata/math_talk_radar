@@ -1,0 +1,36 @@
+{
+  "adapter_rss_kb": 6860,
+  "binary_bytes": 12190760,
+  "generated_at_unix_seconds": 1788943478,
+  "hard_gate_errors": [],
+  "revision": "6986f8d92e5d082c7c62c410e45c2d5ad3a40dba",
+  "scan": {
+    "events": 400,
+    "method": "mock-scan-v1",
+    "peak_rss_kb": 31296,
+    "release_panic_isolation": true,
+    "sources": 20,
+    "two_scans_and_output_ms": 988.289273
+  },
+  "schema_version": 1,
+  "startup_help_ms": 1.410402,
+  "startup_version_ms": 1.4473775,
+  "workload": {
+    "dedup_ms": {
+      "1000": 2.388532,
+      "10000": 38.282941,
+      "5000": 15.052748,
+      "collision_10000": 28.863574999999997
+    },
+    "json_bytes": 7895561,
+    "json_ms": 13.466017,
+    "jsonl_ms": 14.468997000000002,
+    "method": "offline-v1",
+    "peak_rss_kb": 70548,
+    "pipeline_10000_ms": 224.449299,
+    "state_two_scans_ms": 160.974229
+  },
+  "worktree_status": " M .github/workflows/ci.yml\n M .github/workflows/release.yml\n M CHANGELOG.md\n M Cargo.lock\n M Cargo.toml\n M README.md\n M apps/cli/Cargo.toml\n M crates/radar-adapters/src/helpers.rs\n M crates/radar-adapters/src/html_config.rs\n M crates/radar-adapters/src/html_generic.rs\n M crates/radar-adapters/src/ics.rs\n M crates/radar-adapters/src/jsonld.rs\n M crates/radar-adapters/src/rss.rs\n M crates/radar-adapters/tests/adapters.rs\n M crates/radar-core/src/adapter.rs\n M crates/radar-core/src/dedup.rs\n M crates/radar-core/src/dedup/identity.rs\n M crates/radar-fetch/src/engine.rs\n M crates/radar-fetch/tests/reliability.rs\n M crates/radar-state/src/repository/scan.rs\n M docs/acceptance-cases/03_sources.md\n M docs/acceptance-cases/05_dedup_ranking.md\n M docs/acceptance-cases/08_release_security.md\n M docs/adr/0011-deterministic-scan-ownership.md\n M docs/baseline.md\n M docs/plan/03_architecture.md\n M docs/plan/04_source_adapter_contract.md\n M docs/plan/05_fetching_reliability.md\n M docs/plan/06_normalization_matching.md\n M docs/plan/12_release.md\n M docs/plan/13_performance_budget.md\n M docs/report/baseline-latest.md\n M xtask/Cargo.toml\n M xtask/src/main.rs\n?? apps/cli/examples/perf_scan.rs\n?? crates/radar-adapters/src/helpers/\n?? package-lock.json\n?? package.json\n?? xtask/src/architecture.rs\n?? xtask/src/perf.rs\n",
+  "verified_implementation_commit": "9bf06db7f1fbaf9de22885a0c166b84306655091",
+  "verification_note": "Measured the final implementation before committing it. Later removal of an unused workspace tracing declaration changes no resolved dependency or binary."
+}
