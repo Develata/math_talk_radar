@@ -1,7 +1,6 @@
 //! Small offline performance gate. Timings are trends; only broad catastrophic
 //! limits and relatively stable resource properties fail CI.
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Instant, SystemTime};
@@ -117,10 +116,7 @@ fn run_probes(root: &Path) -> Result<Value, Vec<String>> {
         ],
     )?;
     let binary = built_executable(&build_messages)?;
-    let binary_sha256 = format!(
-        "{:x}",
-        Sha256::digest(std::fs::read(&binary).map_err(|e| vec![e.to_string()])?)
-    );
+    let binary_sha256 = crate::acceptance::evidence::file_hash(&binary).map_err(|e| vec![e])?;
     let size = std::fs::metadata(&binary)
         .map_err(|e| vec![e.to_string()])?
         .len();
@@ -154,6 +150,44 @@ fn run_probes(root: &Path) -> Result<Value, Vec<String>> {
         ],
     )?)
     .map_err(|e| vec![format!("scan metrics: {e}")])?;
+    let storage_pipeline = cargo(
+        root,
+        &[
+            "run",
+            "--offline",
+            "--locked",
+            "--release",
+            "-p",
+            "math_talk_radar",
+            "--example",
+            "perf_storage_pipeline",
+            "--",
+            binary
+                .to_str()
+                .ok_or_else(|| vec!["non-UTF-8 performance binary path".into()])?,
+        ],
+    )?;
+    for required in [
+        "PERF_PIPELINE_CASE:n=1000;",
+        "PERF_PIPELINE_CASE:n=5000;",
+        "PERF_PIPELINE_CASE:n=10000;",
+        "PERF_PIPELINE_HIGH_COLLISION:",
+        "PERF_PIPELINE_BINARY_BYTES:",
+        "PERF_PIPELINE_STARTUP_MS:",
+        "PERF_PIPELINE_PEAK_KB:",
+    ] {
+        if !storage_pipeline
+            .lines()
+            .any(|line| line.starts_with(required) && !line.contains("unavailable"))
+        {
+            return Err(vec![format!("storage pipeline metric missing: {required}")]);
+        }
+    }
+    let storage_rss_kb = storage_pipeline
+        .lines()
+        .find_map(|line| line.strip_prefix("PERF_PIPELINE_PEAK_KB:"))
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .ok_or_else(|| vec!["storage pipeline RSS metric invalid".into()])?;
     let rss = cargo(
         root,
         &[
@@ -184,6 +218,11 @@ fn run_probes(root: &Path) -> Result<Value, Vec<String>> {
             128.0 * 1024.0,
         ),
         ("scan_rss_kb", scan["peak_rss_kb"].as_f64(), 128.0 * 1024.0),
+        (
+            "storage_pipeline_rss_kb",
+            Some(storage_rss_kb as f64),
+            128.0 * 1024.0,
+        ),
         (
             "dedup_10000_ms",
             workload["dedup_ms"]["10000"].as_f64(),
@@ -230,7 +269,7 @@ fn run_probes(root: &Path) -> Result<Value, Vec<String>> {
         "binary": binary, "binary_sha256": binary_sha256,
         "generated_at_unix_seconds": SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map_err(|e| vec![e.to_string()])?.as_secs(),
         "binary_bytes": size, "startup_help_ms": help_ms, "startup_version_ms": version_ms,
-        "adapter_rss_kb": rss_kb, "workload": workload, "scan": scan, "hard_gate_errors": errors});
+        "adapter_rss_kb": rss_kb, "workload": workload, "scan": scan, "storage_pipeline": storage_pipeline, "hard_gate_errors": errors});
     println!(
         "perf: binary {size} bytes; help {help_ms:.2} ms; version {version_ms:.2} ms; adapter RSS {rss_kb} KiB"
     );

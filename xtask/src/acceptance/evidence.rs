@@ -12,7 +12,17 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 pub type Result<T> = std::result::Result<T, String>;
 
 pub fn hash(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    hex_digest(&Sha256::digest(bytes))
+}
+
+fn hex_digest(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut result = String::with_capacity(bytes.len() * 2);
+    for &byte in bytes {
+        result.push(char::from(HEX[usize::from(byte >> 4)]));
+        result.push(char::from(HEX[usize::from(byte & 15)]));
+    }
+    result
 }
 
 pub fn file_hash(path: &Path) -> Result<String> {
@@ -22,7 +32,7 @@ pub fn file_hash(path: &Path) -> Result<String> {
     loop {
         let size = file.read(&mut buffer).map_err(|e| e.to_string())?;
         if size == 0 {
-            return Ok(format!("{:x}", digest.finalize()));
+            return Ok(hex_digest(&digest.finalize()));
         }
         digest.update(&buffer[..size]);
     }

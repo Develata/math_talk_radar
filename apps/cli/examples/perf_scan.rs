@@ -124,10 +124,12 @@ async fn run() {
         second.source_health
     );
     assert!(second.changes.is_empty());
-    let rendered = output::render(
+    let mut rendered = Vec::new();
+    output::render_to(
         second,
         math_talk_radar_cli::cli::OutputFormat::Json,
         math_talk_radar_cli::cli::DetailLevel::Full,
+        &mut rendered,
     )
     .unwrap();
     std::hint::black_box(&rendered);

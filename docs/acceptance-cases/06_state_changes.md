@@ -10,9 +10,10 @@
 Plan ref: `docs/plan/07_state_change_detection.md`. Integration tests; STATE-003
 is the canonical baseline (§23). Lands in M3.
 
-STATE-001/002/003 regressions: per-event A/B authority (including unknown
-provenance), failure of unrelated C, A+B disappearance after both recover,
-provenance/media retention over successive partial scans, one-shot cancellation,
-owned-vector allocation reuse, alias first_seen/tombstone transfer and reopen
-compatibility. CLI integration uses two independent fixture sources: failed B
-retains its historical events while healthy A can cancel its disappeared events.
+STATE-001/002/003 regressions: all-source scan authority, including a healthy
+source's absent event protected by an unrelated source failure; cancellation
+after complete recovery; provenance/media retention over successive partial
+scans; one-shot cancellation; owned-vector allocation reuse; alias first_seen
+and tombstone transfer; source-health/change-log retention and reopen; v4
+migration. CLI integration uses two independent fixture sources: failed B
+protects both its historical events and disappeared events from healthy A.

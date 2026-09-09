@@ -337,11 +337,13 @@ const SRC_COLS: &[&str] = &[
     "media_strategy",
     "dynamic",
     "enabled",
-    "fixture",
+    "list_fixture",
+    "detail_fixture",
     "last_verified",
     "status",
     "notes",
 ];
+const ADAPTERS_WITH_DETAIL: &[&str] = &["rss", "ics", "jsonld", "html_config", "html_generic"];
 const SRC_REQUIRED: &[&str] = &[
     "id",
     "name",
@@ -410,8 +412,8 @@ fn validate_source_registry(root: &Path) -> Vec<String> {
     let i_dyn = idx("dynamic");
     let i_en = idx("enabled");
     let i_status = idx("status");
-
-    let i_fixture = idx("fixture");
+    let i_list_fixture = idx("list_fixture");
+    let i_detail_fixture = idx("detail_fixture");
     let i_media = idx("media_strategy");
 
     let mut seen = HashSet::new();
@@ -425,8 +427,7 @@ fn validate_source_registry(root: &Path) -> Vec<String> {
         let cell = |ri: Option<usize>| ri.and_then(|x| row.get(x)).copied().unwrap_or("");
         let id = cell(i_id);
         for col in SRC_REQUIRED {
-            let ci = idx(col);
-            if cell(ci).is_empty() {
+            if cell(idx(col)).is_empty() {
                 errors.push(format!(
                     "source-registry row {i} ({id}): empty required column '{col}'"
                 ));
@@ -476,8 +477,7 @@ fn validate_source_registry(root: &Path) -> Vec<String> {
         let status = cell(i_status);
         if !VALID_SRC_STATUS.contains(&status) {
             errors.push(format!(
-                "source-registry row {i} ({id}): invalid status '{}'",
-                status
+                "source-registry row {i} ({id}): invalid status '{status}'"
             ));
         }
 
@@ -487,7 +487,7 @@ fn validate_source_registry(root: &Path) -> Vec<String> {
             audited_count += 1;
         }
         if cell(i_en) == "true" {
-            let fixture = cell(i_fixture);
+            let fixture = cell(i_list_fixture);
             if !fixture.is_empty() {
                 let fixture_path = root
                     .join("crates/radar-adapters/tests/fixtures")
@@ -496,41 +496,49 @@ fn validate_source_registry(root: &Path) -> Vec<String> {
                     enabled_fixture_count += 1;
                 } else {
                     errors.push(format!(
-                        "source-registry row {i} ({id}): fixture '{fixture}' not found on disk"
+                        "source-registry row {i} ({id}): list_fixture '{fixture}' not found on disk"
                     ));
                 }
             }
+            let detail = cell(i_detail_fixture);
+            if !detail.is_empty() {
+                let detail_path = root
+                    .join("crates/radar-adapters/tests/fixtures")
+                    .join(detail);
+                if !detail_path.exists() {
+                    errors.push(format!(
+                        "source-registry row {i} ({id}): detail_fixture '{detail}' not found on disk"
+                    ));
+                }
+            } else if ADAPTERS_WITH_DETAIL.contains(&cell(i_adapter))
+                && cell(i_media) != "youtube_channel"
+            {
+                errors.push(format!(
+                    "source-registry row {i} ({id}): enabled source with adapter '{}' requires detail_fixture (§45)",
+                    cell(i_adapter)
+                ));
+            }
             enabled_adapter_kinds.insert(cell(i_adapter));
 
-            // §45: every enabled source needs ≥1 golden expectation in
-            // site_audits.rs (function `site_{id_with_underscores}_*`).
             let test_fn_prefix = format!("fn site_{}", id.replace('-', "_"));
             let audits_path = root.join("crates/radar-adapters/tests/site_audits.rs");
             match std::fs::read_to_string(&audits_path) {
-                Ok(audits) if !audits.contains(&test_fn_prefix) => {
-                    errors.push(format!(
-                        "source-registry row {i} ({id}): no golden test in site_audits.rs (expected function starting with '{test_fn_prefix}')"
-                    ));
-                }
-                Err(e) => {
-                    errors.push(format!("source-registry: cannot read site_audits.rs: {e}"));
-                }
+                Ok(audits) if !audits.contains(&test_fn_prefix) => errors.push(format!(
+                    "source-registry row {i} ({id}): no golden test in site_audits.rs (expected function starting with '{test_fn_prefix}')"
+                )),
+                Err(e) => errors.push(format!("source-registry: cannot read site_audits.rs: {e}")),
                 _ => {}
             }
         }
 
-        // §18: count media/recording sources for the coverage baseline.
-        // H8-1: media_strategy validated against a closed enum to catch
-        // typos that would silently break the media-source baseline.
         if cell(i_en) == "true" {
             let kind = cell(i_kind);
             let media_strategy = cell(i_media);
-            let valid_strategies = ["youtube_channel", "rss_media", "ics_media", "scrape_media"];
+            let valid_strategies = ["youtube_channel"];
             if !media_strategy.is_empty() {
                 if !valid_strategies.contains(&media_strategy) {
                     errors.push(format!(
-                        "source-registry row {i} ({id}): unknown media_strategy '{media_strategy}', expected one of: {}",
-                        valid_strategies.join(", ")
+                        "source-registry row {i} ({id}): unsupported v0.1 media_strategy '{media_strategy}', expected youtube_channel"
                     ));
                 }
                 media_source_count += 1;
@@ -544,9 +552,6 @@ fn validate_source_registry(root: &Path) -> Vec<String> {
         }
     }
 
-    // LIVE-001/002 coverage baseline (§18). Only enforced once the audit is
-    // complete — while any row is still pending_audit, the counts are not
-    // checked so the gate doesn't fail during an in-progress audit.
     if pending_audit_count == 0 {
         if audited_count < 20 {
             errors.push(format!(
@@ -575,13 +580,8 @@ fn validate_source_registry(root: &Path) -> Vec<String> {
             );
         }
     }
-
     errors
 }
-
-// ---------------------------------------------------------------------------
-// acceptance-matrix validation (§55, §56, DOC-001, DOC-002)
-// ---------------------------------------------------------------------------
 
 fn validate_matrix(root: &Path) -> Vec<String> {
     acceptance::catalog::validate(root)

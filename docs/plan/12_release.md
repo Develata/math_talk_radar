@@ -14,7 +14,7 @@ panic = "unwind"
 strip = "symbols"
 ```
 
-Modifiable by ADR if benchmarks justify it. ADR-0011 requires unwind so source
+Modifiable by ADR if benchmarks justify it. ADR-0014 requires unwind so source
 task panics remain isolated in production, with release-profile verification.
 
 ## Static release (§51)
@@ -28,7 +28,7 @@ failed inspection commands, and ambiguous dependency output must be rejected.
 
 ## Supply chain (§52)
 
-ADR-0012 replaces incidental serial ordering with dependencies: independent
+ADR-0015 replaces incidental serial ordering with dependencies: independent
 fmt/clippy, tests, coverage, cargo-deny, acceptance/architecture and performance
 checks may run concurrently with the musl build. All remain required. Static
 check, clean-Ubuntu smoke and checksum verification consume that exact musl
@@ -37,6 +37,10 @@ stale or mismatched required evidence before attestation/publication. Downloaded
 release assets are explicitly rehashed before publication. Minimal permissions;
 pin third-party actions by full SHA; Dependabot for Cargo + Actions. Release
 must not skip the complete baseline, even if another workflow was green.
+
+Preserve the remote coverage gates: radar-core line coverage at least 85%,
+and workspace line coverage at least 75%. Both commands produce run-local JSON
+reports and are required by the coverage receipt.
 
 ## Acceptance orchestration
 

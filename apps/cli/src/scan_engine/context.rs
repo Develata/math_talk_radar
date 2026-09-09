@@ -4,7 +4,7 @@ use crate::config_loader::load_sources;
 use crate::runtime::CliError;
 use chrono::{NaiveDate, Utc};
 use radar_core::filter::ScanMode as CoreScanMode;
-use radar_core::people::ScholarRecord;
+use radar_core::people::NormalizedScholar;
 use radar_core::ranking::InterestWeights;
 use radar_core::topics::NormalizedTopic;
 use radar_core::{SourceSpec, SourceTier};
@@ -15,7 +15,7 @@ pub(super) struct ScanContext {
     pub tiers: HashMap<String, SourceTier>,
     pub interests: Option<InterestWeights>,
     pub topics: Vec<NormalizedTopic>,
-    pub scholars: Vec<ScholarRecord>,
+    pub scholars: Vec<NormalizedScholar>,
     pub today: NaiveDate,
     pub timezone: String,
     pub mode: CoreScanMode,
@@ -106,7 +106,7 @@ pub(super) fn load(args: &ScanArgs) -> Result<ScanContext, CliError> {
         tiers,
         interests,
         topics: normalized_topics,
-        scholars: scholars_config.scholars,
+        scholars: radar_core::normalize_scholars(&scholars_config.scholars),
         today,
         timezone: tz.1,
         mode: core_mode,

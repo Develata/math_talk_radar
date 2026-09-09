@@ -97,6 +97,8 @@ pub fn score_event(
     // 1. Topic component (cap MAX_TOPIC). Each matched topic contributes
     //    15 * (0.5 + 0.5 * w), rounded half up, where w is the interest weight
     //    (1.0 if absent). Minimum contribution (w=0) is 7.5 → 8.
+    //    enrich_event_topics folds talk title/abstract evidence into the
+    //    event-level deduplicated topic set, so each topic contributes once.
     let mut topic_sum: u8 = 0;
     for topic in &event.topics {
         let w = match interests {
@@ -111,18 +113,35 @@ pub fn score_event(
     }
     let topic = topic_sum.min(MAX_TOPIC);
 
-    // 2. Media component (cap MAX_MEDIA). Max over all media resources:
+    // 2. Media component (cap MAX_MEDIA). Max over event- and talk-level media:
     //    open video=25, reg-required video=18, open audio=15,
-    //    slides/lecture_notes=10, else 0.
+    //    slides/lecture_notes=10, else 0. Using max preserves the existing cap
+    //    and prevents duplicate copies of the same recording from accumulating.
     let mut media_score: u8 = 0;
-    for media in &event.media {
+    let mut has_open_recording = false;
+    let media_iter = event
+        .media
+        .iter()
+        .chain(event.talks.iter().flat_map(|talk| talk.media.iter()));
+    for media in media_iter {
         let s = media_signal(&media.media_type, media.public_access);
         if s > media_score {
             media_score = s;
         }
+        // R9-M01: the "public_recording_available" reason signals a genuinely
+        // public recording. Only Open-access media qualify — reg-required,
+        // paywalled, login, in-person-only, and unknown are not public.
+        if media.public_access == PublicAccess::Open
+            && matches!(
+                media.media_type,
+                MediaType::Video | MediaType::Audio | MediaType::Slides | MediaType::LectureNotes
+            )
+        {
+            has_open_recording = true;
+        }
     }
     let media = media_score.min(MAX_MEDIA);
-    if media > 0 {
+    if has_open_recording {
         rank_reasons.push("public_recording_available".to_string());
     }
 
@@ -156,9 +175,16 @@ pub fn score_event(
     // 5. People component (cap MAX_PEOPLE). Important scholars (fields/abel/
     //    wolf/crafoord tags) with Speaker/Lecturer → 10, Organizer/Panelist → 5;
     //    any non-TitleMention/Unknown role → 3. TitleMention and Unknown → 0.
+    //    Structured Talk.speaker entries participate alongside event.people;
+    //    the component is a max, so the same person appearing in both places
+    //    cannot double-count.
     let mut people_score: u8 = 0;
     let mut people_winner: Option<(&str, PersonRole)> = None;
-    for person in &event.people {
+    let people_iter = event
+        .people
+        .iter()
+        .chain(event.talks.iter().flat_map(|talk| talk.speaker.iter()));
+    for person in people_iter {
         let important = is_important_scholar(&person.scholar_tags);
         let s = person_signal(person.role, important);
         if s > people_score {
@@ -223,13 +249,18 @@ pub fn score_event(
 fn media_signal(media_type: &MediaType, access: PublicAccess) -> u8 {
     match (media_type, access) {
         (MediaType::Video, PublicAccess::Open) => 25,
-        // R9-M01: paywalled and institution-login videos are NOT publicly
-        // accessible — awarding 18 media points (the generic non-open video
-        // score) inflates their ranking. RegistrationRequired and Unknown
-        // keep 18: registration is still arguably accessible, and Unknown
-        // means we lack evidence either way.
-        (MediaType::Video, PublicAccess::Paywalled | PublicAccess::InstitutionLogin) => 0,
-        (MediaType::Video, _) => 18,
+        // R9-M01: only Open and RegistrationRequired videos score positively.
+        // Paywalled, InstitutionLogin, InPersonOnly, and Unknown are not
+        // confirmed publicly accessible → 0 (per the docstring contract:
+        // "open video=25, reg-required video=18, ... else 0").
+        (MediaType::Video, PublicAccess::RegistrationRequired) => 18,
+        (
+            MediaType::Video,
+            PublicAccess::Paywalled
+            | PublicAccess::InstitutionLogin
+            | PublicAccess::InPersonOnly
+            | PublicAccess::Unknown,
+        ) => 0,
         (MediaType::Audio, PublicAccess::Open) => 15,
         (MediaType::Audio, _) => 0,
         (MediaType::Slides, _) => 10,
@@ -257,7 +288,7 @@ fn is_important_scholar(scholar_tags: &[String]) -> bool {
     const MARKERS: [&str; 4] = ["fields", "abel", "wolf", "crafoord"];
     scholar_tags
         .iter()
-        .any(|tag| MARKERS.iter().any(|m| tag.to_lowercase() == *m))
+        .any(|tag| MARKERS.iter().any(|m| tag.eq_ignore_ascii_case(m)))
 }
 
 /// People signal: important Speaker/Lecturer → 10, important Organizer/Panelist
@@ -280,7 +311,7 @@ mod tests {
     use crate::date::{DatePrecision, EventDate};
     use crate::model::{
         AccessInfo, Event, EventId, EventStatus, EventType, MediaId, MediaResource, MediaType,
-        OnlineAvailability, PublicAccess, SourceEvidence,
+        OnlineAvailability, PublicAccess, SourceEvidence, Talk, TalkId,
     };
     use crate::people::{PersonHit, PersonRole};
     use crate::topics::TopicMatch;
@@ -354,6 +385,19 @@ mod tests {
         }
     }
 
+    fn talk_with(speaker: Vec<PersonHit>, media: Vec<MediaResource>) -> Talk {
+        Talk {
+            id: TalkId("talk-1".into()),
+            title: "Talk".into(),
+            speaker,
+            date_time: None,
+            abstract_text: None,
+            topics: Vec::new(),
+            media,
+            source: empty_source_evidence(),
+        }
+    }
+
     // RANK-001: topic score without interests → each topic contributes 15,
     // sum 30, capped at MAX_TOPIC (30).
     #[test]
@@ -404,6 +448,28 @@ mod tests {
             published_at: None,
             source: empty_source_evidence(),
         }];
+        let tiers: HashMap<String, SourceTier> = HashMap::new();
+        let (_, components, reasons) = score_event(&event, &tiers, None);
+        assert_eq!(components.media, 25);
+        assert!(reasons.contains(&"public_recording_available".to_string()));
+    }
+
+    #[test]
+    fn rank_002_talk_only_open_video_counts() {
+        let mut event = empty_event();
+        event.talks = vec![talk_with(
+            Vec::new(),
+            vec![MediaResource {
+                id: MediaId("talk-video".into()),
+                media_type: MediaType::Video,
+                title: None,
+                url: Url::parse("https://example.com/talk-video").unwrap(),
+                platform: None,
+                public_access: PublicAccess::Open,
+                published_at: None,
+                source: empty_source_evidence(),
+            }],
+        )];
         let tiers: HashMap<String, SourceTier> = HashMap::new();
         let (_, components, reasons) = score_event(&event, &tiers, None);
         assert_eq!(components.media, 25);
@@ -484,6 +550,92 @@ mod tests {
         );
     }
 
+    // R9-M01 (completed): RegistrationRequired video scores 18 (registration
+    // is still arguably accessible), but must NOT emit public_recording_available
+    // (it is not a genuinely public recording).
+    #[test]
+    fn rank_002_registration_required_video_scores_18_no_public_reason() {
+        let mut event = empty_event();
+        event.media = vec![MediaResource {
+            id: MediaId("m1".into()),
+            media_type: MediaType::Video,
+            title: None,
+            url: Url::parse("https://example.com/v").unwrap(),
+            platform: None,
+            public_access: PublicAccess::RegistrationRequired,
+            published_at: None,
+            source: empty_source_evidence(),
+        }];
+        let tiers: HashMap<String, SourceTier> = HashMap::new();
+        let (_, components, reasons) = score_event(&event, &tiers, None);
+        assert_eq!(components.media, 18);
+        assert!(
+            !reasons.contains(&"public_recording_available".to_string()),
+            "registration-required video is not public; got reasons {reasons:?}"
+        );
+    }
+
+    #[test]
+    fn rank_002_in_person_only_video_scores_zero() {
+        let mut event = empty_event();
+        event.media = vec![MediaResource {
+            id: MediaId("m1".into()),
+            media_type: MediaType::Video,
+            title: None,
+            url: Url::parse("https://example.com/v").unwrap(),
+            platform: None,
+            public_access: PublicAccess::InPersonOnly,
+            published_at: None,
+            source: empty_source_evidence(),
+        }];
+        let tiers: HashMap<String, SourceTier> = HashMap::new();
+        let (_, components, reasons) = score_event(&event, &tiers, None);
+        assert_eq!(components.media, 0, "in-person-only video must score 0");
+        assert!(!reasons.contains(&"public_recording_available".to_string()));
+    }
+
+    #[test]
+    fn rank_002_unknown_access_video_scores_zero() {
+        let mut event = empty_event();
+        event.media = vec![MediaResource {
+            id: MediaId("m1".into()),
+            media_type: MediaType::Video,
+            title: None,
+            url: Url::parse("https://example.com/v").unwrap(),
+            platform: None,
+            public_access: PublicAccess::Unknown,
+            published_at: None,
+            source: empty_source_evidence(),
+        }];
+        let tiers: HashMap<String, SourceTier> = HashMap::new();
+        let (_, components, reasons) = score_event(&event, &tiers, None);
+        assert_eq!(components.media, 0, "unknown-access video must score 0");
+        assert!(!reasons.contains(&"public_recording_available".to_string()));
+    }
+
+    // R9-M01 (completed): paywalled/institution-login must NOT emit the
+    // public_recording_available reason (they score 0 and are not public).
+    #[test]
+    fn rank_002_paywalled_video_no_public_reason() {
+        let mut event = empty_event();
+        event.media = vec![MediaResource {
+            id: MediaId("m1".into()),
+            media_type: MediaType::Video,
+            title: None,
+            url: Url::parse("https://example.com/v").unwrap(),
+            platform: None,
+            public_access: PublicAccess::Paywalled,
+            published_at: None,
+            source: empty_source_evidence(),
+        }];
+        let tiers: HashMap<String, SourceTier> = HashMap::new();
+        let (_, _, reasons) = score_event(&event, &tiers, None);
+        assert!(
+            !reasons.contains(&"public_recording_available".to_string()),
+            "paywalled video must not emit public_recording_available; got {reasons:?}"
+        );
+    }
+
     // RANK-003: title-only mention of an important scholar → no people boost.
     #[test]
     fn rank_003_title_mention_no_boost() {
@@ -503,6 +655,19 @@ mod tests {
     fn rank_003_speaker_important() {
         let mut event = empty_event();
         event.people = vec![deligne_hit(PersonRole::Speaker)];
+        let tiers: HashMap<String, SourceTier> = HashMap::new();
+        let (_, components, reasons) = score_event(&event, &tiers, None);
+        assert_eq!(components.people, 10);
+        assert!(reasons.contains(&"important_speaker: Pierre Deligne".to_string()));
+    }
+
+    #[test]
+    fn rank_003_talk_only_important_speaker_counts_once() {
+        let mut event = empty_event();
+        event.talks = vec![talk_with(
+            vec![deligne_hit(PersonRole::Speaker)],
+            Vec::new(),
+        )];
         let tiers: HashMap<String, SourceTier> = HashMap::new();
         let (_, components, reasons) = score_event(&event, &tiers, None);
         assert_eq!(components.people, 10);

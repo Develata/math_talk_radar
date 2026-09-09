@@ -235,6 +235,105 @@ async fn upd_003_valid_update_replaces_binary() {
     );
 }
 
+// R9-M07: a successful update must RETAIN the rollback copy (Disposition A).
+// The previous binary stays at `.<stem>.rollback` alongside the current
+// binary, overwritten by the next successful update. This guarantees a
+// manual-recovery path to the last-known-good version if the new binary
+// fails at runtime (a defect the self-test cannot catch).
+#[tokio::test]
+async fn r9_m07_rollback_retained_after_successful_update() {
+    let server = MockServer::start().await;
+    let original = b"#!/bin/sh\necho old\nexit 0\n";
+    mount_release(&server, "v99.0.0", VALID_SCRIPT, None).await;
+
+    let sandbox = Sandbox::new();
+    let binary = sandbox.setup_full(original);
+
+    let mut cmd = bin();
+    sandbox.set_env(&mut cmd);
+    cmd.env("MATH_TALK_RADAR_RELEASE_API", server.uri())
+        .args(["update"])
+        .assert()
+        .success();
+
+    // The rollback file must exist alongside the binary.
+    let rollback = binary
+        .parent()
+        .expect("binary has parent")
+        .join(".math_talk_radar.rollback");
+    assert!(
+        rollback.exists(),
+        "rollback copy must be retained after successful update: {}",
+        rollback.display()
+    );
+    let rollback_content = std::fs::read(&rollback).expect("read rollback");
+    assert_eq!(
+        rollback_content, original,
+        "rollback must contain the PREVIOUS binary content"
+    );
+    // The current binary must have the NEW content.
+    let content_after = std::fs::read(&binary).expect("read binary after");
+    assert_eq!(
+        content_after, VALID_SCRIPT,
+        "binary must be the new version"
+    );
+}
+
+// R9-B05: update must refuse to overwrite a symlink pre-planted at the
+// rollback path. `std::fs::copy` would follow the symlink and clobber its
+// target; the new code path rejects the symlink and fails the update with
+// exit 10, leaving the current binary intact.
+#[cfg(unix)]
+#[tokio::test]
+async fn r9_b05_update_refuses_symlink_at_rollback_path() {
+    use std::os::unix::fs::symlink;
+    let server = MockServer::start().await;
+    let original = b"#!/bin/sh\necho old\nexit 0\n";
+    mount_release(&server, "v99.0.0", VALID_SCRIPT, None).await;
+
+    let sandbox = Sandbox::new();
+    let binary = sandbox.setup_full(original);
+
+    // Pre-plant a symlink at the rollback path pointing to a sentinel file
+    // outside the binary's directory. A vulnerable `std::fs::copy` would
+    // overwrite the sentinel's body with the old binary content.
+    let sentinel_dir = tempfile::tempdir().expect("sentinel dir");
+    let sentinel = sentinel_dir.path().join("sentinel.txt");
+    std::fs::write(&sentinel, b"SENTINEL-ORIGINAL").expect("write sentinel");
+    let rollback = binary
+        .parent()
+        .expect("binary has parent")
+        .join(".math_talk_radar.rollback");
+    symlink(&sentinel, &rollback).expect("plant symlink");
+
+    let mut cmd = bin();
+    sandbox.set_env(&mut cmd);
+    cmd.env("MATH_TALK_RADAR_RELEASE_API", server.uri())
+        .args(["update"])
+        .assert()
+        .failure()
+        .code(10);
+
+    // The current binary must be untouched (update failed before rename).
+    let content_after = std::fs::read(&binary).expect("read binary");
+    assert_eq!(
+        content_after, original,
+        "binary must NOT be replaced when rollback path is a symlink"
+    );
+    // The sentinel must be untouched (symlink was not followed).
+    let sentinel_after = std::fs::read(&sentinel).expect("read sentinel");
+    assert_eq!(
+        sentinel_after, b"SENTINEL-ORIGINAL",
+        "symlink target must NOT be followed/overwritten"
+    );
+    // The planted symlink itself must remain (we didn't remove it).
+    let meta = std::fs::symlink_metadata(&rollback).expect("rollback meta");
+    assert!(
+        meta.is_symlink(),
+        "the planted symlink must still be there (we refused to touch it)"
+    );
+}
+
 // UPD-004: broken candidate triggers rollback (original preserved).
 #[tokio::test]
 async fn upd_004_broken_candidate_preserves_binary() {
@@ -289,6 +388,125 @@ async fn r9_h11_oversized_checksum_rejected() {
     );
 }
 
+// R9-H11: a redirect from a whitelisted download host to an off-whitelist
+// host must be rejected rather than followed. /download/binary returns 302
+// to https://evil.example.com/binary; send_validated re-validates the
+// Location host against DOWNLOAD_HOSTS and rejects it before any request to
+// evil.example.com. Update fails with exit 10 and the working binary is
+// unchanged.
+#[tokio::test]
+async fn r9_h11_redirect_to_off_whitelist_host_rejected() {
+    let server = MockServer::start().await;
+    let binary_url = format!("{}/download/binary", server.uri());
+    let checksum_url = format!("{}/download/checksum", server.uri());
+
+    let release_json = serde_json::json!({
+        "tag_name": "v99.0.0",
+        "assets": [
+            {"name": BINARY_ASSET_NAME, "browser_download_url": binary_url},
+            {"name": CHECKSUM_ASSET_NAME, "browser_download_url": checksum_url},
+        ]
+    });
+    Mock::given(method("GET"))
+        .and(path("/releases/latest"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(release_json))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/download/checksum"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(sha256_hex(VALID_SCRIPT)))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/download/binary"))
+        .respond_with(
+            ResponseTemplate::new(302).insert_header("Location", "https://evil.example.com/binary"),
+        )
+        .mount(&server)
+        .await;
+
+    let sandbox = Sandbox::new();
+    let binary = sandbox.setup_full(VALID_SCRIPT);
+    let content_before = std::fs::read(&binary).expect("read binary before");
+
+    let mut cmd = bin();
+    sandbox.set_env(&mut cmd);
+    cmd.env("MATH_TALK_RADAR_RELEASE_API", server.uri())
+        .args(["update"])
+        .assert()
+        .failure()
+        .code(10);
+
+    let content_after = std::fs::read(&binary).expect("read binary after");
+    assert_eq!(
+        content_before, content_after,
+        "binary must be unchanged when redirect targets an off-whitelist host"
+    );
+}
+
+// R9-H11: a relative redirect within the same (whitelisted) host must be
+// followed. /download/binary returns 302 to /download/binary-actual, which
+// serves the real binary. The updater resolves the relative Location, re-
+// validates the host, follows, and completes the update normally.
+#[tokio::test]
+async fn r9_h11_relative_redirect_within_whitelist_followed() {
+    let server = MockServer::start().await;
+    let binary_url = format!("{}/download/binary", server.uri());
+    let checksum_url = format!("{}/download/checksum", server.uri());
+
+    let release_json = serde_json::json!({
+        "tag_name": "v99.0.0",
+        "assets": [
+            {"name": BINARY_ASSET_NAME, "browser_download_url": binary_url},
+            {"name": CHECKSUM_ASSET_NAME, "browser_download_url": checksum_url},
+        ]
+    });
+    Mock::given(method("GET"))
+        .and(path("/releases/latest"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(release_json))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/download/checksum"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(sha256_hex(VALID_SCRIPT)))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/download/binary"))
+        .respond_with(
+            ResponseTemplate::new(302).insert_header("Location", "/download/binary-actual"),
+        )
+        .mount(&server)
+        .await;
+
+    let binary_str = std::str::from_utf8(VALID_SCRIPT).expect("script is UTF-8");
+    Mock::given(method("GET"))
+        .and(path("/download/binary-actual"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(binary_str))
+        .mount(&server)
+        .await;
+
+    let sandbox = Sandbox::new();
+    let binary = sandbox.setup_full(b"#!/bin/sh\necho old\nexit 0\n");
+
+    let mut cmd = bin();
+    sandbox.set_env(&mut cmd);
+    cmd.env("MATH_TALK_RADAR_RELEASE_API", server.uri())
+        .args(["update"])
+        .assert()
+        .success();
+
+    let content_after = std::fs::read(&binary).expect("read binary after");
+    assert_eq!(
+        content_after, VALID_SCRIPT,
+        "binary must be replaced after following a whitelisted redirect"
+    );
+}
+
 // UNS-001: dry-run mutates nothing.
 #[test]
 fn uns_001_dry_run_zero_mutation() {
@@ -313,6 +531,30 @@ fn uns_001_dry_run_zero_mutation() {
     assert!(
         sandbox.data_dir().exists(),
         "data dir must exist after dry-run"
+    );
+}
+
+// R3-P0-04: UNS-001 strengthened — dry-run must not create the data
+// directory or lock file. The original test used setup_full which pre-
+// creates all dirs, so the mutation (create_dir_all inside
+// acquire_update_lock) was invisible. This test starts WITHOUT data_dir
+// and verifies it is NOT created.
+#[test]
+fn uns_001_dry_run_zero_mutation_no_data_dir() {
+    let sandbox = Sandbox::new();
+    std::fs::create_dir_all(sandbox.config_dir()).expect("create config dir");
+    std::fs::create_dir_all(sandbox.cache_dir()).expect("create cache dir");
+    // Do NOT create data_dir — simulates a system where data_dir was cleaned.
+
+    let mut cmd = bin();
+    sandbox.set_env(&mut cmd);
+    cmd.args(["uninstall", "--dry-run", "--keep-data", "--force-unmanaged"])
+        .assert()
+        .success();
+
+    assert!(
+        !sandbox.data_dir().exists(),
+        "R3-P0-04: dry-run must not create data_dir (UNS-001 zero-mutation)"
     );
 }
 
@@ -450,4 +692,116 @@ fn r9_h12_uninstall_refuses_while_update_lock_held() {
         sandbox.config_dir().exists(),
         "config dir must NOT be deleted while lock is held"
     );
+}
+
+// R9-B07 / R9-H12: uninstall must NOT follow a symlink sibling planted
+// alongside the binary. The prefix-based sibling-deletion loop scans the
+// binary's parent for `.math_talk_radar.update.*` and `.math_talk_radar.rollback*`
+// names; a symlink with that name pointing outside the directory must be
+// skipped (not canonicalized-and-deleted). The sentinel the symlink targets
+// must remain untouched.
+#[cfg(unix)]
+#[test]
+fn r9_b07_uninstall_skips_symlink_sibling() {
+    use std::os::unix::fs::symlink;
+    let sandbox = Sandbox::new();
+    let binary = sandbox.setup_full(VALID_SCRIPT);
+
+    // Plant a symlink sibling named like a retained rollback (M07 retention
+    // leaves `.math_talk_radar.rollback` after a prior update). Point it at
+    // a sentinel file outside the binary's parent dir.
+    let sentinel_dir = tempfile::tempdir().expect("sentinel dir");
+    let sentinel = sentinel_dir.path().join("sentinel.txt");
+    std::fs::write(&sentinel, b"SENTINEL-UNINSTALL").expect("write sentinel");
+    let rollback_link = binary
+        .parent()
+        .expect("binary has parent")
+        .join(".math_talk_radar.rollback");
+    symlink(&sentinel, &rollback_link).expect("plant symlink sibling");
+
+    let mut cmd = bin();
+    sandbox.set_env(&mut cmd);
+    cmd.args(["uninstall", "--purge", "--yes"])
+        .assert()
+        .success();
+
+    // The symlink sibling must NOT be deleted (it was skipped, not followed).
+    let meta = std::fs::symlink_metadata(&rollback_link);
+    assert!(
+        meta.is_ok(),
+        "symlink sibling must NOT be deleted by uninstall: {:?}",
+        meta.err()
+    );
+    assert!(
+        meta.unwrap().is_symlink(),
+        "sibling must still be a symlink (not its target)"
+    );
+    // The sentinel must be untouched.
+    let sentinel_after = std::fs::read(&sentinel).expect("read sentinel");
+    assert_eq!(
+        sentinel_after, b"SENTINEL-UNINSTALL",
+        "symlink target must NOT be followed/deleted by uninstall"
+    );
+    // The binary itself must be deleted (uninstall proceeded past the symlink).
+    assert!(!binary.exists(), "binary must still be deleted");
+}
+
+// R3-P1-04: §35.2 — noninteractive (non-TTY) uninstall without an explicit
+// `--yes` + mode must refuse with exit 11. assert_cmd runs the binary with
+// stdin as a pipe (not a TTY), so `IsTerminal::is_terminal()` returns false.
+// No path may be deleted.
+#[test]
+fn r3_p1_04_non_tty_without_yes_refused() {
+    let sandbox = Sandbox::new();
+    let binary = sandbox.setup_full(VALID_SCRIPT);
+
+    let mut cmd = bin();
+    sandbox.set_env(&mut cmd);
+    cmd.args(["uninstall", "--keep-data"])
+        .assert()
+        .failure()
+        .code(11);
+
+    assert!(binary.exists(), "binary must NOT be deleted on refusal");
+    assert!(
+        sandbox.config_dir().exists(),
+        "config dir must NOT be deleted on refusal"
+    );
+    assert!(
+        sandbox.data_dir().exists(),
+        "data dir must NOT be deleted on refusal"
+    );
+}
+
+// R3-P1-04: `--dry-run` without an explicit mode must refuse (the dry-run
+// plan needs a mode to display). Exit 11, no mutation.
+#[test]
+fn r3_p1_04_dry_run_without_mode_refused() {
+    let sandbox = Sandbox::new();
+    let binary = sandbox.setup_full(VALID_SCRIPT);
+
+    let mut cmd = bin();
+    sandbox.set_env(&mut cmd);
+    cmd.args(["uninstall", "--dry-run"])
+        .assert()
+        .failure()
+        .code(11);
+
+    assert!(
+        binary.exists(),
+        "binary must NOT be deleted on dry-run refusal"
+    );
+}
+
+// R3-P1-04: `--yes` without `--keep-data`/`--purge` must refuse. Exit 11.
+#[test]
+fn r3_p1_04_yes_without_mode_refused() {
+    let sandbox = Sandbox::new();
+    let binary = sandbox.setup_full(VALID_SCRIPT);
+
+    let mut cmd = bin();
+    sandbox.set_env(&mut cmd);
+    cmd.args(["uninstall", "--yes"]).assert().failure().code(11);
+
+    assert!(binary.exists(), "binary must NOT be deleted on refusal");
 }

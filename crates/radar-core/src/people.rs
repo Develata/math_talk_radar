@@ -3,6 +3,7 @@
 //! Role protection (§P-2, §6.2): a name in body text can yield at most
 //! `TitleMention` / `Unknown`. Structured person fields or strong
 //! name-in-context evidence are required for `Speaker` / `Organizer` / etc.
+use crate::model::Event;
 use crate::normalize::{contains_phrase, normalize_name, word_boundaries};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -43,6 +44,61 @@ pub struct ScholarRecord {
     pub aliases: Vec<String>,
     #[serde(default)]
     pub tags: Vec<String>,
+}
+
+/// Pre-normalized scholar representation: canonical name and every candidate
+/// (canonical + aliases) already run through [`normalize_name`]. Built once
+/// per scan via [`normalize_scholars`] and reused across every event by
+/// [`match_scholars_normalized`] and [`enrich_event_scholars`], so the
+/// per-event hot path skips the normalization it would otherwise repeat for
+/// each candidate.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NormalizedScholar {
+    pub id: String,
+    pub canonical_name: String,
+    pub tags: Vec<String>,
+    /// (original surface form, normalized form). Canonical name is first so
+    /// ties prefer it; final selection uses max length for `matched_text`.
+    candidates: Vec<(String, String)>,
+}
+
+impl NormalizedScholar {
+    /// The normalized form of the canonical name, for exact-match lookup
+    /// (used by [`enrich_event_scholars`] pass 1).
+    pub fn normalized_canonical(&self) -> &str {
+        &self.candidates[0].1
+    }
+
+    /// True if any candidate (canonical name or alias) normalizes to `name`.
+    /// Used by [`enrich_event_scholars`] pass 1 to back-fill `scholar_tags`
+    /// when an adapter surfaced a speaker under an alias surface form (e.g.
+    /// "Zagier" instead of the canonical "Don Zagier") — without this the
+    /// laureate ranking boost never attaches.
+    pub fn matches_normalized(&self, name: &str) -> bool {
+        self.candidates.iter().any(|(_, n)| n == name)
+    }
+}
+
+/// Pre-normalize `scholars` once per scan so the per-event matching path no
+/// longer re-normalizes each candidate. The returned [`Vec<NormalizedScholar>`]
+/// is fed to [`match_scholars_normalized`] and [`enrich_event_scholars`].
+pub fn normalize_scholars(scholars: &[ScholarRecord]) -> Vec<NormalizedScholar> {
+    scholars
+        .iter()
+        .map(|s| {
+            let mut candidates = Vec::with_capacity(s.aliases.len() + 1);
+            candidates.push((s.canonical_name.clone(), normalize_name(&s.canonical_name)));
+            for alias in &s.aliases {
+                candidates.push((alias.clone(), normalize_name(alias)));
+            }
+            NormalizedScholar {
+                id: s.id.clone(),
+                canonical_name: s.canonical_name.clone(),
+                tags: s.tags.clone(),
+                candidates,
+            }
+        })
+        .collect()
 }
 
 /// Wrapper for the `scholars.toml` document shape: a top-level
@@ -88,18 +144,17 @@ pub enum MatchContext {
 /// requires ≥2 tokens of the canonical name to also appear in the text.
 const AMBIGUOUS_SURNAMES: &[&str] = &["li", "wang", "tao", "yau", "gross", "wei", "wu"];
 
-/// Match `scholars` against `text` under the given [`MatchContext`] (§6.2).
+/// Match pre-normalized `scholars` against `text` under the given
+/// [`MatchContext`] (§6.2). This is the hot path used per event during a
+/// scan; callers build `scholars` once via [`normalize_scholars`].
 ///
-/// Pipeline: normalize text → for each scholar, normalize canonical name and
-/// aliases → match single-token candidates with word-boundary semantics and
-/// multi-word candidates as substrings → assign role per context, applying the
-/// ambiguous-surname guard in [`MatchContext::BodyText`]. Returns one
-/// [`PersonHit`] per matching scholar; when multiple candidates match, the
-/// longest surface form is kept as `matched_text` (most distinctive form, e.g.
-/// "Don B. Zagier" beats "Zagier").
-pub fn match_scholars(
+/// Each scholar contributes at most one hit; when multiple candidates match,
+/// the longest surface form is kept as `matched_text` (most distinctive form).
+/// See [`match_scholars`] for the full semantics; this variant only skips
+/// per-call normalization of the scholar candidates.
+pub fn match_scholars_normalized(
     text: &str,
-    scholars: &[ScholarRecord],
+    scholars: &[NormalizedScholar],
     context: MatchContext,
 ) -> Vec<PersonHit> {
     let norm_text = normalize_name(text);
@@ -112,19 +167,12 @@ pub fn match_scholars(
 
     let mut hits = Vec::new();
     for scholar in scholars {
-        let norm_canonical = normalize_name(&scholar.canonical_name);
-
-        // Candidates: (original surface form, normalized form). Canonical name
-        // is first so ties prefer it; final selection below uses max length.
-        let mut candidates: Vec<(&str, String)> =
-            vec![(&scholar.canonical_name, norm_canonical.clone())];
-        for alias in &scholar.aliases {
-            candidates.push((alias, normalize_name(alias)));
-        }
+        // Candidates are pre-normalized: (surface form, normalized form).
+        let norm_canonical = &scholar.candidates[0].1;
 
         // Collect every candidate whose normalized form matches the text.
         let mut matched: Vec<&str> = Vec::new();
-        for (original, normalized) in &candidates {
+        for (original, normalized) in &scholar.candidates {
             if normalized.is_empty() {
                 continue;
             }
@@ -187,6 +235,71 @@ pub fn match_scholars(
         });
     }
     hits
+}
+
+/// Match `scholars` against `text` under the given [`MatchContext`] (§6.2).
+/// Convenience wrapper that pre-normalizes `scholars` on each call; for scan
+/// hot paths prefer building a [`NormalizedScholar`] list once via
+/// [`normalize_scholars`] and calling [`match_scholars_normalized`] per event.
+pub fn match_scholars(
+    text: &str,
+    scholars: &[ScholarRecord],
+    context: MatchContext,
+) -> Vec<PersonHit> {
+    let normalized = normalize_scholars(scholars);
+    match_scholars_normalized(text, &normalized, context)
+}
+
+fn enrich_person_from_registry(person: &mut PersonHit, scholars: &[NormalizedScholar]) {
+    if !person.scholar_tags.is_empty() {
+        return;
+    }
+    let norm_name = normalize_name(&person.canonical_name);
+    if let Some(scholar) = scholars
+        .iter()
+        .find(|scholar| scholar.matches_normalized(&norm_name))
+    {
+        person.scholar_tags = scholar.tags.clone();
+        person.canonical_name = scholar.canonical_name.clone();
+    }
+}
+
+/// CORE-12: enrich event-level people and structured talk speakers with
+/// scholar tags from the curated registry, then add title-mentioned scholars
+/// that adapters did not surface.
+///
+/// Structured `Talk.speaker` entries are first-class person evidence and must
+/// be enriched just like `event.people`; otherwise an important scholar that
+/// exists only at talk level can never receive the people ranking signal.
+/// Title-only mentions retain the protected `TitleMention` role and do not
+/// become speakers.
+pub fn enrich_event_scholars(event: &mut Event, scholars: &[NormalizedScholar]) {
+    if scholars.is_empty() {
+        return;
+    }
+
+    // Pass 1: back-fill scholar_tags on every structured person surface.
+    for person in &mut event.people {
+        enrich_person_from_registry(person, scholars);
+    }
+    for talk in &mut event.talks {
+        for speaker in &mut talk.speaker {
+            enrich_person_from_registry(speaker, scholars);
+        }
+    }
+
+    // Pass 2: add event-title-mentioned scholars not already present.
+    let title_hits = match_scholars_normalized(&event.title, scholars, MatchContext::TitleText);
+    for hit in title_hits {
+        let norm_canonical = normalize_name(&hit.canonical_name);
+        let already_present = event
+            .people
+            .iter()
+            .any(|person| normalize_name(&person.canonical_name) == norm_canonical);
+        if !already_present {
+            event.people.push(hit);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -336,5 +449,138 @@ mod tests {
         assert_eq!(hits[0].canonical_name, "Terence Tao");
         assert_eq!(hits[0].role, PersonRole::TitleMention);
         assert!((hits[0].confidence - 0.5).abs() < f32::EPSILON);
+    }
+
+    // BUG-3: enrich_event_scholars pass 1 previously matched only the
+    // canonical name, so a Speaker surfaced under an alias (e.g. "Zagier")
+    // never received scholar_tags and the canonical_name was not corrected.
+    // A laureate (wolf tag) recognized by alias would then lose the ranking
+    // boost entirely.
+    #[test]
+    fn per_004_enrich_attaches_tags_for_alias_speaker() {
+        let z = zagier();
+        let normalized = normalize_scholars(std::slice::from_ref(&z));
+
+        let mut event = Event {
+            people: vec![PersonHit {
+                canonical_name: "Zagier".into(),
+                matched_text: "Zagier".into(),
+                role: PersonRole::Speaker,
+                evidence: None,
+                confidence: 1.0,
+                scholar_tags: Vec::new(),
+            }],
+            ..empty_event()
+        };
+
+        enrich_event_scholars(&mut event, &normalized);
+
+        assert_eq!(event.people.len(), 1);
+        let p = &event.people[0];
+        assert_eq!(p.canonical_name, "Don Zagier");
+        assert!(p.scholar_tags.contains(&"wolf".to_string()));
+        assert!(p.scholar_tags.contains(&"curated".to_string()));
+    }
+
+    #[test]
+    fn per_004_enrich_attaches_tags_for_canonical_speaker() {
+        let z = zagier();
+        let normalized = normalize_scholars(std::slice::from_ref(&z));
+
+        let mut event = Event {
+            people: vec![PersonHit {
+                canonical_name: "Don Zagier".into(),
+                matched_text: "Don Zagier".into(),
+                role: PersonRole::Speaker,
+                evidence: None,
+                confidence: 1.0,
+                scholar_tags: Vec::new(),
+            }],
+            ..empty_event()
+        };
+
+        enrich_event_scholars(&mut event, &normalized);
+
+        assert_eq!(event.people.len(), 1);
+        let p = &event.people[0];
+        assert_eq!(p.canonical_name, "Don Zagier");
+        assert!(p.scholar_tags.contains(&"wolf".to_string()));
+    }
+
+    #[test]
+    fn per_004_enrich_attaches_tags_for_talk_only_speaker() {
+        use crate::model::{SourceEvidence, Talk, TalkId};
+        use url::Url;
+
+        let z = zagier();
+        let normalized = normalize_scholars(std::slice::from_ref(&z));
+        let source = SourceEvidence {
+            source_id: "jsonld".into(),
+            source_url: Url::parse("https://example.com/event").unwrap(),
+            evidence: None,
+            captured_at: None,
+            native_id: None,
+        };
+        let mut event = Event {
+            talks: vec![Talk {
+                id: TalkId("talk-1".into()),
+                title: "A structured talk".into(),
+                speaker: vec![PersonHit {
+                    canonical_name: "Zagier".into(),
+                    matched_text: "Zagier".into(),
+                    role: PersonRole::Speaker,
+                    evidence: Some("jsonld:performer".into()),
+                    confidence: 1.0,
+                    scholar_tags: Vec::new(),
+                }],
+                date_time: None,
+                abstract_text: None,
+                topics: Vec::new(),
+                media: Vec::new(),
+                source,
+            }],
+            ..empty_event()
+        };
+
+        enrich_event_scholars(&mut event, &normalized);
+
+        assert!(event.people.is_empty());
+        let speaker = &event.talks[0].speaker[0];
+        assert_eq!(speaker.canonical_name, "Don Zagier");
+        assert!(speaker.scholar_tags.contains(&"wolf".to_string()));
+    }
+
+    fn empty_event() -> Event {
+        use crate::model::{AccessInfo, EventStatus, EventType, OnlineAvailability, PublicAccess};
+        Event {
+            id: crate::model::EventId(String::new()),
+            title: String::new(),
+            url: None,
+            event_type: EventType::Unknown,
+            status: EventStatus::Unknown,
+            date: crate::date::EventDate {
+                start: None,
+                end: None,
+                timezone: None,
+                original_text: String::new(),
+                precision: crate::date::DatePrecision::Unknown,
+            },
+            location: None,
+            description: None,
+            topics: Vec::new(),
+            people: Vec::new(),
+            talks: Vec::new(),
+            media: Vec::new(),
+            access: AccessInfo {
+                access: PublicAccess::Unknown,
+                online: OnlineAvailability::Unknown,
+            },
+            sources: Vec::new(),
+            score: 0.0,
+            score_components: crate::ranking::ScoreComponents::default(),
+            rank_reasons: Vec::new(),
+            first_seen_at: None,
+            last_seen_at: None,
+        }
     }
 }

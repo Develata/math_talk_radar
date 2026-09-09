@@ -1,0 +1,808 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ScanOutput",
+  "type": "object",
+  "required": [
+    "generated_at",
+    "query",
+    "schema_version"
+  ],
+  "properties": {
+    "changes": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/ChangeRecord"
+      }
+    },
+    "events": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/Event"
+      }
+    },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "query": {
+      "$ref": "#/definitions/QuerySpec"
+    },
+    "schema_version": {
+      "description": "Always \"1.0\" in v0.x (§64). Constrained in the JSON schema via `#[schemars(schema_with = ...)]` so consumers can validate compatibility.",
+      "type": "string",
+      "const": "1.0"
+    },
+    "source_health": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/SourceHealth"
+      }
+    }
+  },
+  "definitions": {
+    "AccessInfo": {
+      "type": "object",
+      "required": [
+        "access",
+        "online"
+      ],
+      "properties": {
+        "access": {
+          "$ref": "#/definitions/PublicAccess"
+        },
+        "online": {
+          "$ref": "#/definitions/OnlineAvailability"
+        }
+      }
+    },
+    "ChangeKind": {
+      "type": "string",
+      "enum": [
+        "event_added",
+        "event_updated",
+        "schedule_added",
+        "speaker_added",
+        "livestream_added",
+        "media_added",
+        "media_removed",
+        "event_cancelled"
+      ]
+    },
+    "ChangeRecord": {
+      "type": "object",
+      "required": [
+        "detected_at",
+        "event_id",
+        "kind"
+      ],
+      "properties": {
+        "detail": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "detected_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "event_id": {
+          "$ref": "#/definitions/EventId"
+        },
+        "kind": {
+          "$ref": "#/definitions/ChangeKind"
+        }
+      }
+    },
+    "DatePrecision": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "day",
+            "date_time",
+            "range",
+            "unknown"
+          ]
+        },
+        {
+          "description": "Reserved for future use (month-precision dates like \"August 2026\"). Not currently produced by the parser; kept for serde forward-compat.",
+          "type": "string",
+          "enum": [
+            "year"
+          ]
+        },
+        {
+          "description": "Reserved for future use (month-precision dates like \"August 2026\"). Not currently produced by the parser; kept for serde forward-compat.",
+          "type": "string",
+          "enum": [
+            "month"
+          ]
+        }
+      ]
+    },
+    "DateTimeOrDate": {
+      "description": "A date that may be a calendar date or an exact instant. Serialized untagged so consumers can branch on shape.",
+      "anyOf": [
+        {
+          "type": "string",
+          "format": "date-time"
+        },
+        {
+          "type": "string",
+          "format": "date"
+        }
+      ]
+    },
+    "DateTimeRange": {
+      "description": "A wall-clock range for an individual talk (§5.3 `date_time`).",
+      "type": "object",
+      "required": [
+        "start"
+      ],
+      "properties": {
+        "end": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "start": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "timezone": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "Event": {
+      "type": "object",
+      "required": [
+        "access",
+        "date",
+        "event_type",
+        "id",
+        "status",
+        "title"
+      ],
+      "properties": {
+        "access": {
+          "$ref": "#/definitions/AccessInfo"
+        },
+        "date": {
+          "$ref": "#/definitions/EventDate"
+        },
+        "description": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "event_type": {
+          "$ref": "#/definitions/EventType"
+        },
+        "first_seen_at": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "id": {
+          "$ref": "#/definitions/EventId"
+        },
+        "last_seen_at": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "location": {
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Location"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "media": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/MediaResource"
+          }
+        },
+        "people": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/PersonHit"
+          }
+        },
+        "rank_reasons": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "score": {
+          "default": 0.0,
+          "type": "number",
+          "format": "float"
+        },
+        "score_components": {
+          "default": {
+            "access": 0,
+            "completeness": 0,
+            "media": 0,
+            "people": 0,
+            "source_tier": 0,
+            "topic": 0
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/ScoreComponents"
+            }
+          ]
+        },
+        "sources": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/SourceEvidence"
+          }
+        },
+        "status": {
+          "$ref": "#/definitions/EventStatus"
+        },
+        "talks": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Talk"
+          }
+        },
+        "title": {
+          "type": "string"
+        },
+        "topics": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/TopicMatch"
+          }
+        },
+        "url": {
+          "description": "Event's canonical detail-page URL (from the discovering stub). Used by the §25 `CanonicalUrl` dedup signal. Per §64, adding an optional field is schema-compatible in v0.x.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "uri"
+        }
+      }
+    },
+    "EventDate": {
+      "type": "object",
+      "required": [
+        "original_text",
+        "precision"
+      ],
+      "properties": {
+        "end": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/DateTimeOrDate"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "original_text": {
+          "type": "string"
+        },
+        "precision": {
+          "$ref": "#/definitions/DatePrecision"
+        },
+        "start": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/DateTimeOrDate"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "timezone": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "EventId": {
+      "description": "Stable event identity. Constructed via [`deterministic_id`] over normalized `title + organizer/domain + start_date`. Never random, never time-based.",
+      "type": "string"
+    },
+    "EventStatus": {
+      "type": "string",
+      "enum": [
+        "announced",
+        "registration_open",
+        "upcoming",
+        "ongoing",
+        "completed",
+        "media_pending",
+        "media_available",
+        "archived",
+        "cancelled",
+        "unknown"
+      ]
+    },
+    "EventType": {
+      "type": "string",
+      "enum": [
+        "conference",
+        "workshop",
+        "research_program",
+        "public_lecture",
+        "distinguished_lecture",
+        "lecture_series",
+        "summer_school",
+        "mini_course",
+        "colloquium",
+        "panel",
+        "award_lecture",
+        "memorial_conference",
+        "seminar",
+        "unknown"
+      ]
+    },
+    "Location": {
+      "type": "object",
+      "required": [
+        "name"
+      ],
+      "properties": {
+        "city": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "country": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "venue": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "MediaId": {
+      "type": "string"
+    },
+    "MediaResource": {
+      "type": "object",
+      "required": [
+        "id",
+        "media_type",
+        "public_access",
+        "source",
+        "url"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/MediaId"
+        },
+        "media_type": {
+          "$ref": "#/definitions/MediaType"
+        },
+        "platform": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "public_access": {
+          "$ref": "#/definitions/PublicAccess"
+        },
+        "published_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "source": {
+          "$ref": "#/definitions/SourceEvidence"
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "url": {
+          "type": "string",
+          "format": "uri"
+        }
+      }
+    },
+    "MediaType": {
+      "type": "string",
+      "enum": [
+        "video",
+        "audio",
+        "slides",
+        "lecture_notes",
+        "transcript",
+        "program_pdf",
+        "abstract_pdf",
+        "livestream",
+        "playlist",
+        "other"
+      ]
+    },
+    "OnlineAvailability": {
+      "type": "string",
+      "enum": [
+        "livestream",
+        "hybrid",
+        "recording_available",
+        "recording_expected",
+        "no_online_access",
+        "unknown"
+      ]
+    },
+    "PersonHit": {
+      "type": "object",
+      "required": [
+        "canonical_name",
+        "confidence",
+        "matched_text",
+        "role"
+      ],
+      "properties": {
+        "canonical_name": {
+          "type": "string"
+        },
+        "confidence": {
+          "type": "number",
+          "format": "float"
+        },
+        "evidence": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "matched_text": {
+          "type": "string"
+        },
+        "role": {
+          "$ref": "#/definitions/PersonRole"
+        },
+        "scholar_tags": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "PersonRole": {
+      "type": "string",
+      "enum": [
+        "speaker",
+        "lecturer",
+        "organizer",
+        "participant",
+        "panelist",
+        "honoree",
+        "series_namesake",
+        "title_mention",
+        "unknown"
+      ]
+    },
+    "PublicAccess": {
+      "type": "string",
+      "enum": [
+        "open",
+        "registration_required",
+        "institution_login",
+        "paywalled",
+        "in_person_only",
+        "unknown"
+      ]
+    },
+    "QuerySpec": {
+      "type": "object",
+      "required": [
+        "after_days",
+        "before_days",
+        "mode"
+      ],
+      "properties": {
+        "after_days": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "before_days": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "mode": {
+          "description": "H4-1: constrained to \"upcoming\", \"recordings\", or \"both\".",
+          "type": "string",
+          "enum": [
+            "upcoming",
+            "recordings",
+            "both"
+          ]
+        },
+        "timezone": {
+          "description": "H5-2: the IANA timezone used for date interpretation (§27.2). Empty string means UTC was used. Adding an optional field is schema-compatible in v0.x (§64).",
+          "default": "",
+          "type": "string"
+        }
+      }
+    },
+    "ScoreComponents": {
+      "type": "object",
+      "required": [
+        "access",
+        "completeness",
+        "media",
+        "people",
+        "source_tier",
+        "topic"
+      ],
+      "properties": {
+        "access": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        },
+        "completeness": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        },
+        "media": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        },
+        "people": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        },
+        "source_tier": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        },
+        "topic": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        }
+      }
+    },
+    "SourceEvidence": {
+      "type": "object",
+      "required": [
+        "source_id",
+        "source_url"
+      ],
+      "properties": {
+        "captured_at": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "evidence": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "native_id": {
+          "description": "Source-declared canonical event id (e.g. Indico event id, ICS UID). Used by the §25 `SourceCanonicalId` dedup signal. Optional: most sources do not declare one. Per §64, adding an optional field is schema-compatible in v0.x (no `schema_version` bump).",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source_id": {
+          "type": "string"
+        },
+        "source_url": {
+          "type": "string",
+          "format": "uri"
+        }
+      }
+    },
+    "SourceHealth": {
+      "type": "object",
+      "required": [
+        "duration_ms",
+        "events",
+        "requests",
+        "source",
+        "status"
+      ],
+      "properties": {
+        "duration_ms": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "events": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "recorded_at": {
+          "description": "When this observation was taken (scan timestamp). Always `Some` when produced by the scan path; `Option` + `skip_serializing_if` keeps it optional in the public JSON schema (§64 v0.x path, ADR-0011 §1).",
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "requests": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "source": {
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/definitions/SourceStatus"
+        }
+      }
+    },
+    "SourceStatus": {
+      "type": "string",
+      "enum": [
+        "ok",
+        "partial",
+        "timeout",
+        "http_error",
+        "parse_error",
+        "robots_denied",
+        "dynamic_unsupported",
+        "budget_exhausted",
+        "disabled"
+      ]
+    },
+    "Talk": {
+      "type": "object",
+      "required": [
+        "id",
+        "media",
+        "source",
+        "speaker",
+        "title",
+        "topics"
+      ],
+      "properties": {
+        "abstract_text": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "date_time": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/DateTimeRange"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "id": {
+          "$ref": "#/definitions/TalkId"
+        },
+        "media": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/MediaResource"
+          }
+        },
+        "source": {
+          "$ref": "#/definitions/SourceEvidence"
+        },
+        "speaker": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/PersonHit"
+          }
+        },
+        "title": {
+          "type": "string"
+        },
+        "topics": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/TopicMatch"
+          }
+        }
+      }
+    },
+    "TalkId": {
+      "type": "string"
+    },
+    "TopicMatch": {
+      "type": "object",
+      "required": [
+        "canonical_name",
+        "confidence",
+        "matched_text",
+        "topic_id"
+      ],
+      "properties": {
+        "canonical_name": {
+          "type": "string"
+        },
+        "confidence": {
+          "type": "number",
+          "format": "float"
+        },
+        "matched_text": {
+          "type": "string"
+        },
+        "topic_id": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

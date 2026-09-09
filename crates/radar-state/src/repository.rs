@@ -13,21 +13,25 @@ use radar_core::{Event, EventId, SourceHealth};
 use redb::ReadableTable;
 use serde::{Deserialize, Serialize};
 
+use crate::changes::ChangeRecord;
 use crate::migrations::run_migrations;
-use crate::schema::{EVENTS, SCHEMA_VERSION, SOURCE_HEALTH, STATE_SCHEMA_VERSION};
+use crate::schema::{
+    CHANGE_LOG, EVENTS, SCHEMA_VERSION, SOURCE_HEALTH, STATE_SCHEMA_VERSION, timestamp_key,
+};
 
 mod scan;
 
-/// Tombstone retention window (ST-16). A cancelled event's `first_seen_at` is
-/// preserved for this long so a reappearance restores the original first-seen
-/// timestamp instead of resetting it. 90 days covers the typical academic-year
-/// cycle (a talk announced for a term, removed when the term ends, re-listed
-/// the following year).
-const TOMBSTONE_RETENTION_DAYS: i64 = 90;
+/// Retention window (days) for cancelled-event tombstones (ST-16),
+/// source-health history (ADR-0011 §7), and the change log (ADR-0011 §3).
+/// A single constant governs all three so they age out together and the
+/// embedded DB stays bounded. 90 days covers the typical academic-year
+/// cycle.
+const RETENTION_DAYS: i64 = 90;
 
-/// Tombstone for a cancelled event (ST-16). Stores the `first_seen_at` of the
-/// event at the moment it was pruned, plus the `cancelled_at` timestamp used
-/// to age out the tombstone after [`TOMBSTONE_RETENTION_DAYS`].
+/// Tombstone for a cancelled event (ST-16, ADR-0011 INV-1..INV-5). Stores the
+/// `first_seen_at` of the event at the moment it was pruned, plus the
+/// `cancelled_at` timestamp used to age out the tombstone after
+/// [`RETENTION_DAYS`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CancelledEventTombstone {
     pub first_seen_at: DateTime<Utc>,
@@ -40,6 +44,8 @@ pub enum StateError {
     Io(#[from] std::io::Error),
     #[error("state schema mismatch: expected {expected}, found {found}")]
     Schema { expected: u32, found: u32 },
+    #[error("state migration error: {0}")]
+    Migration(String),
     #[error("state backend error: {0}")]
     Backend(Box<redb::Error>),
     #[error("state read-only: write attempted on a read-only repository")]
@@ -103,6 +109,12 @@ impl Repository {
             crate::migrations::MigrateError::UnsupportedVersion { found, expected } => {
                 StateError::Schema { expected, found }
             }
+            crate::migrations::MigrateError::MalformedStateRow { table, key, error } => {
+                StateError::Migration(format!("malformed {table} row at {key:?}: {error}"))
+            }
+            crate::migrations::MigrateError::KeyCollision { table, key } => {
+                StateError::Migration(format!("{table} migration key collision at {key:?}"))
+            }
             crate::migrations::MigrateError::Backend(e) => StateError::Backend(e),
         })?;
         Ok(Self {
@@ -113,17 +125,14 @@ impl Repository {
     }
 
     /// Open the database in read-only mode. Writes (store_event /
-    /// store_source_health) return [`StateError::ReadOnly`]. The database file
+    /// store_scan_bundle) return [`StateError::ReadOnly`]. The database file
     /// is never created or modified. Used by the `--no-state` path (STATE-004).
     pub fn open_read_only(path: &Path) -> Result<Self, StateError> {
         let db = redb::Database::open(path)?;
         let version = {
             let txn = db.begin_read()?;
-            txn.open_table(SCHEMA_VERSION)
-                .ok()
-                .and_then(|table| table.get("version").ok())
-                .and_then(|opt| opt.map(|g| g.value()))
-                .unwrap_or(0)
+            let table = txn.open_table(SCHEMA_VERSION)?;
+            table.get("version")?.map(|g| g.value()).unwrap_or(0)
         };
         if version != STATE_SCHEMA_VERSION {
             return Err(StateError::Schema {
@@ -198,20 +207,37 @@ impl Repository {
         Ok(out)
     }
 
-    /// Persist a source-health record, overwriting any previous entry for the
-    /// same source id.
-    pub fn store_source_health(&self, health: &SourceHealth) -> Result<(), StateError> {
-        if self.read_only {
-            return Err(StateError::ReadOnly);
+    /// List source-health history for `source`, ordered oldest-to-newest by
+    /// `recorded_at` (ADR-0011 §2). Uses a prefix range scan
+    /// `"{source}\x00".."{source}\x01"` so only this source's rows are visited
+    /// — O(log n + k) instead of a full-table scan with prefix filtering.
+    /// Legacy keys (bare source id, pre-v3) fall outside the range and are
+    /// skipped.
+    pub fn list_source_health(&self, source: &str) -> Result<Vec<SourceHealth>, StateError> {
+        let txn = self.db.begin_read()?;
+        let table = txn.open_table(SOURCE_HEALTH)?;
+        let start = format!("{source}\u{0}");
+        let end = format!("{source}\u{1}");
+        let mut out = Vec::new();
+        for entry in table.range(start.as_str()..end.as_str())? {
+            let (_, value) = entry?;
+            out.push(serde_json::from_slice(value.value())?);
         }
-        let txn = self.db.begin_write()?;
-        {
-            let mut table = txn.open_table(SOURCE_HEALTH)?;
-            let bytes = serde_json::to_vec(health)?;
-            table.insert(health.source.as_str(), bytes.as_slice())?;
+        Ok(out)
+    }
+
+    /// List change records since `since` (ADR-0011 §3, R9-H08). Ordered
+    /// oldest-to-newest by `detected_at` (composite key lexicographic sort).
+    pub fn list_changes(&self, since: DateTime<Utc>) -> Result<Vec<ChangeRecord>, StateError> {
+        let txn = self.db.begin_read()?;
+        let table = txn.open_table(CHANGE_LOG)?;
+        let start = timestamp_key(since);
+        let mut out = Vec::new();
+        for entry in table.range(start.as_str()..)? {
+            let (_, value) = entry?;
+            out.push(serde_json::from_slice(value.value())?);
         }
-        txn.commit()?;
-        Ok(())
+        Ok(out)
     }
 
     /// The persisted schema version.

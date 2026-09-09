@@ -470,3 +470,12 @@ fn smoke_rejects_wrong_digest_and_failing_program() {
     assert!(smoke::run(&binary, &evidence::file_hash(&binary).unwrap(), &output).is_err());
     assert!(!output.exists());
 }
+#[test]
+fn evidence_sha256_matches_known_vector_for_bytes_and_files() {
+    let expected = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+    assert_eq!(evidence::hash(b"abc"), expected);
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("payload");
+    std::fs::write(&path, b"abc").unwrap();
+    assert_eq!(evidence::file_hash(&path).unwrap(), expected);
+}

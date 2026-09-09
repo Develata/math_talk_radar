@@ -258,6 +258,11 @@ pub struct SourceHealth {
     pub duration_ms: u64,
     pub requests: u32,
     pub events: u32,
+    /// When this observation was taken (scan timestamp). Always `Some` when
+    /// produced by the scan path; `Option` + `skip_serializing_if` keeps it
+    /// optional in the public JSON schema (§64 v0.x path, ADR-0011 §1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recorded_at: Option<DateTime<Utc>>,
 }
 
 #[cfg(test)]

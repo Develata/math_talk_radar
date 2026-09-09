@@ -83,6 +83,74 @@ fn src_001_rss_discovers_at_least_ten() {
     );
 }
 
+/// Regression: Atom entries may list `<link rel="self">` before `<link
+/// rel="alternate">`. The adapter must prefer the alternate (content) link,
+/// not blindly take `links.first()`.
+#[test]
+fn src_001_rss_atom_prefers_alternate_over_self_link() {
+    let atom = r#"<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Test Feed</title>
+  <link href="https://example.com/feed" rel="self"/>
+  <id>https://example.com/feed</id>
+  <entry>
+    <title>Algebra Seminar</title>
+    <link href="https://example.com/feed" rel="self"/>
+    <link href="https://example.com/algebra" rel="alternate"/>
+    <id>urn:uuid:algebra-2026</id>
+    <updated>2026-09-01T00:00:00Z</updated>
+  </entry>
+</feed>"#;
+    let doc = make_doc(atom, "application/atom+xml");
+    let source = make_source("src-001-atom", AdapterKind::Rss, SourceKind::RssFeed);
+    let discovered = RssAdapter
+        .discover(&doc, &source)
+        .expect("Atom feed should parse");
+    assert_eq!(discovered.len(), 1, "one entry expected");
+    assert_eq!(
+        discovered[0].url.as_str(),
+        "https://example.com/algebra",
+        "must pick the alternate link, not the self link"
+    );
+    assert_eq!(
+        discovered[0].source.native_id.as_deref(),
+        Some("urn:uuid:algebra-2026"),
+        "GUID/entry id must propagate to native_id"
+    );
+}
+
+/// Regression: RSS 2.0 `<guid>` (entry.id in feed-rs) must propagate to
+/// `native_id` so change-detection can track items across title/URL edits,
+/// matching the ICS adapter's UID propagation.
+#[test]
+fn src_001_rss_propagates_guid_to_native_id() {
+    let rss = r#"<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+<channel>
+<title>Guid Feed</title>
+<link>https://example.com</link>
+<description>test</description>
+<item>
+  <title>Talk A</title>
+  <link>https://example.com/a</link>
+  <guid>unique-stable-id-a</guid>
+  <pubDate>Mon, 01 Sep 2026 00:00:00 +0000</pubDate>
+</item>
+</channel>
+</rss>"#;
+    let doc = make_doc(rss, "application/rss+xml");
+    let source = make_source("src-001-guid", AdapterKind::Rss, SourceKind::RssFeed);
+    let discovered = RssAdapter
+        .discover(&doc, &source)
+        .expect("RSS feed should parse");
+    assert_eq!(discovered.len(), 1);
+    assert_eq!(
+        discovered[0].source.native_id.as_deref(),
+        Some("unique-stable-id-a"),
+        "RSS <guid> must propagate to native_id"
+    );
+}
+
 // ===========================================================================
 // SRC-002: ICS adapter
 // ===========================================================================

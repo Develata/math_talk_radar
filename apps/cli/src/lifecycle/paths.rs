@@ -120,6 +120,63 @@ pub fn temp_dir_for_binary(binary: &Path) -> PathBuf {
     parent.join(name)
 }
 
+/// R9-B07: reject any path that contains a symlink in its components. The
+/// previous `safe_canonicalize` validated the canonical target but then
+/// deleted it — if the app dir was a symlink to an unprotected dir, the
+/// canonical target was deleted. This walker checks every component of the
+/// *un-resolved* path using `symlink_metadata` (which does not follow the
+/// final symlink), so a symlink anywhere in the path is detected before
+/// canonicalization. Only absolute paths are supported; relative paths are
+/// rejected (deletion should only ever target resolved absolute paths).
+///
+/// The walk stops at `/` (or the first component that does not exist,
+/// which is safe — a non-existent path cannot be a symlink). Each existing
+/// component is checked with `symlink_metadata`; if `is_symlink()` is true,
+/// the path is rejected.
+pub fn reject_symlink_in_components(path: &Path) -> Result<(), String> {
+    if !path.is_absolute() {
+        return Err(format!(
+            "refusing to operate on relative path (require absolute): {}",
+            path.display()
+        ));
+    }
+    let mut current = PathBuf::new();
+    for component in path.components() {
+        use std::path::Component;
+        match component {
+            Component::RootDir => {
+                current.push("/");
+                continue;
+            }
+            Component::Normal(part) => {
+                current.push(part);
+            }
+            Component::CurDir | Component::ParentDir => {
+                return Err(format!(
+                    "refusing to operate on path with . or .. components: {}",
+                    path.display()
+                ));
+            }
+            Component::Prefix(_) => {
+                return Err(format!(
+                    "refusing to operate on Windows-style path: {}",
+                    path.display()
+                ));
+            }
+        }
+        if let Ok(meta) = std::fs::symlink_metadata(&current)
+            && meta.is_symlink()
+        {
+            return Err(format!(
+                "refusing to operate on path with symlink component: {} -> (symlink at {})",
+                path.display(),
+                current.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Canonicalize and validate a path is safe to delete. Rejects empty, `/`,
 /// the user's home directory, and paths inside protected system/user
 /// directories (§35 "deletes only known app-owned paths"). The protected
@@ -170,21 +227,70 @@ pub fn safe_canonicalize(path: &Path) -> Result<PathBuf, String> {
 }
 
 fn xdg_dir(env_var: &str, default_sub: &str) -> PathBuf {
-    if let Some(xdg) = std::env::var_os(env_var) {
-        let p = PathBuf::from(&xdg);
-        // B08: reject empty or relative XDG values. An empty value yields a
-        // relative `math_talk_radar` path anchored at the CWD — uninstall's
-        // safe_canonicalize would resolve it to the CWD and (if the CWD is
-        // not protected) delete files there. A relative value like `./foo`
-        // has the same hazard. Fall through to the default instead.
-        if !xdg.is_empty() && p.is_absolute() {
+    resolve_xdg_dir(
+        std::env::var_os(env_var).as_deref(),
+        std::env::var_os("HOME").as_deref(),
+        default_sub,
+    )
+}
+
+/// Pure core of `xdg_dir` for testability. B08: validates both the XDG
+/// override and the HOME fallback for nonempty + absolute. A relative or
+/// empty value resolves against the CWD; `safe_canonicalize` would then
+/// resolve it to the CWD and (if the CWD is not protected) `remove_dir_all`
+/// would delete files in the working directory. An invalid HOME must fall
+/// through to the relative default rather than producing a CWD-anchored path.
+fn resolve_xdg_dir(
+    xdg_var: Option<&std::ffi::OsStr>,
+    home: Option<&std::ffi::OsStr>,
+    default_sub: &str,
+) -> PathBuf {
+    if let Some(xdg) = xdg_var
+        && !xdg.is_empty()
+    {
+        let p = PathBuf::from(xdg);
+        if p.is_absolute() {
             return p.join(APP_SLUG);
         }
     }
-    if let Some(home) = std::env::var_os("HOME") {
-        return PathBuf::from(home).join(default_sub).join(APP_SLUG);
+    if let Some(home) = home
+        && !home.is_empty()
+    {
+        let p = PathBuf::from(home);
+        if p.is_absolute() {
+            return p.join(default_sub).join(APP_SLUG);
+        }
     }
     PathBuf::from(default_sub).join(APP_SLUG)
+}
+
+/// B08: detect whether any two of the config/cache/data dirs canonicalize to
+/// the same path. Such overlap (from a misconfigured XDG setup) is dangerous
+/// for uninstall: `--keep-data` deletes config+cache but preserves data, so
+/// if config == data, data would be deleted despite --keep-data. Refuse
+/// rather than risk data loss. Dirs that do not exist (cannot canonicalize)
+/// are skipped — they would be skipped at delete time too.
+pub fn detect_dir_overlap(config: &Path, cache: &Path, data: &Path) -> Result<(), String> {
+    let mut canonicals: Vec<(&str, PathBuf)> = Vec::new();
+    for (name, path) in [("config", config), ("cache", cache), ("data", data)] {
+        if let Ok(c) = path.canonicalize() {
+            canonicals.push((name, c));
+        }
+    }
+    for i in 0..canonicals.len() {
+        for j in (i + 1)..canonicals.len() {
+            if canonicals[i].1 == canonicals[j].1 {
+                return Err(format!(
+                    "directory overlap detected: {} and {} resolve to the same path ({}); \
+                     refusing to proceed to avoid data loss",
+                    canonicals[i].0,
+                    canonicals[j].0,
+                    canonicals[i].1.display()
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -221,4 +327,204 @@ mod tests {
         let p = temp_dir_for_binary(bin);
         assert_eq!(p.parent(), bin.parent());
     }
+
+    // R9-B08: a valid absolute HOME produces the default XDG path under HOME.
+    #[test]
+    fn resolve_xdg_dir_uses_absolute_home() {
+        let home = std::ffi::OsStr::new("/home/deve");
+        let p = resolve_xdg_dir(None, Some(home), ".config");
+        assert_eq!(p, PathBuf::from("/home/deve/.config/math_talk_radar"));
+    }
+
+    // R9-B08: an absolute XDG override wins over HOME.
+    #[test]
+    fn resolve_xdg_dir_xdg_override_wins() {
+        let xdg = std::ffi::OsStr::new("/custom/cfg");
+        let home = std::ffi::OsStr::new("/home/deve");
+        let p = resolve_xdg_dir(Some(xdg), Some(home), ".config");
+        assert_eq!(p, PathBuf::from("/custom/cfg/math_talk_radar"));
+    }
+
+    // R9-B08: an empty HOME must NOT produce a CWD-anchored path; fall through
+    // to the relative default instead.
+    #[test]
+    fn resolve_xdg_dir_empty_home_falls_through() {
+        let empty = std::ffi::OsStr::new("");
+        let p = resolve_xdg_dir(None, Some(empty), ".config");
+        assert_eq!(p, PathBuf::from(".config/math_talk_radar"));
+    }
+
+    // R9-B08: a relative HOME must NOT be used; fall through to the relative
+    // default instead (a relative HOME would anchor at CWD).
+    #[test]
+    fn resolve_xdg_dir_relative_home_falls_through() {
+        let rel = std::ffi::OsStr::new("relative/home");
+        let p = resolve_xdg_dir(None, Some(rel), ".local/share");
+        assert_eq!(p, PathBuf::from(".local/share/math_talk_radar"));
+    }
+
+    // R9-B08: a relative XDG override must NOT be used; fall through to HOME.
+    #[test]
+    fn resolve_xdg_dir_relative_xdg_falls_to_home() {
+        let rel_xdg = std::ffi::OsStr::new("relative/cfg");
+        let home = std::ffi::OsStr::new("/home/deve");
+        let p = resolve_xdg_dir(Some(rel_xdg), Some(home), ".config");
+        assert_eq!(p, PathBuf::from("/home/deve/.config/math_talk_radar"));
+    }
+
+    // R9-B08: an empty XDG override must NOT be used; fall through to HOME.
+    #[test]
+    fn resolve_xdg_dir_empty_xdg_falls_to_home() {
+        let empty = std::ffi::OsStr::new("");
+        let home = std::ffi::OsStr::new("/home/deve");
+        let p = resolve_xdg_dir(Some(empty), Some(home), ".cache");
+        assert_eq!(p, PathBuf::from("/home/deve/.cache/math_talk_radar"));
+    }
+
+    // R9-B08: no XDG and no HOME → relative default (last resort).
+    #[test]
+    fn resolve_xdg_dir_no_env_falls_to_relative_default() {
+        let p = resolve_xdg_dir(None, None, ".config");
+        assert_eq!(p, PathBuf::from(".config/math_talk_radar"));
+    }
+
+    // R9-B08: detect_dir_overlap must reject when config and data canonicalize
+    // to the same path (e.g. misconfigured XDG_CONFIG_HOME == XDG_DATA_HOME).
+    #[test]
+    fn detect_dir_overlap_rejects_config_data_collision() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let same = tmp.path();
+        let other = tmp.path().join("other");
+        std::fs::create_dir_all(&other).expect("mkdir other");
+        let err = detect_dir_overlap(same, &other, same);
+        assert!(err.is_err(), "config==data overlap must be rejected");
+        let msg = err.unwrap_err();
+        assert!(msg.contains("config") && msg.contains("data"), "msg: {msg}");
+    }
+
+    // R9-B08: detect_dir_overlap must reject when cache and data collide.
+    #[test]
+    fn detect_dir_overlap_rejects_cache_data_collision() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let same = tmp.path();
+        let other = tmp.path().join("other");
+        std::fs::create_dir_all(&other).expect("mkdir other");
+        let err = detect_dir_overlap(&other, same, same);
+        assert!(err.is_err(), "cache==data overlap must be rejected");
+        assert!(err.unwrap_err().contains("cache"));
+    }
+
+    // R9-B08: detect_dir_overlap must reject when config and cache collide.
+    #[test]
+    fn detect_dir_overlap_rejects_config_cache_collision() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let same = tmp.path();
+        let other = tmp.path().join("other");
+        std::fs::create_dir_all(&other).expect("mkdir other");
+        let err = detect_dir_overlap(same, same, &other);
+        assert!(err.is_err(), "config==cache overlap must be rejected");
+        assert!(err.unwrap_err().contains("config"));
+    }
+
+    // R9-B08: detect_dir_overlap passes when all three dirs are distinct.
+    #[test]
+    fn detect_dir_overlap_ok_when_distinct() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let root = tmp.path();
+        let cfg = root.join("cfg");
+        let cache = root.join("cache");
+        let data = root.join("data");
+        for d in [&cfg, &cache, &data] {
+            std::fs::create_dir_all(d).expect("mkdir");
+        }
+        assert!(detect_dir_overlap(&cfg, &cache, &data).is_ok());
+    }
+
+    // R9-B08: detect_dir_overlap passes when dirs don't exist yet (skip those
+    // that can't canonicalize — they'd be skipped at delete time too).
+    #[test]
+    fn detect_dir_overlap_skips_nonexistent() {
+        assert!(
+            detect_dir_overlap(
+                Path::new("/nonexistent/cfg/zzz"),
+                Path::new("/nonexistent/cache/zzz"),
+                Path::new("/nonexistent/data/zzz"),
+            )
+            .is_ok(),
+            "nonexistent dirs are skipped, not treated as overlapping"
+        );
+    }
+
+    // R9-B07: a relative path must be rejected outright.
+    #[test]
+    fn reject_symlink_in_components_rejects_relative() {
+        let err = reject_symlink_in_components(Path::new("relative/path/file"));
+        assert!(err.is_err());
+        assert!(err.unwrap_err().contains("relative"));
+    }
+
+    // R9-B07: a path with `..` components must be rejected (would escape the
+    // caller's intended directory).
+    #[test]
+    fn reject_symlink_in_components_rejects_parent_dir() {
+        let err = reject_symlink_in_components(Path::new("/a/../b/c"));
+        assert!(err.is_err());
+        assert!(err.unwrap_err().contains(".."));
+    }
+
+    // R9-B07: a leaf symlink must be rejected. The caller must operate on the
+    // real file, not whatever the symlink points at.
+    #[cfg(unix)]
+    #[test]
+    fn reject_symlink_in_components_rejects_leaf_symlink() {
+        use std::os::unix::fs::symlink;
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let target = tmp.path().join("target");
+        std::fs::write(&target, b"body").expect("write target");
+        let link = tmp.path().join("link");
+        symlink(&target, &link).expect("symlink");
+        let err = reject_symlink_in_components(&link);
+        assert!(err.is_err(), "leaf symlink must be rejected");
+        let msg = err.unwrap_err();
+        assert!(msg.contains("symlink"), "msg: {msg}");
+    }
+
+    // R9-B07: a mid-path symlink (a symlink in a non-leaf component) must be
+    // rejected. Without this check, an attacker could plant a symlink on a
+    // parent directory component to redirect the resolved path.
+    #[cfg(unix)]
+    #[test]
+    fn reject_symlink_in_components_rejects_midpath_symlink() {
+        use std::os::unix::fs::symlink;
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let real_dir = tmp.path().join("real");
+        std::fs::create_dir_all(&real_dir).expect("mkdir real");
+        let link_dir = tmp.path().join("linkdir");
+        symlink(&real_dir, &link_dir).expect("symlink midpath");
+        let target = link_dir.join("file");
+        let err = reject_symlink_in_components(&target);
+        assert!(err.is_err(), "midpath symlink must be rejected");
+        assert!(err.unwrap_err().contains("symlink"));
+    }
+
+    // R9-B07: a clean path with no symlinks anywhere in its components must
+    // pass.
+    #[cfg(unix)]
+    #[test]
+    fn reject_symlink_in_components_accepts_clean_path() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let real = tmp.path().join("a/b/c");
+        std::fs::create_dir_all(&real).expect("mkdir");
+        assert!(reject_symlink_in_components(&real).is_ok());
+    }
+
+    // R9-B07: a path that doesn't exist yet (some components missing) must
+    // pass — missing components cannot be symlinks.
+    #[test]
+    fn reject_symlink_in_components_accepts_nonexistent_leaf() {
+        let p = Path::new("/tmp/definitely/not/here/zzz_not_existing_12345");
+        assert!(reject_symlink_in_components(p).is_ok());
+    }
+
+    // Manifest-based unmanaged protection is exercised in lifecycle_sandbox.
 }

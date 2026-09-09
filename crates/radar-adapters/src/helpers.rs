@@ -7,10 +7,13 @@ mod selectors;
 pub use media::detect_media;
 #[cfg(test)]
 use radar_core::MediaType;
-use scraper::Selector;
 pub(crate) use selectors::{cached_selector, cached_selector_runtime};
+use url::Url;
 
-use radar_core::{EventType, PublicAccess, contains_phrase, normalize_text};
+use radar_core::{
+    AccessInfo, Event, EventDate, EventStatus, EventType, Location, MediaResource, PersonHit,
+    PublicAccess, ScoreComponents, SourceEvidence, Talk, contains_phrase, event_id, normalize_text,
+};
 
 /// Decode a document body as UTF-8 with U+FFFD replacement for invalid bytes.
 /// Non-UTF-8 pages preserve their valid bytes instead of becoming empty
@@ -132,7 +135,7 @@ fn select_first_text(document: &Html, selector_str: &'static str) -> Option<Stri
 
 fn select_meta_content(document: &Html, attr: &str, value: &str) -> Option<String> {
     let selector_str = format!("meta[{}=\"{}\"]", attr, value);
-    let selector = Selector::parse(&selector_str).ok()?;
+    let selector = cached_selector_runtime(&selector_str).ok()?;
     let content = document.select(&selector).next()?.attr("content")?;
     let cleaned = clean_text(content);
     if cleaned.is_empty() {
@@ -177,24 +180,11 @@ pub fn strip_html_to_text(html: &str) -> String {
 
 /// Stream `s` into `buf` lowercased with internal whitespace collapsed to
 /// single spaces. `prev_space` tracks whether the last emitted char was a
-/// space (start `true` to trim leading whitespace). Mirrors `normalize_text`
-/// semantics but appends into an existing buffer so the access classifier can
-/// build one lowercase-collapsed buffer in a single pass instead of allocating
-/// a full-body String and re-normalizing it.
+/// space (start `true` to trim leading whitespace). Delegates to
+/// [`radar_core::normalize::normalize_text_to_buf`] so the lowercase +
+/// whitespace-collapse logic has one source of truth in radar-core.
 fn push_lower_collapsed(s: &str, buf: &mut String, prev_space: &mut bool) {
-    for ch in s.chars() {
-        if ch.is_whitespace() {
-            if !*prev_space {
-                buf.push(' ');
-            }
-            *prev_space = true;
-        } else {
-            for lc in ch.to_lowercase() {
-                buf.push(lc);
-            }
-            *prev_space = false;
-        }
-    }
+    radar_core::normalize::normalize_text_to_buf(s, buf, prev_space);
 }
 
 /// Conservatively classify the public access level from an HTML document's
@@ -347,6 +337,56 @@ pub fn detect_event_type(text: &str) -> EventType {
         return EventType::Conference;
     }
     EventType::Unknown
+}
+
+/// Build an [`Event`] from adapter-extracted fields, filling the fixed
+/// scaffolding (id from `title+url`, empty `topics`, zero `score`, default
+/// `score_components`, empty `rank_reasons`, `None` first/last_seen) that
+/// every adapter sets identically. Pass the extracted `title`/`url`/`source`
+/// (may differ from the stub when the detail page corrected them) and the
+/// per-adapter fields. `topics` is always empty here; the scan pipeline
+/// enriches topics later via `radar_core::enrich_event_topics`.
+#[allow(clippy::too_many_arguments)] // Event has 17 fields; 5 are fixed scaffolding, 12 are per-adapter
+pub(crate) fn build_event_from_stub(
+    title: &str,
+    url: &Url,
+    source: &SourceEvidence,
+    event_type: EventType,
+    status: EventStatus,
+    date: EventDate,
+    location: Option<Location>,
+    description: Option<String>,
+    people: Vec<PersonHit>,
+    talks: Vec<Talk>,
+    media: Vec<MediaResource>,
+    access: AccessInfo,
+) -> Event {
+    Event {
+        id: event_id(title, url.as_str()),
+        title: title.to_string(),
+        url: Some(url.clone()),
+        event_type,
+        status,
+        date,
+        location,
+        description,
+        topics: Vec::new(),
+        people,
+        talks,
+        media,
+        access,
+        sources: vec![source.clone()],
+        score: 0.0,
+        score_components: ScoreComponents::default(),
+        rank_reasons: Vec::new(),
+        first_seen_at: None,
+        last_seen_at: None,
+    }
+}
+
+/// Reject non-HTTP schemes from untrusted adapter input.
+pub(crate) fn is_http_url(url: &Url) -> bool {
+    matches!(url.scheme(), "http" | "https")
 }
 
 #[cfg(test)]

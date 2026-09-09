@@ -212,8 +212,28 @@ impl Context<'_> {
                     "llvm-cov".into(),
                     "--offline".into(),
                     "--locked".into(),
+                    "-p".into(),
+                    "radar-core".into(),
+                    "--all-features".into(),
+                    "--fail-under-lines".into(),
+                    "85".into(),
+                    "--json".into(),
+                    "--output-path".into(),
+                    self.directory
+                        .join("core-coverage.json")
+                        .display()
+                        .to_string(),
+                ])?;
+                self.attach("core-coverage.json")?;
+                self.command(vec![
+                    "cargo".into(),
+                    "llvm-cov".into(),
+                    "--offline".into(),
+                    "--locked".into(),
                     "--workspace".into(),
                     "--all-features".into(),
+                    "--fail-under-lines".into(),
+                    "75".into(),
                     "--json".into(),
                     "--output-path".into(),
                     self.directory.join("coverage.json").display().to_string(),
@@ -327,7 +347,7 @@ pub fn validate_receipt(
     }
     let required: &[&str] = match shard {
         "tests" => &["inventory.json", "junit.xml", "nextest.toml"],
-        "coverage" => &["coverage.json"],
+        "coverage" => &["core-coverage.json", "coverage.json"],
         "performance" => &["performance.json"],
         "artifact" => &["manifest.json", "smoke.json"],
         "review" => &["review.json"],
@@ -455,7 +475,7 @@ fn validate_commands(plan: &Plan, receipt: &Receipt) -> Result<()> {
         ),
         "security" => (1, starts(0, &["cargo", "deny", "check"])),
         "coverage" => (
-            1,
+            2,
             starts(
                 0,
                 &[
@@ -463,8 +483,25 @@ fn validate_commands(plan: &Plan, receipt: &Receipt) -> Result<()> {
                     "llvm-cov",
                     "--offline",
                     "--locked",
+                    "-p",
+                    "radar-core",
+                    "--all-features",
+                    "--fail-under-lines",
+                    "85",
+                    "--json",
+                    "--output-path",
+                ],
+            ) && starts(
+                1,
+                &[
+                    "cargo",
+                    "llvm-cov",
+                    "--offline",
+                    "--locked",
                     "--workspace",
                     "--all-features",
+                    "--fail-under-lines",
+                    "75",
                     "--json",
                     "--output-path",
                 ],

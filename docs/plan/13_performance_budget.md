@@ -39,6 +39,9 @@ existing 4000-event RSS fixture memory probe. The offline-v1 workload measures
 probe drives the real run_scan pipeline twice over 20 local sources/400 events,
 including registry enrichment, state and public rendering; it also verifies
 source panic isolation in an actual release binary (tests alone force unwind).
+The storage pipeline also retains the full 1k/5k/10k write/reopen/JSON/JSONL
+workloads and the growing-provenance high-collision workload. Its final peak
+RSS is checked against the same 128 MiB limit; all required metrics must exist.
 
 Hard gates: each offline probe ≤128 MiB RSS, binary ≤30 MiB, startup median
 ≤1 s, 10k distinct/collision dedup ≤5 s. Startup <100 ms remains the target;

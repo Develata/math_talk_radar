@@ -17,9 +17,18 @@ Optional `.tar.gz`, SBOM.
 
 Fetch latest stable → SemVer compare → download to sibling temp → verify SHA-256
 → chmod 0755 → fsync → run downloaded binary self-test → create rollback copy →
-atomic replace → run replaced binary self-test → delete rollback → fsync parent.
-Any failure leaves the current working binary usable. A failed download must
-never delete the existing binary.
+atomic replace → run replaced binary self-test → fsync parent. Any failure
+leaves the current working binary usable. A failed download must never delete
+the existing binary.
+
+R9-M07: the rollback copy is **retained** after a successful update — exactly
+one previous binary is kept at `.<stem>.rollback` alongside the current binary,
+overwritten by the next successful update. Deleting the rollback after
+self-test (the original M0 wording) left no recovery path if the new binary
+failed later (e.g. a runtime defect not caught by the self-test). Retention
+trades a small disk footprint (~8 MiB) for a guaranteed manual-recovery path
+to the last-known-good version. Uninstall still deletes the rollback copy
+under both `--keep-data` and `--purge` (it is an app-owned staging artifact).
 
 ### Safety (§34.3)
 

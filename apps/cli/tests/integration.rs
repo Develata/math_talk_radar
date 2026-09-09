@@ -746,19 +746,14 @@ async fn source_failure_cannot_cancel_its_previous_events() {
         .iter()
         .filter(|c| c["kind"] == "event_cancelled")
         .collect();
-    assert_eq!(
-        cancelled.len(),
-        2,
-        "only the authoritative source's disappeared events may be cancelled"
+    assert!(
+        cancelled.is_empty(),
+        "an unrelated source failure blocks all absence cancellation"
     );
     let repo = radar_state::Repository::open(&state).unwrap();
-    let remaining = repo.list_events().unwrap();
-    assert_eq!(remaining.len(), 2);
-    assert!(
-        remaining
-            .iter()
-            .all(|e| e.sources.iter().any(|s| s.source_id == "b"))
-    );
+    assert_eq!(repo.list_events().unwrap().len(), 4);
+    assert!(repo.list_source_health("a").unwrap().len() >= 2);
+    assert!(repo.list_source_health("b").unwrap().len() >= 2);
 }
 
 #[tokio::test]

@@ -1,7 +1,7 @@
 //! Conservative selection, run-local execution and fail-closed aggregation.
 mod artifact;
 pub(crate) mod catalog;
-mod evidence;
+pub(super) mod evidence;
 mod junit;
 mod live;
 mod plan;

@@ -7,9 +7,9 @@
 //! count) so legitimate calendars with many flat VEVENTs are not rejected.
 use radar_core::adapter::MAX_DISCOVERED_STUBS;
 use radar_core::{
-    AccessInfo, AdapterError, DateTimeOrDate, Event, EventCandidate, EventDate, EventStatus,
-    EventStub, FetchPlan, FetchedDocument, Location, OnlineAvailability, PublicAccess,
-    ScoreComponents, SourceAdapter, SourceEvidence, SourceSpec, event_id,
+    AccessInfo, AdapterError, DateTimeOrDate, EventCandidate, EventDate, EventStatus, EventStub,
+    FetchPlan, FetchedDocument, Location, OnlineAvailability, PublicAccess, SourceAdapter,
+    SourceEvidence, SourceSpec,
 };
 use url::Url;
 
@@ -20,6 +20,7 @@ use crate::helpers;
 /// VCALENDAR > VTIMEZONE > STANDARD). 8 gives ample headroom while staying far
 /// below stack-overflow territory for `icalendar`'s nom parser.
 const MAX_NESTING_DEPTH: usize = 8;
+const SYNTHETIC_ICS_ID_PARAM: &str = "mtr-ics-eid";
 
 #[derive(Debug, Default)]
 pub struct IcsAdapter;
@@ -51,10 +52,14 @@ impl SourceAdapter for IcsAdapter {
             })?;
 
         let mut stubs = Vec::new();
+        let mut event_idx = 0usize;
         for component in &calendar.components {
             if component.name.as_str() != "VEVENT" {
                 continue;
             }
+            let current_event_idx = event_idx;
+            event_idx += 1;
+
             let title = component
                 .find_prop("SUMMARY")
                 .map(|p| p.val.as_str().to_string());
@@ -70,7 +75,8 @@ impl SourceAdapter for IcsAdapter {
             // cancel+add noise.
             let uid = component
                 .find_prop("UID")
-                .map(|p| p.val.as_str().to_string());
+                .map(|p| p.val.as_str().to_string())
+                .filter(|value| !value.trim().is_empty());
             let dtend = component
                 .find_prop("DTEND")
                 .map(|p| p.val.as_str().to_string());
@@ -79,13 +85,21 @@ impl SourceAdapter for IcsAdapter {
                 .map(|p| p.val.as_str().to_string());
 
             let Some(title) = title else { continue };
-            let Some(url_str) = url_str else { continue };
             if title.trim().is_empty() {
                 continue;
             }
-            let Ok(url) = Url::parse(&url_str) else {
-                continue;
-            };
+
+            // RFC 5545 does not require URL on VEVENT. EventStub does, so use
+            // a stable synthetic URL based on the post-redirect calendar URL
+            // when URL is missing/unsupported. Prefer UID as the identity;
+            // only UID-less events fall back to their deterministic VEVENT
+            // ordinal. Relative URL values are resolved against final_url.
+            let synthetic_identity = uid.clone().unwrap_or_else(|| current_event_idx.to_string());
+            let url = url_str
+                .as_deref()
+                .and_then(|value| document.final_url.join(value).ok())
+                .filter(crate::helpers::is_http_url)
+                .unwrap_or_else(|| synthetic_ics_url(&document.final_url, &synthetic_identity));
 
             let date_hint =
                 parse_ics_date_range(dtstart.as_deref(), dtend.as_deref(), duration.as_deref());
@@ -111,6 +125,12 @@ impl SourceAdapter for IcsAdapter {
     }
 
     fn plan_enrichment(&self, event: &EventStub, _source: &SourceSpec) -> Vec<FetchPlan> {
+        // A URL-less VEVENT uses a synthetic URL rooted at the already-fetched
+        // calendar. Re-fetching that calendar once per such event would waste
+        // the request budget and cannot provide an HTML detail page.
+        if is_synthetic_ics_url(event) {
+            return Vec::new();
+        }
         vec![FetchPlan {
             url: event.url.clone(),
             depth: 1,
@@ -149,37 +169,72 @@ impl SourceAdapter for IcsAdapter {
             }
         }
 
-        let id = event_id(&event.title, event.url.as_str());
-        let full_event = Event {
-            id,
-            title: event.title.clone(),
-            url: Some(event.url.clone()),
+        let full_event = crate::helpers::build_event_from_stub(
+            &event.title,
+            &event.url,
+            &event.source,
             event_type,
-            status: EventStatus::Announced,
+            EventStatus::Announced,
             date,
             location,
             description,
-            topics: Vec::new(),
-            people: Vec::new(),
-            talks: Vec::new(),
-            media: Vec::new(),
-            access: AccessInfo {
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            AccessInfo {
                 access: PublicAccess::Unknown,
                 online: OnlineAvailability::Unknown,
             },
-            sources: vec![event.source.clone()],
-            score: 0.0,
-            score_components: ScoreComponents::default(),
-            rank_reasons: Vec::new(),
-            first_seen_at: None,
-            last_seen_at: None,
-        };
+        );
 
         Ok(EventCandidate {
             event: full_event,
             stub: event,
         })
     }
+}
+
+fn synthetic_ics_url(base: &Url, identity: &str) -> Url {
+    let mut url = base.clone();
+    let kept: Vec<(String, String)> = url
+        .query_pairs()
+        .filter(|(key, _)| key != SYNTHETIC_ICS_ID_PARAM)
+        .map(|(key, value)| (key.into_owned(), value.into_owned()))
+        .collect();
+    url.query_pairs_mut().clear();
+    url.query_pairs_mut()
+        .extend_pairs(
+            kept.iter()
+                .map(|(key, value)| (key.as_str(), value.as_str())),
+        )
+        .append_pair(SYNTHETIC_ICS_ID_PARAM, identity);
+    url
+}
+
+fn is_synthetic_ics_url(event: &EventStub) -> bool {
+    if !event
+        .url
+        .query_pairs()
+        .any(|(key, _)| key == SYNTHETIC_ICS_ID_PARAM)
+    {
+        return false;
+    }
+    let mut stripped = event.url.clone();
+    let kept: Vec<(String, String)> = stripped
+        .query_pairs()
+        .filter(|(key, _)| key != SYNTHETIC_ICS_ID_PARAM)
+        .map(|(key, value)| (key.into_owned(), value.into_owned()))
+        .collect();
+    if kept.is_empty() {
+        stripped.set_query(None);
+    } else {
+        stripped.query_pairs_mut().clear();
+        stripped.query_pairs_mut().extend_pairs(
+            kept.iter()
+                .map(|(key, value)| (key.as_str(), value.as_str())),
+        );
+    }
+    stripped == event.source.source_url
 }
 
 /// Track the maximum nesting depth of BEGIN:/END: blocks (case-insensitive).
@@ -244,6 +299,16 @@ fn parse_ics_dtstart(value: &str) -> Option<EventDate> {
 /// DTEND is preferred over DURATION per RFC 5545 §3.6.1 (they are mutually
 /// exclusive in a VEVENT). At date precision (this parser drops time/timezone),
 /// sub-day DURATION components (PT2H etc.) produce `end == start`.
+///
+/// P1-07: `EventDate.end` is the **inclusive** last day throughout this
+/// codebase (the HTML range parsers treat "3–7 August" as end=Aug 7; the
+/// `interval_overlap` filter treats `end` as inclusive). RFC 5545 §3.8.2.2
+/// DATE-valued `DTEND` is **non-inclusive** (a 1-day event is
+/// `DTSTART:20260808;DTEND:20260809`), so a DATE DTEND is decremented by one
+/// day on storage. DATETIME-valued DTEND is left as-is at date precision: a
+/// DTSTART/DTEND of `T100000`/`T120000Z` next-day spans onto the end date,
+/// which is already the inclusive last day. DURATION is elapsed time, so
+/// `end = start + days - 1` (inclusive last day).
 fn parse_ics_date_range(
     dtstart: Option<&str>,
     dtend: Option<&str>,
@@ -254,14 +319,38 @@ fn parse_ics_date_range(
 
     if let Some(dtend_val) = dtend
         && let Some(end_ed) = parse_ics_dtstart(dtend_val)
+        && let Some(end_date) = end_ed.start_date()
+        && ed.start_date().is_some_and(|start| end_date >= start)
     {
-        ed.end = end_ed.start;
-        ed.original_text = format!("{dtstart_val}/{dtend_val}");
+        // P1-07: only DATE-valued DTEND (exactly 8 chars, no 'T') is
+        // non-inclusive per RFC 5545 §3.8.2.2. DATETIME DTEND carries an
+        // explicit instant that already lands on the inclusive last day at
+        // date precision.
+        let final_end = if is_date_valued(dtend_val) {
+            end_date.checked_add_signed(chrono::Duration::days(-1))
+        } else {
+            Some(end_date)
+        };
+        // Re-check the inclusive invariant after the -1 day adjustment:
+        // DTEND:20260808 / DTSTART:20260808 (a zero-day DATE range) would
+        // underflow to end < start; treat that as a single-day event by
+        // clamping end to start.
+        let final_end = final_end.and_then(|e| ed.start_date().map(|s| if e < s { s } else { e }));
+        if let Some(final_end) = final_end {
+            ed.end = Some(DateTimeOrDate::Date(final_end));
+            ed.original_text = format!("{dtstart_val}/{dtend_val}");
+        }
     } else if let Some(dur_val) = duration
         && let Some(days) = parse_ics_duration_days(dur_val)
         && let Some(start_date) = ed.start_date()
+        && days > 0
+        && let Some(end_date) = start_date.checked_add_signed(chrono::Duration::days(days - 1))
     {
-        let end_date = start_date + chrono::Duration::days(days);
+        // P1-07: DURATION is elapsed time. A P3D event starting Aug 10 spans
+        // Aug 10–12 (inclusive last day = start + days - 1). A negative or
+        // zero DURATION is rejected (RFC 5545 requires positive DURATION);
+        // `parse_ics_duration_days` now preserves the sign and returns None
+        // for negatives.
         ed.end = Some(DateTimeOrDate::Date(end_date));
         ed.original_text = format!("{dtstart_val}/{dur_val}");
     }
@@ -269,12 +358,28 @@ fn parse_ics_date_range(
     Some(ed)
 }
 
+/// P1-07: an ICS value is DATE-valued (RFC 5545 §3.8.2.1) when it is exactly
+/// `YYYYMMDD` (8 digits, no time component). A DATETIME value is
+/// `YYYYMMDDTHHMMSS[Z]` (15+ chars with a `T` separator). The distinction
+/// governs whether DTEND is treated as non-inclusive (DATE) or as an instant
+/// landing on the inclusive last day (DATETIME).
+fn is_date_valued(value: &str) -> bool {
+    value.len() == 8 && value.bytes().all(|b| b.is_ascii_digit())
+}
+
 /// Parse the day-precision component of an RFC 5545 DURATION value
 /// (`PnWnDTnHnMnS`). Returns total days (weeks converted to days). Sub-day
 /// components (T...) produce 0 — the end date equals the start date at date
-/// precision. Returns `None` for unparseable values.
+/// precision. Returns `None` for unparseable values or negative DURATIONs
+/// (P1-07: RFC 5545 §3.3.6 requires the DURATION of a VEVENT to be positive;
+/// a leading `-` is rejected rather than stripped).
 fn parse_ics_duration_days(value: &str) -> Option<i64> {
-    let s = value.strip_prefix(['+', '-']).unwrap_or(value);
+    // P1-07: reject negative DURATION. RFC 5545 §3.3.6 allows a leading sign
+    // syntactically, but §3.6.1 requires VEVENT DURATION to be positive.
+    if value.starts_with('-') {
+        return None;
+    }
+    let s = value.strip_prefix('+').unwrap_or(value);
     if !s.starts_with('P') {
         return None;
     }
@@ -388,7 +493,7 @@ END:VCALENDAR
     }
 
     #[test]
-    fn discover_skips_events_without_url() {
+    fn discover_preserves_url_less_events_with_synthetic_url() {
         let ics = "\
 BEGIN:VCALENDAR
 VERSION:2.0
@@ -410,8 +515,39 @@ END:VCALENDAR
         let stubs = IcsAdapter
             .discover(&doc, &source)
             .expect("valid ICS should parse");
+        assert_eq!(stubs.len(), 2);
+        assert_eq!(stubs[0].title, "No URL Event");
+        assert_eq!(
+            stubs[0].url.as_str(),
+            "https://example.com/cal.ics?mtr-ics-eid=no-url"
+        );
+        assert_eq!(stubs[0].source.native_id.as_deref(), Some("no-url"));
+        assert!(
+            IcsAdapter.plan_enrichment(&stubs[0], &source).is_empty(),
+            "synthetic URL must not re-fetch the calendar"
+        );
+        assert_eq!(stubs[1].title, "With URL Event");
+        assert_eq!(stubs[1].url.as_str(), "https://example.com/e");
+    }
+
+    #[test]
+    fn discover_resolves_relative_event_url_against_final_url() {
+        let ics = "\
+BEGIN:VCALENDAR
+VERSION:2.0
+BEGIN:VEVENT
+UID:relative-url
+SUMMARY:Relative URL Event
+URL:events/relative
+DTSTART:20260808
+END:VEVENT
+END:VCALENDAR
+";
+        let doc = make_doc(ics.as_bytes());
+        let source = make_source();
+        let stubs = IcsAdapter.discover(&doc, &source).expect("parse ok");
         assert_eq!(stubs.len(), 1);
-        assert_eq!(stubs[0].title, "With URL Event");
+        assert_eq!(stubs[0].url.as_str(), "https://example.com/events/relative");
     }
 
     #[test]
@@ -703,6 +839,8 @@ END:VCALENDAR
     }
 
     // R9-H06: DTEND must populate the end date for multi-day conferences.
+    // P1-07: DATE-valued DTEND is non-inclusive per RFC 5545 §3.8.2.2, so the
+    // stored end is the inclusive last day (DTEND - 1).
     #[test]
     fn discover_dtend_populates_end_date() {
         let ics = "\
@@ -724,9 +862,23 @@ END:VCALENDAR
         let dh = stubs[0].date_hint.as_ref().expect("date hint present");
         assert!(dh.start.is_some());
         assert!(dh.end.is_some(), "DTEND must populate end date");
+        // DTEND 20260812 (exclusive) → inclusive last day 20260811.
+        let start = dh.start_date().expect("start present");
+        let end = dh
+            .end
+            .as_ref()
+            .and_then(|e| match e {
+                DateTimeOrDate::Date(d) => Some(*d),
+                DateTimeOrDate::DateTime(_) => None,
+            })
+            .expect("end present as Date");
+        assert_eq!(start, chrono::NaiveDate::from_ymd_opt(2026, 8, 8).unwrap());
+        assert_eq!(end, chrono::NaiveDate::from_ymd_opt(2026, 8, 11).unwrap());
     }
 
     // R9-H06: DURATION must populate the end date when DTEND is absent.
+    // P1-07: DURATION is elapsed time; inclusive last day = start + days - 1.
+    // A P3D event starting 20260810 spans Aug 10–12 (inclusive last day Aug 12).
     #[test]
     fn discover_duration_populates_end_date() {
         let ics = "\
@@ -747,9 +899,22 @@ END:VCALENDAR
         assert_eq!(stubs.len(), 1);
         let dh = stubs[0].date_hint.as_ref().expect("date hint present");
         assert!(dh.end.is_some(), "DURATION must populate end date");
+        let start = dh.start_date().expect("start present");
+        let end = dh
+            .end
+            .as_ref()
+            .and_then(|e| match e {
+                DateTimeOrDate::Date(d) => Some(*d),
+                DateTimeOrDate::DateTime(_) => None,
+            })
+            .expect("end present as Date");
+        assert_eq!(start, chrono::NaiveDate::from_ymd_opt(2026, 8, 10).unwrap());
+        assert_eq!(end, chrono::NaiveDate::from_ymd_opt(2026, 8, 12).unwrap());
     }
 
     // R9-H06: DTEND takes precedence over DURATION per RFC 5545 §3.6.1.
+    // P1-07: with inclusive-end semantics, a 1-day event DTSTART:20260808 /
+    // DTEND:20260809 has inclusive last day = start (single day).
     #[test]
     fn discover_dtend_preferred_over_duration() {
         let ics = "\
@@ -769,7 +934,7 @@ END:VCALENDAR
         let source = make_source();
         let stubs = IcsAdapter.discover(&doc, &source).expect("parse ok");
         let dh = stubs[0].date_hint.as_ref().expect("date hint present");
-        // DTEND (2026-08-09) wins; end is 1 day after start, not 5.
+        // DTEND (2026-08-09, exclusive) wins; inclusive last day = start.
         let start = dh.start_date().expect("start present");
         let end = dh
             .end
@@ -779,7 +944,73 @@ END:VCALENDAR
                 DateTimeOrDate::DateTime(_) => None,
             })
             .expect("end present as Date");
-        assert_eq!(end, start + chrono::Duration::days(1));
+        assert_eq!(end, start, "1-day DATE DTEND range collapses to start");
+    }
+
+    // P1-07: a DATE DTEND equal to DTSTART (zero elapsed days) is a degenerate
+    // zero-day range under RFC 5545, but producers emit it for instantaneous
+    // or same-day events. Clamp end to start so the inclusive invariant holds.
+    #[test]
+    fn discover_dtend_equal_to_dtstart_clamps_to_start() {
+        let ics = "\
+BEGIN:VCALENDAR
+VERSION:2.0
+BEGIN:VEVENT
+UID:conf-same-day
+SUMMARY:Same-day Event
+URL:https://example.com/same
+DTSTART:20260808
+DTEND:20260808
+END:VEVENT
+END:VCALENDAR
+";
+        let doc = make_doc(ics.as_bytes());
+        let source = make_source();
+        let stubs = IcsAdapter.discover(&doc, &source).expect("parse ok");
+        let dh = stubs[0].date_hint.as_ref().expect("date hint present");
+        let start = dh.start_date().expect("start present");
+        let end = dh
+            .end
+            .as_ref()
+            .and_then(|e| match e {
+                DateTimeOrDate::Date(d) => Some(*d),
+                DateTimeOrDate::DateTime(_) => None,
+            })
+            .expect("end present as Date");
+        assert_eq!(end, start, "zero-day DATE DTEND must clamp to start");
+    }
+
+    // P1-07: DATETIME-valued DTEND is an instant that already lands on the
+    // inclusive last day at date precision — no -1 day adjustment.
+    #[test]
+    fn discover_datetime_dtend_kept_verbatim() {
+        let ics = "\
+BEGIN:VCALENDAR
+VERSION:2.0
+BEGIN:VEVENT
+UID:conf-datetime
+SUMMARY:Overnight Event
+URL:https://example.com/overnight
+DTSTART:20260808T100000Z
+DTEND:20260809T120000Z
+END:VEVENT
+END:VCALENDAR
+";
+        let doc = make_doc(ics.as_bytes());
+        let source = make_source();
+        let stubs = IcsAdapter.discover(&doc, &source).expect("parse ok");
+        let dh = stubs[0].date_hint.as_ref().expect("date hint present");
+        let start = dh.start_date().expect("start present");
+        let end = dh
+            .end
+            .as_ref()
+            .and_then(|e| match e {
+                DateTimeOrDate::Date(d) => Some(*d),
+                DateTimeOrDate::DateTime(_) => None,
+            })
+            .expect("end present as Date");
+        assert_eq!(start, chrono::NaiveDate::from_ymd_opt(2026, 8, 8).unwrap());
+        assert_eq!(end, chrono::NaiveDate::from_ymd_opt(2026, 8, 9).unwrap());
     }
 
     #[test]
@@ -794,6 +1025,64 @@ END:VCALENDAR
         assert_eq!(parse_ics_duration_days("P"), None);
         assert_eq!(parse_ics_duration_days("X1D"), None);
         assert_eq!(parse_ics_duration_days("+P1D"), Some(1));
-        assert_eq!(parse_ics_duration_days("-P1D"), Some(1));
+        // P1-07: negative DURATION is rejected (RFC 5545 §3.6.1 requires
+        // positive DURATION in a VEVENT). Previously the sign was stripped
+        // and `-P1D` returned Some(1).
+        assert_eq!(parse_ics_duration_days("-P1D"), None);
+    }
+
+    // §66: parser must not panic on untrusted input. A crafted DURATION with
+    // an oversized day count overflows NaiveDate's valid range; the parser must
+    // leave end unset rather than panic.
+    #[test]
+    fn discover_duration_overflow_does_not_panic() {
+        let ics = "\
+BEGIN:VCALENDAR
+VERSION:2.0
+BEGIN:VEVENT
+UID:conf-overflow
+SUMMARY:Oversized Duration
+URL:https://example.com/overflow
+DTSTART:20260810
+DURATION:P200000000D
+END:VEVENT
+END:VCALENDAR
+";
+        let doc = make_doc(ics.as_bytes());
+        let source = make_source();
+        let stubs = IcsAdapter.discover(&doc, &source).expect("parse ok");
+        assert_eq!(stubs.len(), 1);
+        let dh = stubs[0].date_hint.as_ref().expect("date hint present");
+        assert!(dh.start.is_some(), "start must still be populated");
+        assert!(dh.end.is_none(), "overflow DURATION must leave end unset");
+    }
+
+    // BUG-4: a malformed feed with DTEND < DTSTART would previously set end
+    // before start, violating the start <= end invariant that interval_overlap
+    // and downstream rendering rely on. The parser must drop the bogus DTEND.
+    #[test]
+    fn discover_dtend_before_dtstart_is_dropped() {
+        let ics = "\
+BEGIN:VCALENDAR
+VERSION:2.0
+BEGIN:VEVENT
+UID:conf-inverted
+SUMMARY:Inverted Range
+URL:https://example.com/inverted
+DTSTART:20260810
+DTEND:20260805
+END:VEVENT
+END:VCALENDAR
+";
+        let doc = make_doc(ics.as_bytes());
+        let source = make_source();
+        let stubs = IcsAdapter.discover(&doc, &source).expect("parse ok");
+        assert_eq!(stubs.len(), 1);
+        let dh = stubs[0].date_hint.as_ref().expect("date hint present");
+        assert!(dh.start.is_some(), "start must still be populated");
+        assert!(
+            dh.end.is_none(),
+            "DTEND before DTSTART must be dropped, not stored inverted"
+        );
     }
 }

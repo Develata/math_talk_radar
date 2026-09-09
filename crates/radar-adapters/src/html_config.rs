@@ -7,15 +7,14 @@
 use radar_core::adapter::MAX_DISCOVERED_STUBS;
 use scraper::{ElementRef, Html, Node, Selector};
 
-use chrono::Datelike;
+use chrono::NaiveDate;
 
 use radar_core::config::HtmlSelectors;
-use radar_core::date::{DatePrecision, EventDate, parse_date, parse_date_with_year_hint};
+use radar_core::date::{DatePrecision, EventDate, parse_date, parse_date_with_reference};
 use radar_core::{
     AccessInfo, AdapterError, Event, EventCandidate, EventStatus, EventStub, FetchPlan,
     FetchedDocument, Location, OnlineAvailability, PersonHit, PersonRole, PublicAccess,
-    ScoreComponents, SourceAdapter, SourceEvidence, SourceSpec, Talk, TalkId, deterministic_id,
-    event_id,
+    SourceAdapter, SourceEvidence, SourceSpec, Talk, TalkId, deterministic_id,
 };
 
 use crate::helpers::{classify_access, detect_event_type, detect_media};
@@ -46,6 +45,7 @@ impl SourceAdapter for HtmlConfigAdapter {
             .transpose()?;
 
         let mut stubs = Vec::new();
+        let mut seen: std::collections::HashSet<url::Url> = std::collections::HashSet::new();
         for container in html.select(&list_selector) {
             for link in container.select(&link_selector) {
                 let href = match link.attr("href") {
@@ -56,6 +56,12 @@ impl SourceAdapter for HtmlConfigAdapter {
                     Ok(u) => u,
                     Err(_) => continue,
                 };
+                if !crate::helpers::is_http_url(&url) {
+                    continue;
+                }
+                if !seen.insert(url.clone()) {
+                    continue;
+                }
                 let title = match &title_selector {
                     Some(sel) => match first_text_in(&container, sel) {
                         Some(t) => t,
@@ -66,9 +72,9 @@ impl SourceAdapter for HtmlConfigAdapter {
                 if title.is_empty() {
                     continue;
                 }
-                let date_hint = date_selector
-                    .as_ref()
-                    .and_then(|sel| first_date_in(&container, sel, document.fetched_at.year()));
+                let date_hint = date_selector.as_ref().and_then(|sel| {
+                    first_date_in(&container, sel, document.fetched_at.date_naive())
+                });
                 stubs.push(EventStub {
                     title,
                     url,
@@ -180,31 +186,23 @@ impl SourceAdapter for HtmlConfigAdapter {
         let access = classify_access(&html);
 
         let event_type = detect_event_type(&title);
-        let id = event_id(&title, stub_url.as_str());
-        let enriched = Event {
-            id,
-            title,
-            url: Some(stub_url.clone()),
+        let enriched = crate::helpers::build_event_from_stub(
+            &title,
+            &stub_url,
+            &stub_source,
             event_type,
-            status: EventStatus::Unknown,
-            date: event_date,
+            EventStatus::Unknown,
+            event_date,
             location,
             description,
-            topics: Vec::new(),
             people,
             talks,
             media,
-            access: AccessInfo {
+            AccessInfo {
                 access,
                 online: OnlineAvailability::Unknown,
             },
-            sources: vec![stub_source],
-            score: 0.0,
-            score_components: ScoreComponents::default(),
-            rank_reasons: Vec::new(),
-            first_seen_at: None,
-            last_seen_at: None,
-        };
+        );
         Ok(EventCandidate {
             event: enriched,
             stub: event,
@@ -296,7 +294,11 @@ fn first_text_in(scope: &ElementRef, selector: &Selector) -> Option<String> {
     if text.is_empty() { None } else { Some(text) }
 }
 
-fn first_date_in(scope: &ElementRef, selector: &Selector, year_hint: i32) -> Option<EventDate> {
+fn first_date_in(
+    scope: &ElementRef,
+    selector: &Selector,
+    ref_date: NaiveDate,
+) -> Option<EventDate> {
     let element = scope.select(selector).next()?;
     if let Some(dt) = element.attr("datetime")
         && let Ok(d) = parse_date(dt)
@@ -306,7 +308,7 @@ fn first_date_in(scope: &ElementRef, selector: &Selector, year_hint: i32) -> Opt
     }
     let direct = crate::helpers::clean_text(&direct_text(&element));
     if !direct.is_empty()
-        && let Ok(d) = parse_date_with_year_hint(&direct, year_hint)
+        && let Ok(d) = parse_date_with_reference(&direct, ref_date)
         && d.precision != DatePrecision::Unknown
     {
         return Some(d);
@@ -315,7 +317,7 @@ fn first_date_in(scope: &ElementRef, selector: &Selector, year_hint: i32) -> Opt
     if text.is_empty() {
         return None;
     }
-    let d = parse_date_with_year_hint(&text, year_hint).ok()?;
+    let d = parse_date_with_reference(&text, ref_date).ok()?;
     (d.precision != DatePrecision::Unknown).then_some(d)
 }
 
@@ -375,33 +377,27 @@ fn speaker_hit(name: &str) -> PersonHit {
 }
 
 fn build_minimal_event(stub: &EventStub) -> Event {
-    Event {
-        id: event_id(&stub.title, stub.url.as_str()),
-        title: stub.title.clone(),
-        url: Some(stub.url.clone()),
-        event_type: detect_event_type(&stub.title),
-        status: EventStatus::Unknown,
-        date: stub
-            .date_hint
-            .clone()
-            .unwrap_or_else(|| parse_or_unknown("")),
-        location: None,
-        description: None,
-        topics: Vec::new(),
-        people: Vec::new(),
-        talks: Vec::new(),
-        media: Vec::new(),
-        access: AccessInfo {
+    let date = stub
+        .date_hint
+        .clone()
+        .unwrap_or_else(|| parse_or_unknown(""));
+    crate::helpers::build_event_from_stub(
+        &stub.title,
+        &stub.url,
+        &stub.source,
+        detect_event_type(&stub.title),
+        EventStatus::Unknown,
+        date,
+        None,
+        None,
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        AccessInfo {
             access: PublicAccess::Unknown,
             online: OnlineAvailability::Unknown,
         },
-        sources: vec![stub.source.clone()],
-        score: 0.0,
-        score_components: ScoreComponents::default(),
-        rank_reasons: Vec::new(),
-        first_seen_at: None,
-        last_seen_at: None,
-    }
+    )
 }
 
 #[cfg(test)]
@@ -549,6 +545,36 @@ mod tests {
             .expect("discover ok");
         assert_eq!(stubs.len(), 1);
         assert_eq!(stubs[0].title, "Real Talk");
+    }
+
+    // BUG-6: when the list selector matches nested elements (e.g. an outer
+    // wrapper and an inner container both carrying .event-list), the outer
+    // container's `select(a)` descends into the inner container's links too,
+    // emitting duplicate stubs for the same URL. The seen-URL guard must
+    // dedup them so each event appears once.
+    #[test]
+    fn discover_dedups_nested_containers() {
+        let html = r#"<html><body>
+          <div class="event-list">
+            <div class="event-list">
+              <a href="/e1">Talk One</a>
+              <a href="/e2">Talk Two</a>
+            </div>
+          </div>
+        </body></html>"#;
+        let document = make_doc("https://example.com/events", html);
+        let source = make_source("test", Some(test_selectors()));
+        let stubs = HtmlConfigAdapter
+            .discover(&document, &source)
+            .expect("discover ok");
+        let urls: Vec<&str> = stubs.iter().map(|s| s.url.as_str()).collect();
+        assert_eq!(
+            stubs.len(),
+            2,
+            "nested containers must not double-emit: {urls:?}"
+        );
+        assert!(urls.contains(&"https://example.com/e1"));
+        assert!(urls.contains(&"https://example.com/e2"));
     }
 
     #[test]

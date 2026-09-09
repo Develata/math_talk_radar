@@ -16,6 +16,9 @@ use url::Url;
 
 const CLAY_FEED: &str = include_str!("fixtures/sites/clay-list.xml");
 const IHES_FEED: &str = include_str!("fixtures/sites/ihes-list.xml");
+const IHES_MEDIA_FEED: &str = include_str!("fixtures/sites/ihes-media-list.xml");
+const INI_MEDIA_FEED: &str = include_str!("fixtures/sites/ini-media-list.xml");
+const FIELDS_MEDIA_FEED: &str = include_str!("fixtures/sites/fields-media-list.xml");
 const STANFORD_HTML: &str = include_str!("fixtures/sites/stanford-math-list.html");
 
 fn make_doc(body: &str, content_type: &str, url: &str) -> FetchedDocument {
@@ -41,6 +44,25 @@ fn make_source(id: &str, adapter: AdapterKind) -> SourceSpec {
         max_depth: 2,
         request_budget: 20,
         media_strategy: None,
+        dynamic: false,
+        enabled: true,
+        fixture: None,
+        selectors: None,
+    }
+}
+
+fn make_youtube_source(id: &str, entrypoint: &str) -> SourceSpec {
+    SourceSpec {
+        id: id.to_string(),
+        name: id.to_string(),
+        tier: SourceTier::A,
+        kind: SourceKind::MediaArchive,
+        adapter: AdapterKind::Rss,
+        entrypoint: Some(Url::parse(entrypoint).unwrap()),
+        allowed_hosts: vec!["www.youtube.com".to_string()],
+        max_depth: 1,
+        request_budget: 20,
+        media_strategy: Some("youtube_channel".to_string()),
         dynamic: false,
         enabled: true,
         fixture: None,
@@ -230,7 +252,7 @@ fn site_ams_calendar_html_config_discovers_real_events() {
         "ams-calendar",
         "tests/fixtures/sites/ams-calendar-list.html",
     );
-    assert_real_events("ams-calendar", &stubs, 90);
+    assert_real_events("ams-calendar", &stubs, 89);
     assert!(
         stubs
             .iter()
@@ -495,4 +517,421 @@ fn rss_enrich_extracts_vimeo_media_from_html_content() {
         "rss must extract video media from HTML content, got {:?}",
         candidate.event.media
     );
+}
+
+// ===========================================================================
+// R9-H03 / §45: detail-fixture enrich golden tests. Each enabled source has a
+// sanitized detail fixture; enrich must extract title/date/media from it.
+// For RSS the stub title is preserved and description/media come from the
+// detail page. For html_config the title/date come from the configured
+// selectors (detail_title, detail_date) and media from link heuristics.
+// ===========================================================================
+
+fn enrich_fixture_rss(
+    id: &str,
+    fixture_path: &str,
+    stub_title: &str,
+) -> radar_core::EventCandidate {
+    let body = std::fs::read_to_string(fixture_path)
+        .unwrap_or_else(|e| panic!("{id}: fixture {fixture_path}: {e}"));
+    let source = make_source(id, AdapterKind::Rss);
+    let entry = source
+        .entrypoint
+        .clone()
+        .unwrap_or_else(|| Url::parse("https://example.com/").unwrap());
+    let doc = make_doc(&body, "text/html", entry.as_str());
+    let s = stub(stub_title, "https://example.com/event/1", id);
+    RssAdapter
+        .enrich(s, std::slice::from_ref(&doc), &source)
+        .unwrap_or_else(|e| panic!("{id}: enrich must not error, got {e:?}"))
+}
+
+fn enrich_fixture_html(
+    id: &str,
+    fixture_path: &str,
+    stub_title: &str,
+) -> radar_core::EventCandidate {
+    let body = std::fs::read_to_string(fixture_path)
+        .unwrap_or_else(|e| panic!("{id}: fixture {fixture_path}: {e}"));
+    let source = source_from_embedded(id);
+    let url = source
+        .entrypoint
+        .as_ref()
+        .map(|u| u.as_str())
+        .unwrap_or("https://example.com/");
+    let doc = make_doc(&body, "text/html", url);
+    let s = stub(stub_title, "https://example.com/event/1", id);
+    HtmlConfigAdapter
+        .enrich(s, std::slice::from_ref(&doc), &source)
+        .unwrap_or_else(|e| panic!("{id}: enrich must not error, got {e:?}"))
+}
+
+fn assert_has_video(id: &str, candidate: &radar_core::EventCandidate) {
+    assert!(
+        candidate
+            .event
+            .media
+            .iter()
+            .any(|m| m.media_type == radar_core::MediaType::Video),
+        "{id}: enrich must extract video media from detail fixture, got {:?}",
+        candidate.event.media
+    );
+}
+
+fn assert_dated(id: &str, candidate: &radar_core::EventCandidate) {
+    assert!(
+        candidate.event.date.precision != DatePrecision::Unknown,
+        "{id}: enrich must extract a dated EventDate from detail fixture, got {:?}",
+        candidate.event.date
+    );
+}
+
+// --- RSS (2): stub title preserved, description + media from detail page ---
+
+#[test]
+fn site_clay_rss_enrich_extracts_detail() {
+    let c = enrich_fixture_rss(
+        "clay",
+        "tests/fixtures/sites/clay-detail.html",
+        "Claude Shannon's Information Theory and Its Legacy",
+    );
+    assert_eq!(
+        c.event.title, "Claude Shannon's Information Theory and Its Legacy",
+        "rss enrich preserves stub title"
+    );
+    assert!(
+        c.event.description.is_some(),
+        "clay: enrich must extract description from detail page"
+    );
+    assert_has_video("clay", &c);
+}
+
+#[test]
+fn site_ihes_rss_enrich_extracts_detail() {
+    let c = enrich_fixture_rss(
+        "ihes",
+        "tests/fixtures/sites/ihes-detail.html",
+        "On the Geometry of Moduli Spaces of Sheaves",
+    );
+    assert!(
+        c.event.description.is_some(),
+        "ihes: enrich must extract description from detail page"
+    );
+    assert_has_video("ihes", &c);
+}
+
+// --- html_config (11): title + date from configured selectors, media from links ---
+
+#[test]
+fn site_fields_html_config_enrich_extracts_detail() {
+    let c = enrich_fixture_html(
+        "fields",
+        "tests/fixtures/sites/fields-detail.html",
+        "stub title",
+    );
+    assert!(
+        c.event.title.contains("Complex Analysis"),
+        "fields: enrich must extract title from h1.title, got {:?}",
+        c.event.title
+    );
+    assert_dated("fields", &c);
+    assert_has_video("fields", &c);
+}
+
+#[test]
+fn site_ini_html_config_enrich_extracts_detail() {
+    let c = enrich_fixture_html(
+        "ini",
+        "tests/fixtures/sites/newton-detail.html",
+        "stub title",
+    );
+    assert!(
+        c.event.title.contains("Koopman"),
+        "ini: enrich must extract title from h1, got {:?}",
+        c.event.title
+    );
+    assert_dated("ini", &c);
+    assert_has_video("ini", &c);
+}
+
+#[test]
+fn site_hcm_html_config_enrich_extracts_detail() {
+    let c = enrich_fixture_html("hcm", "tests/fixtures/sites/hcm-detail.html", "stub title");
+    assert!(
+        c.event.title.contains("Floer"),
+        "hcm: enrich must extract title from h1, got {:?}",
+        c.event.title
+    );
+    assert_dated("hcm", &c);
+    assert_has_video("hcm", &c);
+}
+
+#[test]
+fn site_mpim_html_config_enrich_extracts_detail() {
+    let c = enrich_fixture_html(
+        "mpim",
+        "tests/fixtures/sites/mpim-detail.html",
+        "stub title",
+    );
+    assert!(
+        c.event.title.contains("L-functions"),
+        "mpim: enrich must extract title from h1, got {:?}",
+        c.event.title
+    );
+    assert_dated("mpim", &c);
+    assert_has_video("mpim", &c);
+}
+
+#[test]
+fn site_mit_math_html_config_enrich_extracts_detail() {
+    let c = enrich_fixture_html(
+        "mit-math",
+        "tests/fixtures/sites/mit-math-detail.html",
+        "stub title",
+    );
+    assert!(
+        c.event.title.contains("Gross-Zagier"),
+        "mit-math: enrich must extract title from h1, got {:?}",
+        c.event.title
+    );
+    assert_dated("mit-math", &c);
+    assert_has_video("mit-math", &c);
+}
+
+#[test]
+fn site_princeton_math_html_config_enrich_extracts_detail() {
+    let c = enrich_fixture_html(
+        "princeton-math",
+        "tests/fixtures/sites/princeton-math-detail.html",
+        "stub title",
+    );
+    assert!(
+        c.event.title.contains("Positive Mass"),
+        "princeton-math: enrich must extract title from h1, got {:?}",
+        c.event.title
+    );
+    assert_dated("princeton-math", &c);
+    assert_has_video("princeton-math", &c);
+}
+
+#[test]
+fn site_oxford_math_html_config_enrich_extracts_detail() {
+    let c = enrich_fixture_html(
+        "oxford-math",
+        "tests/fixtures/sites/oxford-math-detail.html",
+        "stub title",
+    );
+    assert!(
+        c.event.title.contains("Sarah Hart"),
+        "oxford-math: enrich must extract title from h1, got {:?}",
+        c.event.title
+    );
+    assert_dated("oxford-math", &c);
+    assert_has_video("oxford-math", &c);
+}
+
+#[test]
+fn site_cambridge_dpmms_html_config_enrich_extracts_detail() {
+    let c = enrich_fixture_html(
+        "cambridge-dpmms",
+        "tests/fixtures/sites/cambridge-dpmms-detail.html",
+        "stub title",
+    );
+    assert!(
+        c.event.title.contains("Statistics Clinic"),
+        "cambridge-dpmms: enrich must extract title from h1, got {:?}",
+        c.event.title
+    );
+    assert_dated("cambridge-dpmms", &c);
+    assert_has_video("cambridge-dpmms", &c);
+}
+
+#[test]
+fn site_eth_math_html_config_enrich_extracts_detail() {
+    let c = enrich_fixture_html(
+        "eth-math",
+        "tests/fixtures/sites/eth-math-detail.html",
+        "stub title",
+    );
+    assert!(
+        c.event.title.contains("Algebraic Geometry"),
+        "eth-math: enrich must extract title from h1, got {:?}",
+        c.event.title
+    );
+    assert_dated("eth-math", &c);
+    assert_has_video("eth-math", &c);
+}
+
+#[test]
+fn site_ams_calendar_html_config_enrich_extracts_detail() {
+    let c = enrich_fixture_html(
+        "ams-calendar",
+        "tests/fixtures/sites/ams-calendar-detail.html",
+        "stub title",
+    );
+    assert!(
+        c.event.title.contains("Algebraic Topology"),
+        "ams-calendar: enrich must extract title from h1, got {:?}",
+        c.event.title
+    );
+    assert_dated("ams-calendar", &c);
+    assert_has_video("ams-calendar", &c);
+}
+
+#[test]
+fn site_icm_html_config_enrich_extracts_detail() {
+    let c = enrich_fixture_html("icm", "tests/fixtures/sites/icm-detail.html", "stub title");
+    assert!(
+        c.event.title.contains("Hilbert"),
+        "icm: enrich must extract title from h1, got {:?}",
+        c.event.title
+    );
+    assert_dated("icm", &c);
+    assert_has_video("icm", &c);
+}
+
+// ===========================================================================
+// §20 Media Plane: YouTube channel RSS golden tests (§18 coverage baseline).
+// Each channel's RSS (Atom 1.0 with media extensions) must discover video
+// stubs, and enrich_youtube must build an Event with a Video MediaResource
+// (platform = "youtube", public_access = Open, online = RecordingAvailable).
+// No detail-page fetch occurs — plan_enrichment returns empty for
+// youtube_channel strategy.
+// ===========================================================================
+
+fn discover_youtube_stubs(feed: &str, source: &SourceSpec) -> Vec<EventStub> {
+    let doc = make_doc(
+        feed,
+        "application/atom+xml",
+        source.entrypoint.as_ref().unwrap().as_str(),
+    );
+    RssAdapter
+        .discover(&doc, source)
+        .unwrap_or_else(|e| panic!("{}: YouTube RSS must parse, got {e:?}", source.id))
+}
+
+fn enrich_youtube_first_stub(feed: &str, source: &SourceSpec) -> radar_core::EventCandidate {
+    let stubs = discover_youtube_stubs(feed, source);
+    let stub = stubs
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| panic!("{}: YouTube feed must yield ≥1 stub", source.id));
+    RssAdapter
+        .enrich(stub, &[], source)
+        .unwrap_or_else(|e| panic!("{}: enrich_youtube must not error, got {e:?}", source.id))
+}
+
+fn assert_youtube_media(id: &str, candidate: &radar_core::EventCandidate) {
+    assert!(
+        candidate.event.media.iter().any(|m| {
+            m.media_type == radar_core::MediaType::Video
+                && m.platform.as_deref() == Some("youtube")
+                && m.public_access == radar_core::PublicAccess::Open
+        }),
+        "{id}: enrich must produce an Open YouTube Video MediaResource, got {:?}",
+        candidate.event.media
+    );
+    assert_eq!(
+        candidate.event.access.online,
+        radar_core::OnlineAvailability::RecordingAvailable,
+        "{id}: YouTube event must have online = RecordingAvailable"
+    );
+    assert_eq!(
+        candidate.event.access.access,
+        radar_core::PublicAccess::Open,
+        "{id}: YouTube event must have access = Open"
+    );
+}
+
+#[test]
+fn site_ihes_media_youtube_discovers_videos() {
+    let source = make_youtube_source(
+        "ihes-media",
+        "https://www.youtube.com/feeds/videos.xml?channel_id=UC4R1IsRVKs_qlWKTm9pT82Q",
+    );
+    let stubs = discover_youtube_stubs(IHES_MEDIA_FEED, &source);
+    assert!(
+        stubs.len() >= 3,
+        "ihes-media: expected >=3 stubs, got {}",
+        stubs.len()
+    );
+    assert!(
+        stubs.iter().all(|s| s
+            .url
+            .as_str()
+            .starts_with("https://www.youtube.com/watch?v=")),
+        "ihes-media: all stub URLs must be YouTube watch URLs"
+    );
+}
+
+#[test]
+fn site_ihes_media_youtube_enrich_extracts_media() {
+    let source = make_youtube_source(
+        "ihes-media",
+        "https://www.youtube.com/feeds/videos.xml?channel_id=UC4R1IsRVKs_qlWKTm9pT82Q",
+    );
+    let c = enrich_youtube_first_stub(IHES_MEDIA_FEED, &source);
+    assert_youtube_media("ihes-media", &c);
+}
+
+#[test]
+fn site_ini_media_youtube_discovers_videos() {
+    let source = make_youtube_source(
+        "ini-media",
+        "https://www.youtube.com/feeds/videos.xml?channel_id=UCrIzp-iUXd7YL4PacS2Qt4A",
+    );
+    let stubs = discover_youtube_stubs(INI_MEDIA_FEED, &source);
+    assert!(
+        stubs.len() >= 3,
+        "ini-media: expected >=3 stubs, got {}",
+        stubs.len()
+    );
+    assert!(
+        stubs.iter().all(|s| s
+            .url
+            .as_str()
+            .starts_with("https://www.youtube.com/watch?v=")),
+        "ini-media: all stub URLs must be YouTube watch URLs"
+    );
+}
+
+#[test]
+fn site_ini_media_youtube_enrich_extracts_media() {
+    let source = make_youtube_source(
+        "ini-media",
+        "https://www.youtube.com/feeds/videos.xml?channel_id=UCrIzp-iUXd7YL4PacS2Qt4A",
+    );
+    let c = enrich_youtube_first_stub(INI_MEDIA_FEED, &source);
+    assert_youtube_media("ini-media", &c);
+}
+
+#[test]
+fn site_fields_media_youtube_discovers_videos() {
+    let source = make_youtube_source(
+        "fields-media",
+        "https://www.youtube.com/feeds/videos.xml?channel_id=UCSzx-qTK2639JBWgrb6mTmw",
+    );
+    let stubs = discover_youtube_stubs(FIELDS_MEDIA_FEED, &source);
+    assert!(
+        stubs.len() >= 3,
+        "fields-media: expected >=3 stubs, got {}",
+        stubs.len()
+    );
+    assert!(
+        stubs.iter().all(|s| s
+            .url
+            .as_str()
+            .starts_with("https://www.youtube.com/watch?v=")),
+        "fields-media: all stub URLs must be YouTube watch URLs"
+    );
+}
+
+#[test]
+fn site_fields_media_youtube_enrich_extracts_media() {
+    let source = make_youtube_source(
+        "fields-media",
+        "https://www.youtube.com/feeds/videos.xml?channel_id=UCSzx-qTK2639JBWgrb6mTmw",
+    );
+    let c = enrich_youtube_first_stub(FIELDS_MEDIA_FEED, &source);
+    assert_youtube_media("fields-media", &c);
 }

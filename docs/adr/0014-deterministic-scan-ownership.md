@@ -1,6 +1,7 @@
-# ADR-0011 — Deterministic identity, crawl accounting, and scan authority
+# ADR-0014 — Deterministic identity, crawl accounting, and scan authority
 
-- Status: Accepted for implementation
+- Status: Accepted for implementation; absence/cancellation policy in decision 5
+  superseded by ADR-0016 after explicit user confirmation on 2026-09-09
 - Date: 2026-09-09
 - Authorization: current user engineering-optimization request, priorities P0–P2
 - Scope: correction of ranking-dependent identity and incomplete-scan deletion;

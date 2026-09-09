@@ -1,4 +1,4 @@
-# ADR-0012 — Evidence-bound acceptance and dependency-aware CI
+# ADR-0015 — Evidence-bound acceptance and dependency-aware CI
 
 - Status: Accepted for implementation
 - Date: 2026-09-09

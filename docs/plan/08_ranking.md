@@ -35,6 +35,6 @@ Ranking cases ≥ 20 in the golden dataset.
 - RANK-002 — recording score (golden).
 - RANK-003 — title-only scholar no boost (golden).
 
-Ranking is presentation policy (ADR-0011). It runs once, after deduplication and
+Ranking is presentation policy (ADR-0014). It runs once, after deduplication and
 state evidence reconciliation, before output sorting/filtering. Interest changes
 cannot select representatives, alter persistent identity, or decide cancellation.

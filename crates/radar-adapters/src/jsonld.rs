@@ -10,10 +10,9 @@
 use radar_core::adapter::MAX_DISCOVERED_STUBS;
 use radar_core::date::parse_date;
 use radar_core::{
-    AccessInfo, AdapterError, Event, EventCandidate, EventDate, EventStatus, EventStub, FetchPlan,
+    AccessInfo, AdapterError, EventCandidate, EventDate, EventStatus, EventStub, FetchPlan,
     FetchedDocument, Location, OnlineAvailability, PersonHit, PersonRole, PublicAccess,
-    ScoreComponents, SourceAdapter, SourceEvidence, SourceSpec, Talk, TalkId, deterministic_id,
-    event_id,
+    SourceAdapter, SourceEvidence, SourceSpec, Talk, TalkId, deterministic_id,
 };
 use scraper::Html;
 use url::Url;
@@ -39,31 +38,34 @@ impl SourceAdapter for JsonLdAdapter {
                     .and_then(|v| v.as_str())
                     .unwrap_or("Untitled")
                     .to_string();
+                let raw_at_id = ev
+                    .get("@id")
+                    .and_then(|v| v.as_str())
+                    .filter(|value| !value.trim().is_empty());
                 let url = ev
                     .get("url")
                     .and_then(|v| v.as_str())
-                    .and_then(|s| Url::parse(s).ok())
+                    .and_then(|value| resolve_jsonld_locator(&document.final_url, value))
                     .or_else(|| {
-                        ev.get("@id")
-                            .and_then(|v| v.as_str())
-                            .and_then(|s| Url::parse(s).ok())
+                        raw_at_id
+                            .filter(|value| !value.trim_start().starts_with('#'))
+                            .and_then(|value| resolve_jsonld_locator(&document.final_url, value))
                     })
                     .unwrap_or_else(|| {
                         // ADAP-12: query param (not fragment) so canonicalize_url
                         // preserves it, keeping each unnamed event's id distinct.
                         // ADAP-16: counter is global across all JSON-LD blocks so
                         // unnamed events in different blocks get distinct ids.
-                        // H04: base the synthetic URL on final_url (post-redirect)
-                        // so the mtr-eid query param attaches to the real origin.
+                        // Fragment-only @id values deliberately stay native_id
+                        // metadata instead of becoming the Event URL: EventId
+                        // canonicalization strips fragments, which would collapse
+                        // multiple #fragment identities on one document.
                         let mut u = document.final_url.clone();
                         u.query_pairs_mut()
                             .append_pair("mtr-eid", &global_idx.to_string());
                         u
                     });
-                let date_hint = ev
-                    .get("startDate")
-                    .and_then(|v| v.as_str())
-                    .map(|s| parse_date(s).unwrap_or_else(|_| EventDate::unknown(s.to_string())));
+                let date_hint = parse_jsonld_date_range(ev);
                 stubs.push(EventStub {
                     title,
                     url,
@@ -73,7 +75,11 @@ impl SourceAdapter for JsonLdAdapter {
                         source_url: document.final_url.clone(),
                         evidence: None,
                         captured_at: Some(document.fetched_at),
-                        native_id: None,
+                        // schema.org @id is the structured native identity. Keep
+                        // the original surface form so fragment-only identifiers
+                        // remain distinguishable even though they are not used as
+                        // canonical Event URLs.
+                        native_id: raw_at_id.map(ToOwned::to_owned),
                     },
                 });
                 if stubs.len() == MAX_DISCOVERED_STUBS {
@@ -86,13 +92,11 @@ impl SourceAdapter for JsonLdAdapter {
     }
 
     fn plan_enrichment(&self, event: &EventStub, _source: &SourceSpec) -> Vec<FetchPlan> {
-        // When a JSON-LD Event had no `url`, `discover` synthesized the stub's
-        // url from the listing page (`document.final_url`) with a synthetic
-        // `mtr-eid` query param to keep distinct unnamed events from collapsing
-        // to one `event_id`. Re-fetching that same listing page once per
-        // url-less stub would burn the request budget N times for data already
-        // obtained during discover. Emit no fetch; `enrich` then builds a
-        // minimal event from the stub fields (title, date_hint).
+        // When a JSON-LD Event had no usable `url`, `discover` synthesized the
+        // stub's url from the listing page (`document.final_url`) with a
+        // synthetic `mtr-eid` query param. Re-fetching that same listing page
+        // once per synthetic stub would burn the request budget N times for data
+        // already obtained during discover.
         if urls_match_ignoring_mtr_eid(&event.url, &event.source.source_url) {
             return Vec::new();
         }
@@ -118,59 +122,81 @@ impl SourceAdapter for JsonLdAdapter {
             let html = crate::helpers::doc_body(&doc.body);
             let document = scraper::Html::parse_document(&html);
             access = helpers::classify_access(&document);
-            for block in extract_jsonld_blocks(&html) {
-                for ev in find_events(&block).into_iter().flatten() {
-                    if !event_matches_stub(ev, &stub) {
-                        continue;
+
+            // R9-H05: collect ALL event nodes first, classify each by match
+            // kind, then resolve to an unambiguous set. Identity comparison
+            // resolves relative url/@id against the detail page's final URL and
+            // also honors SourceEvidence.native_id for fragment-only @id values.
+            let blocks = extract_jsonld_blocks(&html);
+            let all_events: Vec<&serde_json::Value> = blocks
+                .iter()
+                .flat_map(|block| find_events(block).into_iter().flatten())
+                .collect();
+            let mut identity_matches = Vec::new();
+            let mut name_matches = Vec::new();
+            for ev in all_events {
+                match classify_match(ev, &stub, &doc.final_url) {
+                    MatchKind::Identity => identity_matches.push(ev),
+                    MatchKind::Name => name_matches.push(ev),
+                    MatchKind::None => {}
+                }
+            }
+            let resolved: Vec<&serde_json::Value> = if !identity_matches.is_empty() {
+                identity_matches
+            } else if name_matches.len() == 1 {
+                name_matches
+            } else {
+                Vec::new()
+            };
+
+            for ev in resolved {
+                if description.is_none() {
+                    description = ev
+                        .get("description")
+                        .and_then(|v| v.as_str())
+                        .map(helpers::strip_html_to_text);
+                }
+                if location.is_none() {
+                    location = ev.get("location").and_then(extract_location);
+                }
+                let talk_source = SourceEvidence {
+                    source_id: source.id.clone(),
+                    source_url: doc.final_url.clone(),
+                    evidence: None,
+                    captured_at: Some(doc.fetched_at),
+                    native_id: None,
+                };
+                // TALK-001: performer → one Talk with all performers as
+                // co-speakers (schema.org co-presenters).
+                if let Some(performers) = ev.get("performer") {
+                    let names = extract_person_names(performers);
+                    if !names.is_empty() {
+                        talks.push(make_talk(
+                            &stub.title,
+                            &names,
+                            talk_source.clone(),
+                            "jsonld:performer",
+                        ));
                     }
-                    if description.is_none() {
-                        description = ev
-                            .get("description")
+                }
+                // TALK-001: subEvent → one Talk per sub-event, speakers from
+                // its own performer field (schema.org conference→talk model).
+                if let Some(sub_events) = ev.get("subEvent") {
+                    for sub_ev in iter_subevents(sub_events) {
+                        let sub_title = sub_ev
+                            .get("name")
                             .and_then(|v| v.as_str())
-                            .map(helpers::strip_html_to_text);
-                    }
-                    if location.is_none() {
-                        location = ev.get("location").and_then(extract_location);
-                    }
-                    let talk_source = SourceEvidence {
-                        source_id: source.id.clone(),
-                        source_url: doc.final_url.clone(),
-                        evidence: None,
-                        captured_at: Some(doc.fetched_at),
-                        native_id: None,
-                    };
-                    // TALK-001: performer → one Talk with all performers as
-                    // co-speakers (schema.org co-presenters).
-                    if let Some(performers) = ev.get("performer") {
-                        let names = extract_person_names(performers);
-                        if !names.is_empty() {
-                            talks.push(make_talk(
-                                &stub.title,
-                                &names,
-                                talk_source.clone(),
-                                "jsonld:performer",
-                            ));
-                        }
-                    }
-                    // TALK-001: subEvent → one Talk per sub-event, speakers from
-                    // its own performer field (schema.org conference→talk model).
-                    if let Some(sub_events) = ev.get("subEvent") {
-                        for sub_ev in iter_subevents(sub_events) {
-                            let sub_title = sub_ev
-                                .get("name")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or(&stub.title)
-                                .to_string();
-                            if let Some(performers) = sub_ev.get("performer") {
-                                let names = extract_person_names(performers);
-                                if !names.is_empty() {
-                                    talks.push(make_talk(
-                                        &sub_title,
-                                        &names,
-                                        talk_source.clone(),
-                                        "jsonld:subEvent:performer",
-                                    ));
-                                }
+                            .unwrap_or(&stub.title)
+                            .to_string();
+                        if let Some(performers) = sub_ev.get("performer") {
+                            let names = extract_person_names(performers);
+                            if !names.is_empty() {
+                                talks.push(make_talk(
+                                    &sub_title,
+                                    &names,
+                                    talk_source.clone(),
+                                    "jsonld:subEvent:performer",
+                                ));
                             }
                         }
                     }
@@ -183,36 +209,62 @@ impl SourceAdapter for JsonLdAdapter {
             .clone()
             .unwrap_or_else(|| EventDate::unknown(String::new()));
 
-        let event = Event {
-            id: event_id(&stub.title, stub.url.as_str()),
-            title: stub.title.clone(),
-            url: Some(stub.url.clone()),
-            event_type: helpers::detect_event_type(&stub.title),
-            status: EventStatus::Unknown,
+        let event = helpers::build_event_from_stub(
+            &stub.title,
+            &stub.url,
+            &stub.source,
+            helpers::detect_event_type(&stub.title),
+            EventStatus::Unknown,
             date,
             location,
             description,
-            topics: Vec::new(),
-            people: Vec::new(),
+            Vec::new(),
             talks,
-            media: Vec::new(),
-            access: AccessInfo {
+            Vec::new(),
+            AccessInfo {
                 access,
                 online: OnlineAvailability::Unknown,
             },
-            sources: vec![stub.source.clone()],
-            score: 0.0,
-            score_components: ScoreComponents::default(),
-            rank_reasons: Vec::new(),
-            first_seen_at: None,
-            last_seen_at: None,
-        };
+        );
 
         Ok(EventCandidate { event, stub })
     }
 }
 
 // --- helpers ----------------------------------------------------------------
+
+/// Resolve a schema.org URL-valued field against the post-redirect document
+/// URL. `Url::join` also accepts absolute URLs, giving one path for both forms.
+/// Fragment-only locators are not returned because EventId canonicalization
+/// strips fragments; they remain available through `native_id` instead.
+fn resolve_jsonld_locator(base: &Url, value: &str) -> Option<Url> {
+    let value = value.trim();
+    if value.is_empty() || value.starts_with('#') {
+        return None;
+    }
+    base.join(value).ok().filter(crate::helpers::is_http_url)
+}
+
+/// Parse schema.org startDate/endDate into the project's inclusive EventDate.
+/// A malformed or inverted endDate is ignored rather than corrupting the date
+/// invariant; an unparseable startDate retains its original text as Unknown.
+fn parse_jsonld_date_range(ev: &serde_json::Value) -> Option<EventDate> {
+    let start_text = ev.get("startDate").and_then(|v| v.as_str())?;
+    let mut date =
+        parse_date(start_text).unwrap_or_else(|_| EventDate::unknown(start_text.to_string()));
+    let Some(start) = date.start_date() else {
+        return Some(date);
+    };
+    if let Some(end_text) = ev.get("endDate").and_then(|v| v.as_str())
+        && let Ok(end_date) = parse_date(end_text)
+        && end_date.start_date().is_some_and(|end| end >= start)
+        && let Some(end) = end_date.start
+    {
+        date.end = Some(end);
+        date.original_text = format!("{start_text}/{end_text}");
+    }
+    Some(date)
+}
 
 /// Compare two URLs ignoring only the synthetic `mtr-eid` query param that
 /// `discover` adds to url-less JSON-LD events (ADAP-12).
@@ -235,36 +287,54 @@ fn urls_match_ignoring_mtr_eid(a: &Url, b: &Url) -> bool {
     strip(a) == strip(b)
 }
 
-/// ADAP-21: match a JSON-LD event node to a stub by url/@id OR name.
-/// H05: url/@id is checked FIRST — it is a stable identity signal. Title
-/// alone is fragile: a detail page listing multiple events with the same
-/// name (e.g. a series of "Seminar" talks) would let the first matching
-/// node claim every same-named stub, contaminating description/location
-/// enrichment across distinct events. Identity-based matching wins when
-/// available; name is the fallback.
-fn event_matches_stub(ev: &serde_json::Value, stub: &EventStub) -> bool {
-    let ev_url = ev
+/// ADAP-21 + R9-H05: classify how a JSON-LD event node matches a stub.
+/// `Identity` = resolved url/@id equals the stub URL, or raw @id equals the
+/// stub's structured native_id. `Name` is allowed only if the node carries no
+/// URL/native identity at all. Otherwise an unmatched identity returns None so
+/// same-named events cannot cross-contaminate each other.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MatchKind {
+    Identity,
+    Name,
+    None,
+}
+
+fn classify_match(ev: &serde_json::Value, stub: &EventStub, base: &Url) -> MatchKind {
+    let raw_url = ev
         .get("url")
         .and_then(|v| v.as_str())
-        .and_then(|s| Url::parse(s).ok());
-    if ev_url.as_ref().is_some_and(|u| u == &stub.url) {
-        return true;
-    }
-    let ev_id = ev
+        .filter(|value| !value.trim().is_empty());
+    let raw_id = ev
         .get("@id")
         .and_then(|v| v.as_str())
-        .and_then(|s| Url::parse(s).ok());
-    if ev_id.as_ref().is_some_and(|u| u == &stub.url) {
-        return true;
+        .filter(|value| !value.trim().is_empty());
+
+    if raw_url
+        .and_then(|value| resolve_jsonld_locator(base, value))
+        .as_ref()
+        .is_some_and(|url| url == &stub.url)
+    {
+        return MatchKind::Identity;
     }
-    // R9-H05: when the event carries a parseable url or @id that did NOT
-    // match the stub, falling back to name would cross-contaminate
-    // same-named events on the same page. Name fallback is safe only when
-    // the event has no parseable url/@id at all.
-    if ev_url.is_some() || ev_id.is_some() {
-        return false;
+    if raw_id.is_some_and(|id| stub.source.native_id.as_deref() == Some(id)) {
+        return MatchKind::Identity;
     }
-    ev.get("name").and_then(|v| v.as_str()) == Some(&stub.title)
+    if raw_id
+        .and_then(|value| resolve_jsonld_locator(base, value))
+        .as_ref()
+        .is_some_and(|url| url == &stub.url)
+    {
+        return MatchKind::Identity;
+    }
+
+    if raw_url.is_some() || raw_id.is_some() {
+        return MatchKind::None;
+    }
+    if ev.get("name").and_then(|v| v.as_str()) == Some(&stub.title) {
+        MatchKind::Name
+    } else {
+        MatchKind::None
+    }
 }
 
 /// Parse every `<script type="application/ld+json">` block in `html` into a
@@ -287,8 +357,9 @@ fn extract_jsonld_blocks(html: &str) -> Vec<serde_json::Value> {
         .collect()
 }
 
-/// Recursively collect references to JSON nodes whose `@type` contains `Event`.
-/// Handles a single Event object, an array of nodes, and `@graph` containers.
+/// Recursively collect references to JSON nodes whose `@type` is Event or a
+/// schema.org Event subtype. Handles a single Event object, an array of nodes,
+/// and `@graph` containers.
 fn find_events(value: &serde_json::Value) -> Option<Vec<&serde_json::Value>> {
     if is_event_type(value) {
         return Some(vec![value]);
@@ -311,11 +382,10 @@ fn is_event_type(value: &serde_json::Value) -> bool {
     let Some(t) = value.get("@type") else {
         return false;
     };
+    let matches = |s: &str| s == "Event" || s.ends_with("Event");
     match t {
-        serde_json::Value::String(s) => s.contains("Event"),
-        serde_json::Value::Array(arr) => arr
-            .iter()
-            .any(|v| v.as_str().is_some_and(|s| s.contains("Event"))),
+        serde_json::Value::String(s) => matches(s),
+        serde_json::Value::Array(arr) => arr.iter().any(|v| v.as_str().is_some_and(matches)),
         _ => false,
     }
 }
@@ -394,7 +464,8 @@ fn make_talk(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use radar_core::{AdapterKind, SourceKind, SourceTier};
+    use radar_core::event_id;
+    use radar_core::{AdapterKind, DateTimeOrDate, SourceKind, SourceTier};
 
     fn make_spec() -> SourceSpec {
         SourceSpec {
@@ -422,8 +493,6 @@ mod tests {
             status: 200,
             content_type: Some("text/html".into()),
             body: html.as_bytes().to_vec(),
-            // chrono is not a direct dependency of radar-adapters; rely on the
-            // `From<SystemTime> for DateTime<Utc>` impl exposed transitively.
             fetched_at: std::time::SystemTime::now().into(),
         }
     }
@@ -453,6 +522,69 @@ mod tests {
     }
 
     #[test]
+    fn discover_resolves_relative_url() {
+        let html = r#"<script type="application/ld+json">
+            {"@type":"Event","name":"Relative","url":"events/relative","startDate":"2026-08-01"}
+        </script>"#;
+        let doc = make_doc(html);
+        let stubs = JsonLdAdapter.discover(&doc, &make_spec()).unwrap();
+        assert_eq!(stubs.len(), 1);
+        assert_eq!(stubs[0].url.as_str(), "https://example.com/events/relative");
+    }
+
+    #[test]
+    fn discover_resolves_relative_at_id_and_preserves_native_id() {
+        let html = r#"<script type="application/ld+json">
+            {"@type":"Event","name":"Relative ID","@id":"events/id-1"}
+        </script>"#;
+        let doc = make_doc(html);
+        let stubs = JsonLdAdapter.discover(&doc, &make_spec()).unwrap();
+        assert_eq!(stubs.len(), 1);
+        assert_eq!(stubs[0].url.as_str(), "https://example.com/events/id-1");
+        assert_eq!(stubs[0].source.native_id.as_deref(), Some("events/id-1"));
+    }
+
+    #[test]
+    fn discover_fragment_at_id_uses_synthetic_url_but_keeps_native_id() {
+        let html = r##"<script type="application/ld+json">[
+            {"@type":"Event","name":"Same","@id":"#event-a"},
+            {"@type":"Event","name":"Same","@id":"#event-b"}
+        ]</script>"##;
+        let doc = make_doc(html);
+        let stubs = JsonLdAdapter.discover(&doc, &make_spec()).unwrap();
+        assert_eq!(stubs.len(), 2);
+        assert_ne!(stubs[0].url, stubs[1].url);
+        assert_eq!(stubs[0].source.native_id.as_deref(), Some("#event-a"));
+        assert_eq!(stubs[1].source.native_id.as_deref(), Some("#event-b"));
+        assert_ne!(
+            event_id(&stubs[0].title, stubs[0].url.as_str()),
+            event_id(&stubs[1].title, stubs[1].url.as_str())
+        );
+    }
+
+    #[test]
+    fn discover_end_date_populates_inclusive_end() {
+        let html = r#"<script type="application/ld+json">
+            {"@type":"Event","name":"Range","url":"/range",
+             "startDate":"2026-08-01","endDate":"2026-08-05"}
+        </script>"#;
+        let doc = make_doc(html);
+        let stubs = JsonLdAdapter.discover(&doc, &make_spec()).unwrap();
+        let date = stubs[0].date_hint.as_ref().expect("date hint");
+        assert_eq!(
+            date.start_date(),
+            chrono::NaiveDate::from_ymd_opt(2026, 8, 1)
+        );
+        assert_eq!(
+            date.end.as_ref().map(|end| match end {
+                DateTimeOrDate::Date(value) => *value,
+                DateTimeOrDate::DateTime(value) => value.date_naive(),
+            }),
+            chrono::NaiveDate::from_ymd_opt(2026, 8, 5)
+        );
+    }
+
+    #[test]
     fn discover_unnamed_events_get_distinct_ids() {
         let html = r#"<script type="application/ld+json">[
             {"@type":"Event","startDate":"2026-08-01"},
@@ -464,14 +596,10 @@ mod tests {
         assert_eq!(stubs.len(), 2);
         assert_eq!(stubs[0].title, "Untitled");
         assert_eq!(stubs[1].title, "Untitled");
-        assert_ne!(
-            stubs[0].url, stubs[1].url,
-            "unnamed events on the same listing page must get distinct synthetic urls"
-        );
+        assert_ne!(stubs[0].url, stubs[1].url);
         assert_ne!(
             event_id(&stubs[0].title, stubs[0].url.as_str()),
-            event_id(&stubs[1].title, stubs[1].url.as_str()),
-            "unnamed events must produce distinct event_ids"
+            event_id(&stubs[1].title, stubs[1].url.as_str())
         );
     }
 
@@ -485,12 +613,12 @@ mod tests {
         let stubs = JsonLdAdapter.discover(&doc, &spec).unwrap();
         assert_eq!(stubs.len(), 1);
         assert_eq!(stubs[0].url.as_str(), "https://example.com/event/x");
+        assert_eq!(
+            stubs[0].source.native_id.as_deref(),
+            Some("https://example.com/event/x")
+        );
     }
 
-    // ADAP-16: the per-block enumerate index used to reset to 0 for each
-    // JSON-LD block, so two unnamed events in separate blocks both got
-    // mtr-eid=0 → same event_id → second event silently lost. The counter
-    // must be global across all blocks.
     #[test]
     fn discover_unnamed_events_across_blocks_get_distinct_ids() {
         let html = r#"<script type="application/ld+json">
@@ -503,14 +631,10 @@ mod tests {
         let spec = make_spec();
         let stubs = JsonLdAdapter.discover(&doc, &spec).unwrap();
         assert_eq!(stubs.len(), 2);
-        assert_ne!(
-            stubs[0].url, stubs[1].url,
-            "unnamed events in separate blocks must get distinct synthetic urls"
-        );
+        assert_ne!(stubs[0].url, stubs[1].url);
         assert_ne!(
             event_id(&stubs[0].title, stubs[0].url.as_str()),
-            event_id(&stubs[1].title, stubs[1].url.as_str()),
-            "unnamed events in separate blocks must get distinct event_ids"
+            event_id(&stubs[1].title, stubs[1].url.as_str())
         );
     }
 
@@ -647,15 +771,11 @@ mod tests {
         assert_eq!(candidate.event.location.as_ref().unwrap().name, "Berlin");
     }
 
-    // ADAP-21: enrich must match by url or @id, not just by name. A detail
-    // page may use a slightly different title than the listing feed; matching
-    // only on name would lose the performer/description enrichment.
     #[test]
-    fn enrich_matches_by_url_when_name_differs() {
+    fn enrich_matches_relative_url_when_name_differs() {
         let html = r#"<script type="application/ld+json">
-        {"@type":"Event","name":"Slightly Different Title","url":"https://example.com/a",
-         "performer":{"name":"Prof. X"},
-         "description":"Real description"}
+        {"@type":"Event","name":"Slightly Different Title","url":"/a",
+         "performer":{"name":"Prof. X"},"description":"Real description"}
         </script>"#;
         let doc = make_doc(html);
         let spec = make_spec();
@@ -676,10 +796,38 @@ mod tests {
             .unwrap();
         assert_eq!(
             candidate.event.description.as_deref(),
-            Some("Real description"),
-            "enrich must match by url even when the JSON-LD event name differs from the stub title"
+            Some("Real description")
         );
         assert!(!candidate.event.talks.is_empty());
+    }
+
+    #[test]
+    fn enrich_matches_fragment_at_id_by_native_id() {
+        let html = r##"<script type="application/ld+json">
+        {"@type":"Event","name":"Different Title","@id":"#event-a",
+         "description":"Fragment identity description"}
+        </script>"##;
+        let doc = make_doc(html);
+        let spec = make_spec();
+        let stub = EventStub {
+            title: "Original".to_string(),
+            url: Url::parse("https://example.com/page?mtr-eid=0").unwrap(),
+            date_hint: None,
+            source: SourceEvidence {
+                source_id: "test-jsonld".to_string(),
+                source_url: Url::parse("https://example.com/page").unwrap(),
+                evidence: None,
+                captured_at: None,
+                native_id: Some("#event-a".into()),
+            },
+        };
+        let candidate = JsonLdAdapter
+            .enrich(stub, std::slice::from_ref(&doc), &spec)
+            .unwrap();
+        assert_eq!(
+            candidate.event.description.as_deref(),
+            Some("Fragment identity description")
+        );
     }
 
     #[test]
@@ -705,11 +853,6 @@ mod tests {
         assert_eq!(candidate.event.sources.len(), 1);
     }
 
-    // R9-H05: two same-named events on one page must not cross-contaminate.
-    // Before the fix, event_matches_stub checked name first, so the first
-    // JSON-LD node matched every same-named stub — enriching stub B with
-    // node A's description. With url-first matching, each stub claims only
-    // its own node.
     #[test]
     fn enrich_same_name_events_matched_by_url_not_name() {
         let html = r#"<script type="application/ld+json">
@@ -740,13 +883,68 @@ mod tests {
             .unwrap();
         assert_eq!(
             candidate.event.description.as_deref(),
-            Some("Seminar TWO description"),
-            "stub for s2 must get s2's description, not s1's"
+            Some("Seminar TWO description")
         );
     }
 
-    // R9-M04: JSON-LD description with raw HTML must be stripped to plain
-    // text so downstream JSON consumers do not render unintended markup.
+    #[test]
+    fn enrich_ambiguous_name_only_matches_yield_no_enrichment() {
+        let html = r#"<script type="application/ld+json">
+        {"@type":"Event","name":"Seminar","description":"First Seminar description"}
+        </script>
+        <script type="application/ld+json">
+        {"@type":"Event","name":"Seminar","description":"Second Seminar description"}
+        </script>"#;
+        let doc = make_doc(html);
+        let spec = make_spec();
+
+        let stub = EventStub {
+            title: "Seminar".to_string(),
+            url: Url::parse("https://example.com/some-stub").unwrap(),
+            date_hint: None,
+            source: SourceEvidence {
+                source_id: "test-jsonld".to_string(),
+                source_url: Url::parse("https://example.com/page").unwrap(),
+                evidence: None,
+                captured_at: None,
+                native_id: None,
+            },
+        };
+        let candidate = JsonLdAdapter
+            .enrich(stub, std::slice::from_ref(&doc), &spec)
+            .unwrap();
+        assert!(candidate.event.description.is_none());
+    }
+
+    #[test]
+    fn enrich_single_name_only_match_is_enriched() {
+        let html = r#"<script type="application/ld+json">
+        {"@type":"Event","name":"Seminar","description":"The only Seminar description"}
+        </script>"#;
+        let doc = make_doc(html);
+        let spec = make_spec();
+
+        let stub = EventStub {
+            title: "Seminar".to_string(),
+            url: Url::parse("https://example.com/some-stub").unwrap(),
+            date_hint: None,
+            source: SourceEvidence {
+                source_id: "test-jsonld".to_string(),
+                source_url: Url::parse("https://example.com/page").unwrap(),
+                evidence: None,
+                captured_at: None,
+                native_id: None,
+            },
+        };
+        let candidate = JsonLdAdapter
+            .enrich(stub, std::slice::from_ref(&doc), &spec)
+            .unwrap();
+        assert_eq!(
+            candidate.event.description.as_deref(),
+            Some("The only Seminar description")
+        );
+    }
+
     #[test]
     fn enrich_strips_html_from_jsonld_description() {
         let html = r#"<script type="application/ld+json">

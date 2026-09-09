@@ -4,17 +4,15 @@
 //! XXE-safe (built on quick-xml with no external-entity expansion). `discover`
 //! maps feed entries to [`EventStub`]s; `enrich` fetches the entry's detail
 //! page (when the coordinator supplies one) and fills the [`Event`] from the
-//! shared HTML helpers. Speakers come from feed-level `entry.authors`
-//! (`<dc:creator>` / `<author>`) and are intentionally not promoted from title
-//! text (§P-2, §6.2).
+//! shared HTML helpers. Feed entry authors are intentionally not promoted to
+//! event speakers: an article/video author is not reliable evidence of the
+//! mathematical speaker (§P-2, §6.2).
 use radar_core::adapter::MAX_DISCOVERED_STUBS;
-use url::Url;
-
 use radar_core::date::parse_date;
 use radar_core::{
-    AccessInfo, AdapterError, Event, EventCandidate, EventDate, EventStatus, EventStub, FetchPlan,
-    FetchedDocument, Location, OnlineAvailability, PublicAccess, ScoreComponents, SourceAdapter,
-    SourceEvidence, SourceSpec, event_id,
+    AccessInfo, AdapterError, EventCandidate, EventDate, EventStatus, EventStub, FetchPlan,
+    FetchedDocument, Location, MediaId, MediaResource, MediaType, OnlineAvailability, PublicAccess,
+    SourceAdapter, SourceEvidence, SourceSpec, deterministic_id,
 };
 
 use crate::helpers;
@@ -39,12 +37,30 @@ impl SourceAdapter for RssAdapter {
             .into_iter()
             .filter_map(|entry| {
                 let title = entry.title?.content;
-                let link = entry.links.first()?;
-                let url = Url::parse(&link.href).ok()?;
+                let link = entry
+                    .links
+                    .iter()
+                    .find(|l| l.rel.as_deref().is_none_or(|r| r == "alternate"))
+                    .or_else(|| entry.links.first())?;
+                // RSS/Atom permits relative links. Resolve them against the
+                // post-redirect feed URL so both relative and absolute hrefs
+                // use the same final-origin semantics as the other adapters.
+                let url = document
+                    .final_url
+                    .join(&link.href)
+                    .ok()
+                    .filter(crate::helpers::is_http_url)?;
                 let date_hint = entry.published.or(entry.updated).map(|dt| {
-                    parse_date(&dt.date_naive().to_string())
-                        .unwrap_or_else(|_| EventDate::unknown(String::new()))
+                    let date_text = dt.date_naive().to_string();
+                    let mut hint =
+                        parse_date(&date_text).unwrap_or_else(|_| EventDate::unknown(date_text));
+                    // Keep the event fallback at day precision (publication
+                    // time is not necessarily the event time), but preserve
+                    // the exact feed timestamp for media-plane published_at.
+                    hint.original_text = dt.to_rfc3339();
+                    hint
                 });
+                let native_id = (!entry.id.is_empty()).then_some(entry.id);
                 Some(EventStub {
                     title,
                     url,
@@ -54,7 +70,7 @@ impl SourceAdapter for RssAdapter {
                         source_url: document.final_url.clone(),
                         evidence: None,
                         captured_at: Some(document.fetched_at),
-                        native_id: None,
+                        native_id,
                     },
                 })
             })
@@ -63,7 +79,10 @@ impl SourceAdapter for RssAdapter {
         Ok(stubs)
     }
 
-    fn plan_enrichment(&self, event: &EventStub, _source: &SourceSpec) -> Vec<FetchPlan> {
+    fn plan_enrichment(&self, event: &EventStub, source: &SourceSpec) -> Vec<FetchPlan> {
+        if source.media_strategy.as_deref() == Some("youtube_channel") {
+            return Vec::new();
+        }
         vec![FetchPlan {
             url: event.url.clone(),
             depth: 1,
@@ -77,6 +96,10 @@ impl SourceAdapter for RssAdapter {
         documents: &[FetchedDocument],
         source: &SourceSpec,
     ) -> Result<EventCandidate, AdapterError> {
+        if source.media_strategy.as_deref() == Some("youtube_channel") {
+            return Self::enrich_youtube(stub);
+        }
+
         let (fields, media, access) = match documents.first() {
             Some(doc)
                 if doc
@@ -99,40 +122,92 @@ impl SourceAdapter for RssAdapter {
             ),
         };
 
-        let date = stub
-            .date_hint
-            .clone()
+        // P0-07: prefer the on-page event date over the feed pubDate. The
+        // feed `published`/`updated` is the article's publication timestamp,
+        // not the conference date; the HTML detail page carries the real
+        // event date (e.g. a `<time datetime="2024-03-15">` element that
+        // `extract_html_fields` surfaces as `date_text`). Fall back to the
+        // feed date only when the detail page has no parseable date.
+        let date = fields
+            .date_text
+            .as_deref()
+            .and_then(|t| parse_date(t).ok())
+            .or_else(|| stub.date_hint.clone())
             .unwrap_or_else(|| EventDate::unknown(String::new()));
 
-        let event = Event {
-            id: event_id(&stub.title, stub.url.as_str()),
-            title: stub.title.clone(),
-            url: Some(stub.url.clone()),
-            event_type: helpers::detect_event_type(&stub.title),
-            status: EventStatus::Unknown,
+        let event = helpers::build_event_from_stub(
+            &stub.title,
+            &stub.url,
+            &stub.source,
+            helpers::detect_event_type(&stub.title),
+            EventStatus::Unknown,
             date,
-            location: fields.location_text.map(|name| Location {
+            fields.location_text.map(|name| Location {
                 name,
                 city: None,
                 country: None,
                 venue: None,
             }),
-            description: fields.description,
-            topics: Vec::new(),
-            people: Vec::new(),
-            talks: Vec::new(),
+            fields.description,
+            Vec::new(),
+            Vec::new(),
             media,
-            access: AccessInfo {
+            AccessInfo {
                 access,
                 online: OnlineAvailability::Unknown,
             },
-            sources: vec![stub.source.clone()],
-            score: 0.0,
-            score_components: ScoreComponents::default(),
-            rank_reasons: Vec::new(),
-            first_seen_at: None,
-            last_seen_at: None,
+        );
+
+        Ok(EventCandidate { event, stub })
+    }
+}
+
+impl RssAdapter {
+    /// §20 Media Plane: build an Event from a YouTube RSS stub without fetching
+    /// a detail page. Each video becomes a recorded-talk Event carrying one
+    /// `MediaResource { media_type: Video, platform: "youtube" }`. The RSS
+    /// entry already provides title, watch URL, and publication date; no
+    /// enrichment fetch is needed (`plan_enrichment` returns empty for
+    /// `youtube_channel`).
+    fn enrich_youtube(stub: EventStub) -> Result<EventCandidate, AdapterError> {
+        let published_at = stub
+            .date_hint
+            .as_ref()
+            .and_then(|date| chrono::DateTime::parse_from_rfc3339(&date.original_text).ok())
+            .map(|dt| dt.with_timezone(&chrono::Utc));
+        let date = stub
+            .date_hint
+            .clone()
+            .unwrap_or_else(|| EventDate::unknown(String::new()));
+
+        let media = MediaResource {
+            id: MediaId(deterministic_id(&[stub.url.as_str()])),
+            media_type: MediaType::Video,
+            title: Some(stub.title.clone()),
+            url: stub.url.clone(),
+            platform: Some("youtube".to_string()),
+            public_access: PublicAccess::Open,
+            published_at,
+            source: stub.source.clone(),
         };
+
+        let event = helpers::build_event_from_stub(
+            &stub.title,
+            &stub.url,
+            &stub.source,
+            helpers::detect_event_type(&stub.title),
+            EventStatus::Unknown,
+            date,
+            None,
+            None,
+            Vec::new(),
+            Vec::new(),
+            vec![media],
+            AccessInfo {
+                access: PublicAccess::Open,
+                online: OnlineAvailability::RecordingAvailable,
+            },
+        );
 
         Ok(EventCandidate { event, stub })
     }
@@ -142,6 +217,7 @@ impl SourceAdapter for RssAdapter {
 mod tests {
     use super::*;
     use radar_core::{AdapterKind, EventType, MediaType, SourceKind, SourceTier};
+    use url::Url;
 
     fn test_source() -> SourceSpec {
         SourceSpec {
@@ -225,6 +301,36 @@ mod tests {
             stubs[0].date_hint.is_some(),
             "pubDate should yield a date hint"
         );
+        assert_eq!(
+            stubs[0].date_hint.as_ref().unwrap().original_text,
+            "2024-01-01T00:00:00+00:00",
+            "the exact feed timestamp must be retained for media metadata"
+        );
+    }
+
+    #[test]
+    fn discover_resolves_relative_entry_link_against_final_url() {
+        let body = r#"<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Math Talks</title>
+  <id>https://example.com/feed.xml</id>
+  <updated>2024-01-01T00:00:00Z</updated>
+  <entry>
+    <title>Relative Link Talk</title>
+    <id>tag:example.com,2024:relative</id>
+    <updated>2024-01-02T12:34:56Z</updated>
+    <link rel="alternate" href="talks/relative" />
+  </entry>
+</feed>"#;
+        let doc = make_doc(body, "application/atom+xml");
+        let source = test_source();
+        let stubs = RssAdapter.discover(&doc, &source).expect("valid Atom feed");
+        assert_eq!(stubs.len(), 1);
+        assert_eq!(stubs[0].url.as_str(), "https://example.com/talks/relative");
+        assert_eq!(
+            stubs[0].source.native_id.as_deref(),
+            Some("tag:example.com,2024:relative")
+        );
     }
 
     #[test]
@@ -301,6 +407,36 @@ mod tests {
     }
 
     #[test]
+    fn youtube_media_preserves_feed_publication_timestamp() {
+        let published_at = chrono::DateTime::parse_from_rfc3339("2024-01-02T12:34:56Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let stub = EventStub {
+            title: "Recorded Lecture".to_string(),
+            url: Url::parse("https://www.youtube.com/watch?v=abc123").unwrap(),
+            date_hint: Some(EventDate {
+                start: Some(radar_core::DateTimeOrDate::Date(
+                    chrono::NaiveDate::from_ymd_opt(2024, 1, 2).unwrap(),
+                )),
+                end: None,
+                timezone: None,
+                original_text: published_at.to_rfc3339(),
+                precision: radar_core::DatePrecision::Day,
+            }),
+            source: SourceEvidence {
+                source_id: "youtube-feed".to_string(),
+                source_url: Url::parse("https://www.youtube.com/feeds/videos.xml").unwrap(),
+                evidence: None,
+                captured_at: None,
+                native_id: Some("yt:video:abc123".to_string()),
+            },
+        };
+        let candidate = RssAdapter::enrich_youtube(stub).expect("youtube enrichment");
+        assert_eq!(candidate.event.media.len(), 1);
+        assert_eq!(candidate.event.media[0].published_at, Some(published_at));
+    }
+
+    #[test]
     fn enrich_with_html_detail_extracts_fields() {
         let stub = EventStub {
             title: "Seminar on Number Theory".to_string(),
@@ -339,5 +475,97 @@ mod tests {
         );
         assert_eq!(candidate.event.media.len(), 1);
         assert_eq!(candidate.event.media[0].media_type, MediaType::Slides);
+        // P0-07: the on-page <time datetime="2024-03-15"> drives the event
+        // date, not the (absent here) feed pubDate.
+        let start = candidate
+            .event
+            .date
+            .start_date()
+            .expect("detail-page date should populate start");
+        assert_eq!(start, chrono::NaiveDate::from_ymd_opt(2024, 3, 15).unwrap());
+    }
+
+    // P0-07: when the HTML detail page carries an event date, it must override
+    // the feed pubDate — the pubDate is the article's publication timestamp,
+    // not the conference date.
+    #[test]
+    fn enrich_prefers_detail_date_over_feed_pubdate() {
+        // Feed pubDate = 2024-01-01; detail page event date = 2024-03-15.
+        let stub = EventStub {
+            title: "Conference on Algebra".to_string(),
+            url: Url::parse("https://example.com/talks/1").unwrap(),
+            date_hint: Some(EventDate::unknown("2024-01-01".to_string())),
+            source: SourceEvidence {
+                source_id: "test-rss".to_string(),
+                source_url: Url::parse("https://example.com/feed.xml").unwrap(),
+                evidence: None,
+                captured_at: None,
+                native_id: None,
+            },
+        };
+        let html = r#"<!DOCTYPE html>
+<html><body>
+<h1>Conference on Algebra</h1>
+<time datetime="2024-03-15">March 15, 2024</time>
+</body></html>"#;
+        let doc = make_doc(html, "text/html; charset=utf-8");
+        let source = test_source();
+        let candidate = RssAdapter
+            .enrich(stub, std::slice::from_ref(&doc), &source)
+            .expect("enrich should succeed");
+        let start = candidate
+            .event
+            .date
+            .start_date()
+            .expect("event date should be populated");
+        assert_eq!(
+            start,
+            chrono::NaiveDate::from_ymd_opt(2024, 3, 15).unwrap(),
+            "detail-page date must override the feed pubDate"
+        );
+    }
+
+    // P0-07: when the detail page has no parseable date, fall back to the
+    // feed pubDate (the previous behavior).
+    #[test]
+    fn enrich_falls_back_to_feed_pubdate_without_detail_date() {
+        let stub = EventStub {
+            title: "Workshop on Graph Theory".to_string(),
+            url: Url::parse("https://example.com/talks/2").unwrap(),
+            date_hint: Some(EventDate {
+                start: Some(radar_core::DateTimeOrDate::Date(
+                    chrono::NaiveDate::from_ymd_opt(2024, 1, 2).unwrap(),
+                )),
+                end: None,
+                timezone: None,
+                original_text: "2024-01-02".to_string(),
+                precision: radar_core::DatePrecision::Day,
+            }),
+            source: SourceEvidence {
+                source_id: "test-rss".to_string(),
+                source_url: Url::parse("https://example.com/feed.xml").unwrap(),
+                evidence: None,
+                captured_at: None,
+                native_id: None,
+            },
+        };
+        // No <time> element → fields.date_text is None → fall back to pubDate.
+        let html = r#"<!DOCTYPE html>
+<html><body><h1>Workshop on Graph Theory</h1></body></html>"#;
+        let doc = make_doc(html, "text/html; charset=utf-8");
+        let source = test_source();
+        let candidate = RssAdapter
+            .enrich(stub, std::slice::from_ref(&doc), &source)
+            .expect("enrich should succeed");
+        let start = candidate
+            .event
+            .date
+            .start_date()
+            .expect("feed pubDate should populate start as fallback");
+        assert_eq!(
+            start,
+            chrono::NaiveDate::from_ymd_opt(2024, 1, 2).unwrap(),
+            "feed pubDate must be used when the detail page has no date"
+        );
     }
 }

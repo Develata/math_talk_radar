@@ -24,7 +24,7 @@ Prefer keeping a suspected duplicate over merging two distinct events. Fuzzy
 semantic dedup deferred.
 
 Canonical representatives use ascending stable EventId, URL and source
-provenance, with lexical scalar ties (ADR-0011). Exact key ties retain stable
+provenance, with lexical scalar ties (ADR-0014). Exact key ties retain stable
 input order. Ranking preferences never participate in identity or merge
 selection. Enrich → dedup → score once; interests may change only ranking
 fields and presentation order/filtering.
@@ -49,7 +49,7 @@ fields and presentation order/filtering.
 - DEDUP-001 — identical event merge (golden).
 - DEDUP-002 — distinct event not merge (golden).
 
-## Indexed implementation (ADR-0011)
+## Indexed implementation (ADR-0014)
 
 Process candidates in canonical order, and merge into the earliest existing
 cluster matching any sanctioned key. A key maps to an ordered set of cluster

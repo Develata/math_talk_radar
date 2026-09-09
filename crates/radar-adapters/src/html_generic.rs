@@ -13,8 +13,8 @@ use scraper::Html;
 use radar_core::date::parse_date;
 use radar_core::{
     AccessInfo, AdapterError, Event, EventCandidate, EventDate, EventStatus, EventStub, FetchPlan,
-    FetchedDocument, Location, OnlineAvailability, PublicAccess, ScoreComponents, SourceAdapter,
-    SourceEvidence, SourceSpec, contains_phrase, event_id,
+    FetchedDocument, Location, OnlineAvailability, PublicAccess, SourceAdapter, SourceEvidence,
+    SourceSpec, contains_phrase,
 };
 
 use crate::helpers;
@@ -156,30 +156,23 @@ fn minimal_event_from_stub(stub: &EventStub) -> Event {
         .date_hint
         .clone()
         .unwrap_or_else(|| EventDate::unknown(String::new()));
-    Event {
-        id: event_id(&stub.title, stub.url.as_str()),
-        title: stub.title.clone(),
-        url: Some(stub.url.clone()),
-        event_type: helpers::detect_event_type(&stub.title),
-        status: EventStatus::Unknown,
+    helpers::build_event_from_stub(
+        &stub.title,
+        &stub.url,
+        &stub.source,
+        helpers::detect_event_type(&stub.title),
+        EventStatus::Unknown,
         date,
-        location: None,
-        description: None,
-        topics: Vec::new(),
-        people: Vec::new(),
-        talks: Vec::new(),
-        media: Vec::new(),
-        access: AccessInfo {
+        None,
+        None,
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        AccessInfo {
             access: PublicAccess::Unknown,
             online: OnlineAvailability::Unknown,
         },
-        sources: vec![stub.source.clone()],
-        score: 0.0,
-        score_components: ScoreComponents::default(),
-        rank_reasons: Vec::new(),
-        first_seen_at: None,
-        last_seen_at: None,
-    }
+    )
 }
 
 // ===========================================================================
@@ -225,6 +218,9 @@ impl SourceAdapter for HtmlGenericAdapter {
             let Ok(resolved) = base_url.join(href) else {
                 continue;
             };
+            if !crate::helpers::is_http_url(&resolved) {
+                continue;
+            }
             let evidence = text.clone();
             stubs.push(EventStub {
                 title: text,
@@ -278,7 +274,7 @@ impl SourceAdapter for HtmlGenericAdapter {
 
                 // Date: prefer detail page, fall back to stub hint, else Unknown.
                 let date = match fields.date_text.as_deref() {
-                    Some(t) => parse_date(t).unwrap_or_else(|_| EventDate::unknown(String::new())),
+                    Some(t) => parse_date(t).unwrap_or_else(|_| EventDate::unknown(t.to_string())),
                     None => stub
                         .date_hint
                         .clone()
@@ -292,32 +288,25 @@ impl SourceAdapter for HtmlGenericAdapter {
                     venue: None,
                 });
 
-                Event {
-                    // ADAP-13: hash the title that becomes `event.title`, not
-                    // `stub.title`, so id and displayed title stay consistent.
-                    id: event_id(&title, stub.url.as_str()),
-                    title,
-                    url: Some(stub.url.clone()),
+                // ADAP-13: hash the title that becomes `event.title`, not
+                // `stub.title`, so id and displayed title stay consistent.
+                helpers::build_event_from_stub(
+                    &title,
+                    &stub.url,
+                    &stub.source,
                     event_type,
-                    status: EventStatus::Unknown,
+                    EventStatus::Unknown,
                     date,
                     location,
-                    description: fields.description,
-                    topics: Vec::new(),
-                    people: Vec::new(),
-                    talks: Vec::new(),
+                    fields.description,
+                    Vec::new(),
+                    Vec::new(),
                     media,
-                    access: AccessInfo {
+                    AccessInfo {
                         access,
                         online: OnlineAvailability::Unknown,
                     },
-                    sources: vec![stub.source.clone()],
-                    score: 0.0,
-                    score_components: ScoreComponents::default(),
-                    rank_reasons: Vec::new(),
-                    first_seen_at: None,
-                    last_seen_at: None,
-                }
+                )
             }
         };
 

@@ -27,6 +27,23 @@ const DOWNLOAD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120
 const MAX_BINARY_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_CHECKSUM_BYTES: u64 = 1024;
 
+/// R9-H11: cap on manual redirect following. GitHub's CDN typically does
+/// 1–2 hops (github.com → objects.githubusercontent.com); 5 is a safe upper
+/// bound that absorbs rare extra hops without allowing infinite loops.
+const MAX_REDIRECTS: u8 = 5;
+
+/// R9-H11: host whitelists for update URLs. The release API is on
+/// `api.github.com`; release assets are on `github.com`,
+/// `objects.githubusercontent.com`, and `codeload.github.com`. Every
+/// redirect hop is re-validated against the relevant list so a compromised
+/// or misbehaving CDN cannot redirect the updater to an arbitrary host.
+const API_HOSTS: &[&str] = &["api.github.com"];
+const DOWNLOAD_HOSTS: &[&str] = &[
+    "github.com",
+    "objects.githubusercontent.com",
+    "codeload.github.com",
+];
+
 /// H7: independent update lock (§34.3). Without this, two concurrent
 /// `math_talk_radar update` invocations would race on the same binary:
 /// both download, both verify, both try atomic-replace — one wins, the
@@ -83,7 +100,8 @@ fn write_lock_content(file: &mut std::fs::File) -> Result<u64, CliError> {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos() as u64)
         .unwrap_or(1);
-    let _ = writeln!(file, "{pid}:{starttime}:{token}");
+    writeln!(file, "{pid}:{starttime}:{token}")
+        .map_err(|e| CliError::update(format!("write lock file: {e}")))?;
     Ok(token)
 }
 
@@ -150,6 +168,33 @@ pub(crate) fn acquire_update_lock() -> Result<UpdateGuard, CliError> {
             }
         }
         Err(e) => Err(CliError::update(format!("create update lock: {e}"))),
+    }
+}
+
+/// Read-only lock check: returns `Ok(())` if no live update lock is held,
+/// `Err` if one is held by a live process. Does NOT create the data
+/// directory or lock file — safe for `--dry-run` (UNS-001: zero mutation).
+pub(crate) fn check_update_lock() -> Result<(), CliError> {
+    let lock_path = paths::data_dir().join("update.lock");
+    if !lock_path.exists() {
+        return Ok(());
+    }
+    let content = std::fs::read_to_string(&lock_path)
+        .map_err(|e| CliError::update(format!("read update lock: {e}")))?;
+    let held = parse_lock_pid(&content)
+        .map(|(pid, starttime)| {
+            if pid == 0 {
+                return false;
+            }
+            is_process_alive_with_starttime(pid, starttime)
+        })
+        .unwrap_or(false);
+    if held {
+        Err(CliError::update(
+            "another update is in progress (update.lock is held)",
+        ))
+    } else {
+        Ok(())
     }
 }
 
@@ -240,37 +285,44 @@ struct Release {
     assets: Vec<ReleaseAsset>,
 }
 
-/// B3-residual: validate that a download URL from the GitHub release API
-/// points to the expected origin. In release builds: HTTPS only, host must
-/// be `github.com` or `objects.githubusercontent.com` (GitHub's release
-/// asset CDN). In debug builds: allow `http://` + `127.0.0.1`/`localhost`
-/// so integration tests can point at a local wiremock server.
-fn validate_download_url(url: &str) -> Result<(), CliError> {
-    let parsed = url::Url::parse(url)
-        .map_err(|e| CliError::update(format!("invalid download URL '{url}': {e}")))?;
+/// B3-residual + R9-H11: validate a URL's scheme and host against a whitelist.
+/// `allowed_hosts` is `API_HOSTS` for release-API calls or `DOWNLOAD_HOSTS`
+/// for asset downloads. In debug builds, `http://127.0.0.1`/`localhost` is
+/// allowed so integration tests can point at a local wiremock server.
+///
+/// Used both for the initial URL and for every redirect hop — a redirect to
+/// an off-whitelist host is rejected rather than followed.
+fn validate_url_host(url: &url::Url, allowed_hosts: &[&str]) -> Result<(), CliError> {
     if cfg!(debug_assertions)
-        && let Some(host) = parsed.host_str()
-        && (parsed.scheme() == "http" || parsed.scheme() == "https")
+        && let Some(host) = url.host_str()
+        && (url.scheme() == "http" || url.scheme() == "https")
         && (host == "127.0.0.1" || host == "localhost")
     {
         return Ok(());
     }
-    if parsed.scheme() != "https" {
+    if url.scheme() != "https" {
         return Err(CliError::update(format!(
-            "download URL must be HTTPS, got '{}': {url}",
-            parsed.scheme()
+            "update URL must be HTTPS, got '{}': {url}",
+            url.scheme()
         )));
     }
-    let host = parsed.host_str().unwrap_or("");
-    if host != "github.com"
-        && host != "objects.githubusercontent.com"
-        && host != "codeload.github.com"
-    {
+    let host = url.host_str().unwrap_or("");
+    if !allowed_hosts.contains(&host) {
         return Err(CliError::update(format!(
-            "download URL host must be github.com or objects.githubusercontent.com, got '{host}'"
+            "update URL host '{host}' not in allowed list {:?}",
+            allowed_hosts
         )));
     }
     Ok(())
+}
+
+/// B3-residual: validate that a download URL from the GitHub release API
+/// points to the expected origin. Wrapper around `validate_url_host` for the
+/// initial (pre-redirect) download URL string.
+fn validate_download_url(url: &str) -> Result<(), CliError> {
+    let parsed = url::Url::parse(url)
+        .map_err(|e| CliError::update(format!("invalid download URL '{url}': {e}")))?;
+    validate_url_host(&parsed, DOWNLOAD_HOSTS)
 }
 
 fn http_client() -> Result<reqwest::Client, CliError> {
@@ -278,20 +330,77 @@ fn http_client() -> Result<reqwest::Client, CliError> {
         .user_agent(RELEASE_USER_AGENT)
         .timeout(DOWNLOAD_TIMEOUT)
         .connect_timeout(std::time::Duration::from_secs(15))
+        // R9-H11: disable auto-redirect. reqwest's Policy follows redirects
+        // to any host without re-validating against our whitelist, so a
+        // compromised or misbehaving CDN could redirect the updater to an
+        // arbitrary host. We follow redirects manually with per-hop
+        // validation in `send_validated`.
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|e| CliError::update(format!("http client build failed: {e}")))
+}
+
+/// R9-H11: send a GET request and follow redirects manually, validating the
+/// scheme and host of every hop URL against `allowed_hosts`. Caps the redirect
+/// chain at `MAX_REDIRECTS` to prevent loops. Returns the final response
+/// (already a 2xx, or a non-3xx status the caller handles). A 3xx with no
+/// `Location` header or a chain exceeding `MAX_REDIRECTS` is an error.
+async fn send_validated(
+    client: &reqwest::Client,
+    url: &str,
+    allowed_hosts: &[&str],
+    extra_headers: Option<(&str, &str)>,
+) -> Result<reqwest::Response, CliError> {
+    let mut current =
+        url::Url::parse(url).map_err(|e| CliError::update(format!("invalid URL '{url}': {e}")))?;
+    validate_url_host(&current, allowed_hosts)?;
+    let mut hops: u8 = 0;
+    loop {
+        let mut req = client.get(current.as_str());
+        if let Some((name, value)) = extra_headers {
+            req = req.header(name, value);
+        }
+        let resp = req
+            .send()
+            .await
+            .map_err(|e| CliError::update(format!("request to {current} failed: {e}")))?;
+        if !resp.status().is_redirection() {
+            return Ok(resp);
+        }
+        hops += 1;
+        if hops > MAX_REDIRECTS {
+            return Err(CliError::update(format!(
+                "redirect chain from {url} exceeded {MAX_REDIRECTS} hops"
+            )));
+        }
+        let location = resp
+            .headers()
+            .get(reqwest::header::LOCATION)
+            .and_then(|v| v.to_str().ok())
+            .ok_or_else(|| {
+                CliError::update(format!("redirect from {current} missing Location header"))
+            })?;
+        // Resolve relative redirects against the current URL.
+        let next = current
+            .join(location)
+            .map_err(|e| CliError::update(format!("invalid redirect '{location}': {e}")))?;
+        // R9-H11: re-validate every hop — the host can change on redirect.
+        validate_url_host(&next, allowed_hosts)?;
+        current = next;
+    }
 }
 
 async fn fetch_latest_release() -> Result<Release, CliError> {
     let api = paths::release_api();
     let url = format!("{api}/releases/latest");
     let client = http_client()?;
-    let resp = client
-        .get(&url)
-        .header("Accept", "application/vnd.github+json")
-        .send()
-        .await
-        .map_err(|e| CliError::update(format!("release fetch failed: {e}")))?;
+    let resp = send_validated(
+        &client,
+        &url,
+        API_HOSTS,
+        Some(("Accept", "application/vnd.github+json")),
+    )
+    .await?;
     if !resp.status().is_success() {
         return Err(CliError::update(format!(
             "release API returned {}",
@@ -350,11 +459,7 @@ fn find_assets(release: &Release) -> Result<(&ReleaseAsset, &ReleaseAsset), CliE
 /// file (small). The binary uses the streaming path instead.
 async fn download_bytes(url: &str, max_bytes: u64) -> Result<Vec<u8>, CliError> {
     let client = http_client()?;
-    let resp = client
-        .get(url)
-        .send()
-        .await
-        .map_err(|e| CliError::update(format!("download failed: {e}")))?;
+    let resp = send_validated(&client, url, DOWNLOAD_HOSTS, None).await?;
     if !resp.status().is_success() {
         return Err(CliError::update(format!(
             "download returned {}",
@@ -386,11 +491,7 @@ async fn download_bytes(url: &str, max_bytes: u64) -> Result<Vec<u8>, CliError> 
 /// buffering the entire binary in RAM.
 async fn download_to_file_with_hash(url: &str, dest: &Path) -> Result<String, CliError> {
     let client = http_client()?;
-    let resp = client
-        .get(url)
-        .send()
-        .await
-        .map_err(|e| CliError::update(format!("download failed: {e}")))?;
+    let resp = send_validated(&client, url, DOWNLOAD_HOSTS, None).await?;
     if !resp.status().is_success() {
         return Err(CliError::update(format!(
             "download returned {}",
@@ -484,8 +585,14 @@ fn self_test(binary: &Path) -> Result<(), CliError> {
 
 /// `update`: full algorithm (§34.2). Refuse unmanaged binary unless
 /// `force_unmanaged`. Download -> verify SHA-256 -> fsync -> self-test ->
-/// rollback copy -> atomic replace -> self-test -> cleanup. Any failure leaves
-/// the current binary usable.
+/// rollback copy -> atomic replace -> self-test. Any failure leaves the
+/// current binary usable.
+///
+/// R9-M07: the rollback copy is **retained** after a successful update —
+/// exactly one previous binary is kept at `.<stem>.rollback`, overwritten by
+/// the next successful update. This guarantees a manual-recovery path to the
+/// last-known-good version if the new binary fails at runtime (a defect not
+/// caught by the self-test).
 pub async fn run(force_unmanaged: bool) -> Result<String, CliError> {
     // H7: acquire the update lock before any I/O. Two concurrent `update`
     // invocations would race on download/replace/rollback; the lock serializes
@@ -546,8 +653,30 @@ pub async fn run(force_unmanaged: bool) -> Result<String, CliError> {
 
     // Rollback copy alongside the binary.
     let rollback_path = rollback_path(&current_binary);
-    std::fs::copy(&current_binary, &rollback_path)
-        .map_err(|e| CliError::update(format!("create rollback failed: {e}")))?;
+
+    // R9-B05: std::fs::copy follows a pre-existing symlink at the destination.
+    // A local attacker who pre-creates a symlink at the predictable rollback
+    // path → /etc/passwd would have the rollback copy overwrite the symlink
+    // target. Guard with:
+    //   1. reject_symlink_in_components on the rollback path (catches a
+    //      symlink in any component, including the leaf).
+    //   2. If a previous rollback exists (M07 retention), verify with
+    //      symlink_metadata that it is a regular file (not a symlink) before
+    //      removing it, then create the new one with create_new so a race
+    //      between remove and create cannot follow a re-created symlink.
+    paths::reject_symlink_in_components(&rollback_path)
+        .map_err(|e| CliError::update(format!("rollback path unsafe: {e}")))?;
+    if let Ok(meta) = std::fs::symlink_metadata(&rollback_path) {
+        if meta.is_symlink() {
+            return Err(CliError::update(format!(
+                "refusing to overwrite symlink at rollback path: {}",
+                rollback_path.display()
+            )));
+        }
+        std::fs::remove_file(&rollback_path)
+            .map_err(|e| CliError::update(format!("remove old rollback failed: {e}")))?;
+    }
+    copy_binary_to_new_file(&current_binary, &rollback_path)?;
     fsync_file(&rollback_path)?;
 
     // Atomic replace. On Unix, rename over an existing file is atomic.
@@ -578,7 +707,15 @@ pub async fn run(force_unmanaged: bool) -> Result<String, CliError> {
         return Err(CliError::update(msg));
     }
 
-    let _ = std::fs::remove_file(&rollback_path);
+    // R9-M07: retain the rollback copy. The previous binary stays at
+    // `.<stem>.rollback` and is overwritten by the next successful update.
+    // This guarantees a manual-recovery path to the last-known-good version
+    // if the new binary fails at runtime (a defect the self-test cannot
+    // catch). See §34.2.
+    let rollback_note = match rollback_path.metadata() {
+        Ok(_) => format!("\nrollback retained: {}", rollback_path.display()),
+        Err(_) => String::new(),
+    };
 
     // Update manifest. The binary is already replaced and self-tested, so a
     // manifest write failure is NOT fatal — surface it as a warning in the
@@ -594,8 +731,8 @@ pub async fn run(force_unmanaged: bool) -> Result<String, CliError> {
     };
 
     Ok(format!(
-        "updated: {} -> {}{}",
-        CURRENT_VERSION, release.tag_name, manifest_note
+        "updated: {} -> {}{}{}",
+        CURRENT_VERSION, release.tag_name, manifest_note, rollback_note
     ))
 }
 
@@ -618,6 +755,37 @@ fn fsync_file(path: &Path) -> Result<(), CliError> {
         .map_err(|e| CliError::update(format!("fsync open {}: {e}", path.display())))?;
     file.sync_all()
         .map_err(|e| CliError::update(format!("fsync {}: {e}", path.display())))?;
+    Ok(())
+}
+
+/// R9-B05: copy `src` binary to `dest` using `create_new(true)` so an
+/// existing file or symlink at `dest` is rejected (never followed). The
+/// caller removes any pre-existing rollback file before invoking this, so
+/// `create_new` is the second guard against a race where a symlink is
+/// re-created between remove and create. Copies in chunks to bound memory
+/// (the binary is up to ~64 MiB). Preserves executable permissions on Unix.
+fn copy_binary_to_new_file(src: &Path, dest: &Path) -> Result<(), CliError> {
+    let mut src_file =
+        std::fs::File::open(src).map_err(|e| CliError::update(format!("open src {src:?}: {e}")))?;
+    let mut dest_file = std::fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(dest)
+        .map_err(|e| CliError::update(format!("create dest {dest:?}: {e}")))?;
+    std::io::copy(&mut src_file, &mut dest_file)
+        .map_err(|e| CliError::update(format!("copy body {src:?} -> {dest:?}: {e}")))?;
+    dest_file
+        .sync_all()
+        .map_err(|e| CliError::update(format!("fsync dest {dest:?}: {e}")))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let meta = std::fs::symlink_metadata(src)
+            .map_err(|e| CliError::update(format!("stat src {src:?}: {e}")))?;
+        let mode = meta.permissions().mode();
+        std::fs::set_permissions(dest, std::fs::Permissions::from_mode(mode))
+            .map_err(|e| CliError::update(format!("chmod dest {dest:?}: {e}")))?;
+    }
     Ok(())
 }
 

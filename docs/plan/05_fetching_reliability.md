@@ -30,7 +30,7 @@ redirect; no cookies; no auth; response bodies not persisted beyond the bounded
 `math_talk_radar/<version> (+public-repository)`. `respect_robots = true`;
 no robots bypass is ever provided.
 
-## Request ownership (ADR-0011)
+## Request ownership (ADR-0014)
 
 The per-source request budget and SourceHealth.requests count content attempts
 (entrypoint, detail, redirect and retry). Robots is a separate shared system
