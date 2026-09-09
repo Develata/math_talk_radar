@@ -39,7 +39,9 @@ CLI configuration failures report the file/context and source position without
 rendering parser snippets or values. Semantic validation reports the constraint
 without reflecting source-provided values. Update failures omit input URLs,
 redirect values, credentials and query parameters; attached HTTP errors have
-their URL removed. Tests use synthetic sentinels rather than real credentials.
+their URL removed. Malformed release tags and checksum files report the expected
+format without echoing response values or value-bearing parser errors.
+Tests use synthetic sentinels rather than real credentials.
 
 ## Acceptance cases
 

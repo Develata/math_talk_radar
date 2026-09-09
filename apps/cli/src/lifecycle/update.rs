@@ -409,8 +409,7 @@ async fn fetch_latest_release() -> Result<Release, CliError> {
 
 fn parse_tag(tag: &str) -> Result<Version, CliError> {
     let cleaned = tag.strip_prefix('v').unwrap_or(tag);
-    Version::parse(cleaned)
-        .map_err(|e| CliError::update(format!("invalid release tag '{tag}': {e}")))
+    Version::parse(cleaned).map_err(|_| CliError::update("invalid release tag: expected SemVer"))
 }
 
 /// `update --check`: fetch latest release metadata, compare versions, write
@@ -557,9 +556,9 @@ fn parse_checksum_file(contents: &str) -> Result<String, CliError> {
         .next()
         .ok_or_else(|| CliError::update("empty checksum file"))?;
     if !first_token.chars().all(|c| c.is_ascii_hexdigit()) || first_token.len() != 64 {
-        return Err(CliError::update(format!(
-            "invalid checksum digest: '{first_token}'"
-        )));
+        return Err(CliError::update(
+            "invalid checksum digest: expected 64 hexadecimal digits",
+        ));
     }
     Ok(first_token.to_lowercase())
 }
@@ -814,6 +813,25 @@ fn rollback_path(binary: &Path) -> PathBuf {
 #[cfg(test)]
 mod security_tests {
     use super::*;
+
+    #[test]
+    fn sec_003_update_metadata_errors_do_not_echo_response_values() {
+        let marker = "SEC003_SYNTHETIC_MARKER_NOT_A_CREDENTIAL";
+        let mut reflected = Vec::new();
+        for (kind, error) in [
+            ("release tag", parse_tag(marker).unwrap_err()),
+            ("checksum", parse_checksum_file(marker).unwrap_err()),
+        ] {
+            assert_eq!(error.code, 10);
+            if error.message.contains(marker) {
+                reflected.push(kind);
+            }
+        }
+        assert!(
+            reflected.is_empty(),
+            "response data reflected by: {reflected:?}"
+        );
+    }
 
     #[test]
     fn sec_003_update_url_validation_does_not_echo_credentials_or_query() {
