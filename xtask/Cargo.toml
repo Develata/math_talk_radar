@@ -16,5 +16,5 @@ unsafe_code = "forbid"
 serde_json.workspace = true
 sha2.workspace = true
 serde.workspace = true
-quick-xml = "0.41"
+quick-xml = "0.42"
 tempfile.workspace = true
