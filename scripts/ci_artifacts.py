@@ -137,7 +137,9 @@ def main():
         plan = json.loads((directory / "plan.json").read_text())
         if sha256(directory / "xtask") != plan["runner_sha256"]:
             raise ValueError("runner digest differs from plan")
-        for key, actual in [("GITHUB_SHA", plan["identity"]["commit"]), ("GITHUB_RUN_ID", plan["run_id"]), ("GITHUB_RUN_ATTEMPT", plan["attempt"])]:
+        # Workflow attempts are retry provenance, not control identity. A rerun
+        # may reuse a verified plan from an earlier attempt of the same run.
+        for key, actual in [("GITHUB_SHA", plan["identity"]["commit"]), ("GITHUB_RUN_ID", plan["run_id"])]:
             if os.environ.get(key) != actual:
                 raise ValueError(f"control bundle differs from {key}")
     elif args.command == "receipts":
