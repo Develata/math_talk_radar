@@ -59,6 +59,19 @@ jobs:
             msrv = json.load(stream)['msrv']
         subprocess.run(['rustup', 'toolchain', 'install', msrv, '--profile', 'minimal'], check=True)
         MSRV
+    - name: Generate patched rustls lockfile
+      if: inputs.lane == 'assurance'
+      run: |
+        cargo update -p rustls --precise 0.23.45
+        grep -A3 '^name = "rustls"$' Cargo.lock | grep 'version = "0.23.45"'
+    - name: Upload patched Cargo.lock
+      if: inputs.lane == 'assurance'
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      with:
+        name: rustls-lock-${{ github.run_attempt }}
+        path: Cargo.lock
+        if-no-files-found: error
+        retention-days: 1
     - name: Static target
       if: inputs.lane == 'build'
       run: |
