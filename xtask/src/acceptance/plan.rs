@@ -316,9 +316,7 @@ pub fn validate(root: &Path, plan: &Plan) -> Result<()> {
     // Workflow attempt is retry provenance, not immutable plan identity. A
     // later attempt may intentionally consume the verified control bundle from
     // an earlier attempt of the same GitHub run.
-    if std::env::var("GITHUB_RUN_ID")
-        .is_ok_and(|value| value.as_str() != plan.run_id.as_str())
-    {
+    if std::env::var("GITHUB_RUN_ID").is_ok_and(|value| value.as_str() != plan.run_id.as_str()) {
         return Err("wrong GITHUB_RUN_ID".into());
     }
     let recomputed = create(root, plan.profile.clone(), plan.base.clone())?;
