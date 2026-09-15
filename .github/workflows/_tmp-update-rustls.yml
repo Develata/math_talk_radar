@@ -1,0 +1,36 @@
+name: Temporary rustls lockfile update
+
+on:
+  push:
+    branches:
+      - fix/rustsec-2026-0285
+
+permissions:
+  contents: write
+
+jobs:
+  update-lockfile:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: fix/rustsec-2026-0285
+          fetch-depth: 0
+
+      - name: Update rustls only
+        run: cargo update -p rustls --precise 0.23.45
+
+      - name: Verify resolved rustls version
+        run: |
+          grep -A3 '^name = "rustls"$' Cargo.lock
+          grep -A3 '^name = "rustls"$' Cargo.lock | grep 'version = "0.23.45"'
+
+      - name: Commit generated lockfile
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add Cargo.lock
+          git diff --cached --quiet && exit 0
+          git commit -m 'fix(deps): update rustls for RUSTSEC-2026-0285'
+          git push origin HEAD:fix/rustsec-2026-0285
