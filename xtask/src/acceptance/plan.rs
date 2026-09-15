@@ -313,13 +313,13 @@ pub fn validate(root: &Path, plan: &Plan) -> Result<()> {
     {
         return Err("runner differs from planned artifact".into());
     }
-    for (key, expected) in [
-        ("GITHUB_RUN_ID", &plan.run_id),
-        ("GITHUB_RUN_ATTEMPT", &plan.attempt),
-    ] {
-        if std::env::var(key).is_ok_and(|value| &value != expected) {
-            return Err(format!("wrong {key}"));
-        }
+    // Workflow attempt is retry provenance, not immutable plan identity. A
+    // later attempt may intentionally consume the verified control bundle from
+    // an earlier attempt of the same GitHub run.
+    if std::env::var("GITHUB_RUN_ID")
+        .is_ok_and(|value| value.as_str() != plan.run_id.as_str())
+    {
+        return Err("wrong GITHUB_RUN_ID".into());
     }
     let recomputed = create(root, plan.profile.clone(), plan.base.clone())?;
     if plan.cases != recomputed.cases
