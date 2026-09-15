@@ -10,7 +10,7 @@ name: CI
   - cron: 0 3 * * *
   workflow_dispatch: null
 permissions:
-  contents: read
+  contents: write
 jobs:
   acceptance:
     uses: ./.github/workflows/acceptance.yml
