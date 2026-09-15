@@ -60,10 +60,13 @@ jobs:
         echo "sha256=$(sha256sum target/acceptance/control.tar.gz | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
     - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
       with:
-        name: acceptance-control-${{ github.run_attempt }}
+        # Keep the control artifact stable across attempts so a single-lane
+        # rerun can reuse the original plan without forcing plan to rerun.
+        name: acceptance-control
         path: target/acceptance/control.tar.gz
         if-no-files-found: error
         retention-days: 14
+        overwrite: true
   quality:
     needs:
     - plan
@@ -175,7 +178,8 @@ jobs:
     - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
       with:
         path: target/acceptance/downloads
-        pattern: receipts-*-${{ github.run_attempt }}
+        # Receipts are stable per lane and overwritten by a successful rerun.
+        pattern: receipts-*
         merge-multiple: true
     - name: Verify transport and execution evidence
       env:

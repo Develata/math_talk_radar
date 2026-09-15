@@ -16,7 +16,9 @@ runs:
   - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
     with:
       path: target/acceptance/downloads
-      name: acceptance-control-${{ github.run_attempt }}
+      # Stable across workflow attempts: a single-job rerun must be able to
+      # reuse the plan artifact produced by the original attempt.
+      name: acceptance-control
   - shell: bash
     env:
       CONTROL_SHA: ${{ inputs.sha256 }}

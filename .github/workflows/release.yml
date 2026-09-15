@@ -37,7 +37,7 @@ jobs:
         prepare-build: 'false'
     - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
       with:
-        pattern: receipts-*-${{ github.run_attempt }}
+        pattern: receipts-*
         merge-multiple: true
         path: target/acceptance/downloads
     - name: Reverify the complete pre-attestation gate
@@ -74,10 +74,11 @@ jobs:
       run: python3 scripts/ci_artifacts.py pack --lane attestation --shards attestation
     - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
       with:
-        name: receipts-attestation-${{ github.run_attempt }}
+        name: receipts-attestation
         path: target/acceptance/receipts-attestation.tar.gz
         if-no-files-found: error
         retention-days: 30
+        overwrite: true
       if: always()
   release:
     if: always() && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
@@ -109,7 +110,7 @@ jobs:
         prepare-build: 'false'
     - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
       with:
-        pattern: receipts-*-${{ github.run_attempt }}
+        pattern: receipts-*
         merge-multiple: true
         path: target/acceptance/downloads
     - id: hashes

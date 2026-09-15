@@ -72,7 +72,7 @@ jobs:
     - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
       with:
         path: target/acceptance/downloads
-        name: receipts-build-${{ github.run_attempt }}
+        name: receipts-build
       if: inputs.build-sha != ''
     - name: Verify upstream build before extraction
       env:
@@ -108,8 +108,11 @@ jobs:
       run: python3 scripts/ci_artifacts.py pack --lane "$LANE" --shards "$SHARDS"
     - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
       with:
-        name: receipts-${{ inputs.lane }}-${{ github.run_attempt }}
+        # Stable names let a rerun replace only its own lane while downstream
+        # jobs continue to consume successful receipts from earlier attempts.
+        name: receipts-${{ inputs.lane }}
         path: target/acceptance/receipts-${{ inputs.lane }}.tar.gz
         if-no-files-found: error
         retention-days: 14
+        overwrite: true
       if: always()
