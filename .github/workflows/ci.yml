@@ -10,60 +10,8 @@ name: CI
   - cron: 0 3 * * *
   workflow_dispatch: null
 permissions:
-  contents: write
+  contents: read
 jobs:
-  patch-rerun-semantics:
-    if: github.event_name == 'pull_request' && github.head_ref == 'fix/ci-rerun-artifacts'
-    runs-on: ubuntu-24.04
-    steps:
-    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      with:
-        ref: ${{ github.head_ref }}
-        fetch-depth: 0
-    - name: Patch attempt semantics on the branch
-      run: |
-        python3 - <<'PY'
-        from pathlib import Path
-
-        py = Path('scripts/ci_artifacts.py')
-        text = py.read_text()
-        old = '        for key, actual in [("GITHUB_SHA", plan["identity"]["commit"]), ("GITHUB_RUN_ID", plan["run_id"]), ("GITHUB_RUN_ATTEMPT", plan["attempt"])]:\n'
-        new = '        for key, actual in [("GITHUB_SHA", plan["identity"]["commit"]), ("GITHUB_RUN_ID", plan["run_id"])]:\n'
-        if old not in text:
-            raise SystemExit('expected Python attempt validation not found')
-        py.write_text(text.replace(old, new, 1))
-
-        rs = Path('xtask/src/acceptance/plan.rs')
-        text = rs.read_text()
-        old = '''    for (key, expected) in [
-        ("GITHUB_RUN_ID", &plan.run_id),
-        ("GITHUB_RUN_ATTEMPT", &plan.attempt),
-    ] {
-        if std::env::var(key).is_ok_and(|value| &value != expected) {
-            return Err(format!("wrong {key}"));
-        }
-    }
-'''
-        new = '''    // A workflow attempt is retry provenance, not plan identity. A rerun may
-    // intentionally consume the verified control bundle created by an earlier
-    // attempt of the same GitHub run. The immutable boundary is the run id;
-    // archive and runner integrity are independently bound by SHA-256 above.
-    if std::env::var("GITHUB_RUN_ID")
-        .is_ok_and(|value| value.as_str() != plan.run_id.as_str())
-    {
-        return Err("wrong GITHUB_RUN_ID".into());
-    }
-'''
-        if old not in text:
-            raise SystemExit('expected Rust attempt validation not found')
-        rs.write_text(text.replace(old, new, 1))
-        PY
-        git config user.name github-actions[bot]
-        git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-        git add scripts/ci_artifacts.py xtask/src/acceptance/plan.rs
-        git diff --cached --check
-        git commit -m 'fix(ci): treat workflow attempt as retry provenance'
-        git push origin HEAD:${{ github.head_ref }}
   acceptance:
     uses: ./.github/workflows/acceptance.yml
     with:
