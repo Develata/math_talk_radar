@@ -62,7 +62,7 @@ jobs:
     - name: Verify final automated acceptance
       run: target/acceptance/control/xtask acceptance summarize --plan target/acceptance/control/plan.json
         --receipts target/acceptance/receipts --out target/acceptance/final-summary.json
-    - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
       with:
         name: final-acceptance-summary-${{ github.run_attempt }}
         path: target/acceptance/final-summary.json
@@ -72,7 +72,7 @@ jobs:
     - id: pack
       if: always()
       run: python3 scripts/ci_artifacts.py pack --lane attestation --shards attestation
-    - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
       with:
         name: receipts-attestation
         path: target/acceptance/receipts-attestation.tar.gz
@@ -146,7 +146,7 @@ jobs:
       env:
         GH_TOKEN: ${{ github.token }}
       run: python3 scripts/ci_artifacts.py published-readback
-    - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
       with:
         name: release-acceptance-summary-${{ github.run_attempt }}
         path: |
