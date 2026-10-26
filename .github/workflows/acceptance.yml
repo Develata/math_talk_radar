@@ -58,12 +58,15 @@ jobs:
       run: |
         tar -czf target/acceptance/control.tar.gz -C target/acceptance/control xtask plan.json
         echo "sha256=$(sha256sum target/acceptance/control.tar.gz | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
-    - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
       with:
-        name: acceptance-control-${{ github.run_attempt }}
+        # Keep the control artifact stable across attempts so a single-lane
+        # rerun can reuse the original plan without forcing plan to rerun.
+        name: acceptance-control
         path: target/acceptance/control.tar.gz
         if-no-files-found: error
         retention-days: 14
+        overwrite: true
   quality:
     needs:
     - plan
@@ -172,10 +175,11 @@ jobs:
         NEEDS_JSON: ${{ toJSON(needs) }}
         ACCEPTANCE_PROFILE: ${{ inputs.profile }}
       run: python3 scripts/ci_artifacts.py expected
-    - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
       with:
         path: target/acceptance/downloads
-        pattern: receipts-*-${{ github.run_attempt }}
+        # Receipts are stable per lane and overwritten by a successful rerun.
+        pattern: receipts-*
         merge-multiple: true
     - name: Verify transport and execution evidence
       env:
@@ -186,7 +190,7 @@ jobs:
         stage=final
         if [ "$PROFILE" = release ] || [ "$PROFILE" = preflight ]; then stage=pre-attestation; fi
         target/acceptance/control/xtask acceptance summarize --plan target/acceptance/control/plan.json --receipts target/acceptance/receipts --stage "$stage" --out target/acceptance/summary.json
-    - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
       with:
         name: acceptance-summary-${{ github.run_attempt }}
         path: |-

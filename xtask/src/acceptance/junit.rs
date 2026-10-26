@@ -50,21 +50,15 @@ pub fn inventory(value: &Value, modules: &BTreeSet<String>) -> Result<BTreeSet<T
     Ok(tests)
 }
 
-fn attributes(
-    reader: &Reader<&[u8]>,
-    element: &BytesStart<'_>,
-) -> Result<BTreeMap<String, String>> {
+fn attributes(element: &BytesStart<'_>) -> Result<BTreeMap<String, String>> {
     element
         .attributes()
         .map(|attribute| {
             let attribute = attribute.map_err(|e| e.to_string())?;
             Ok((
-                String::from_utf8(attribute.key.as_ref().to_vec()).map_err(|e| e.to_string())?,
+                attribute.key.as_ref().to_owned(),
                 attribute
-                    .decoded_and_normalized_value(
-                        quick_xml::XmlVersion::Implicit1_0,
-                        reader.decoder(),
-                    )
+                    .normalized_value(quick_xml::XmlVersion::Implicit1_0)
                     .map_err(|e| e.to_string())?
                     .into_owned(),
             ))
@@ -80,12 +74,12 @@ pub fn results(xml: &str) -> Result<BTreeMap<TestId, String>> {
     loop {
         match reader.read_event().map_err(|e| e.to_string())? {
             Event::Start(element) | Event::Empty(element)
-                if element.name().as_ref() == b"testcase" =>
+                if element.name().as_ref() == "testcase" =>
             {
                 if current.is_some() {
                     return Err("nested testcases".into());
                 }
-                let attrs = attributes(&reader, &element)?;
+                let attrs = attributes(&element)?;
                 let id = TestId {
                     binary: attrs
                         .get("classname")
@@ -99,13 +93,13 @@ pub fn results(xml: &str) -> Result<BTreeMap<TestId, String>> {
             }
             Event::Start(element) | Event::Empty(element)
                 if [
-                    b"failure".as_slice(),
-                    b"error",
-                    b"skipped",
-                    b"flakyFailure",
-                    b"flakyError",
-                    b"rerunFailure",
-                    b"rerunError",
+                    "failure",
+                    "error",
+                    "skipped",
+                    "flakyFailure",
+                    "flakyError",
+                    "rerunFailure",
+                    "rerunError",
                 ]
                 .contains(&element.name().as_ref()) =>
             {
@@ -115,7 +109,7 @@ pub fn results(xml: &str) -> Result<BTreeMap<TestId, String>> {
                     return Err("JUnit failure outside testcase".into());
                 }
             }
-            Event::End(element) if element.name().as_ref() == b"testcase" => {
+            Event::End(element) if element.name().as_ref() == "testcase" => {
                 let (id, status) = current.take().ok_or("unexpected testcase end")?;
                 if results.insert(id, status).is_some() {
                     return Err("duplicate JUnit test result".into());

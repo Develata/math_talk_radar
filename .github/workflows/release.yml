@@ -35,9 +35,9 @@ jobs:
         sha256: ${{ needs.acceptance.outputs.control_sha }}
         lane: release
         prepare-build: 'false'
-    - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
       with:
-        pattern: receipts-*-${{ github.run_attempt }}
+        pattern: receipts-*
         merge-multiple: true
         path: target/acceptance/downloads
     - name: Reverify the complete pre-attestation gate
@@ -62,7 +62,7 @@ jobs:
     - name: Verify final automated acceptance
       run: target/acceptance/control/xtask acceptance summarize --plan target/acceptance/control/plan.json
         --receipts target/acceptance/receipts --out target/acceptance/final-summary.json
-    - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
       with:
         name: final-acceptance-summary-${{ github.run_attempt }}
         path: target/acceptance/final-summary.json
@@ -72,12 +72,13 @@ jobs:
     - id: pack
       if: always()
       run: python3 scripts/ci_artifacts.py pack --lane attestation --shards attestation
-    - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
       with:
-        name: receipts-attestation-${{ github.run_attempt }}
+        name: receipts-attestation
         path: target/acceptance/receipts-attestation.tar.gz
         if-no-files-found: error
         retention-days: 30
+        overwrite: true
       if: always()
   release:
     if: always() && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
@@ -107,9 +108,9 @@ jobs:
         sha256: ${{ needs.acceptance.outputs.control_sha }}
         lane: release
         prepare-build: 'false'
-    - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
       with:
-        pattern: receipts-*-${{ github.run_attempt }}
+        pattern: receipts-*
         merge-multiple: true
         path: target/acceptance/downloads
     - id: hashes
@@ -145,7 +146,7 @@ jobs:
       env:
         GH_TOKEN: ${{ github.token }}
       run: python3 scripts/ci_artifacts.py published-readback
-    - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
       with:
         name: release-acceptance-summary-${{ github.run_attempt }}
         path: |
