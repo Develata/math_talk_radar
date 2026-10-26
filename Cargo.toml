@@ -56,7 +56,9 @@ feed-rs = "3.0"
 icalendar = { version = "0.17", features = ["parser"] }
 
 # State
-redb = "2.0"
+redb = "4.4"
+# File-format migration bridge only; ordinary state access uses redb 4.
+redb-legacy = { package = "redb", version = "=2.6.4" }
 
 # CLI / diagnostics
 clap = { version = "4.5", features = ["derive", "env", "cargo"] }

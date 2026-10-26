@@ -4,6 +4,7 @@
 #![forbid(unsafe_code)]
 
 pub mod changes;
+pub mod file_migration;
 pub mod migrations;
 pub mod repository;
 pub mod schema;

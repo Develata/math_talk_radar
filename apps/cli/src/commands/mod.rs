@@ -4,5 +4,6 @@ pub mod doctor;
 pub mod scan;
 pub mod schema;
 pub mod sources;
+pub mod state;
 pub mod uninstall;
 pub mod update;

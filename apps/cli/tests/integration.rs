@@ -113,17 +113,76 @@ fn sec_003_semantic_config_error_does_not_echo_source_values() {
     assert!(!stderr.contains(marker));
 }
 
-// CLI-001: --help lists all 6 subcommands.
+// CLI-001: --help lists all subcommands.
 #[test]
 fn cli_001_help_lists_all_subcommands() {
     let output = bin().arg("--help").assert().success();
     let stdout = String::from_utf8_lossy(&output.get_output().stdout);
-    for cmd in ["scan", "sources", "doctor", "update", "uninstall", "schema"] {
+    for cmd in [
+        "scan",
+        "sources",
+        "doctor",
+        "update",
+        "uninstall",
+        "schema",
+        "state",
+    ] {
         assert!(
             stdout.contains(cmd),
             "expected --help to mention '{cmd}', got:\n{stdout}"
         );
     }
+}
+
+#[test]
+fn state_migration_requires_paths_and_reports_state_failures() {
+    let dir = tempfile::TempDir::new().unwrap();
+    bin().args(["state", "migrate"]).assert().code(2);
+    let old = dir.path().join("old.redb");
+    let new = dir.path().join("new.redb");
+    std::fs::write(&old, b"not a database").unwrap();
+    let result = bin()
+        .args(["state", "migrate", "--from"])
+        .arg(&old)
+        .arg("--to")
+        .arg(&new)
+        .assert()
+        .code(5);
+    assert!(result.get_output().stdout.is_empty());
+    assert!(
+        String::from_utf8_lossy(&result.get_output().stderr).contains("state migration failed")
+    );
+    assert_eq!(std::fs::read(&old).unwrap(), b"not a database");
+    assert!(!new.exists());
+}
+
+#[test]
+fn state_migration_publishes_copy_and_never_overwrites() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let old = dir.path().join("old.redb");
+    let new = dir.path().join("new.redb");
+    drop(radar_state::Repository::open(&old).unwrap());
+    let before = std::fs::read(&old).unwrap();
+    let result = bin()
+        .args(["state", "migrate", "--from"])
+        .arg(&old)
+        .arg("--to")
+        .arg(&new)
+        .assert()
+        .success();
+    assert!(String::from_utf8_lossy(&result.get_output().stdout).contains("Original retained"));
+    assert_eq!(std::fs::read(&old).unwrap(), before);
+    drop(radar_state::Repository::open(&new).unwrap());
+    let migrated = std::fs::read(&new).unwrap();
+    bin()
+        .args(["state", "migrate", "--from"])
+        .arg(&old)
+        .arg("--to")
+        .arg(&new)
+        .assert()
+        .code(5);
+    assert_eq!(std::fs::read(&old).unwrap(), before);
+    assert_eq!(std::fs::read(&new).unwrap(), migrated);
 }
 
 // CLI-002: --version exits 0, no network/state init.

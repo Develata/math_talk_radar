@@ -14,3 +14,9 @@
 Plan refs: `docs/plan/09_cli_output_contract.md` (CLI), `docs/plan/03_architecture.md`
 (CFG), `docs/plan/05_fetching_reliability.md` (HTTP-004/005). Automation: `cargo
 test --test integration`. Lands in M4.
+
+ADR-0018 migration regressions: help advertises `state migrate`; both file paths
+are required (exit 2); migration errors use exit 5 without success on stdout;
+successful copy migration leaves the original unchanged, and a second attempt
+cannot overwrite the published destination. State-layer tests cover legacy
+file formats and retained history.

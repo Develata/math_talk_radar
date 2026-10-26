@@ -17,3 +17,10 @@ scans; one-shot cancellation; owned-vector allocation reuse; alias first_seen
 and tombstone transfer; source-health/change-log retention and reopen; v4
 migration. CLI integration uses two independent fixture sources: failed B
 protects both its historical events and disappeared events from healthy A.
+
+Engine upgrade regressions (ADR-0018): file format v2 is rejected without
+modification; explicit copy migration preserves events/media/first_seen,
+tombstones, source-health and change history. The old engine must reopen the
+unchanged source, and the new engine must reopen and update the candidate.
+Malformed and future application schemas, existing destinations and active
+writers fail without changing the source or publishing a partial candidate.

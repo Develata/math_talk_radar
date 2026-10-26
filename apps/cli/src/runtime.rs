@@ -109,6 +109,7 @@ pub async fn run(cli: Cli) -> ExitCode {
         Command::Update(a) => commands::update::run(a).await,
         Command::Uninstall(a) => commands::uninstall::run(a).await,
         Command::Schema(a) => commands::schema::run(a).await,
+        Command::State(a) => commands::state::run(a).await,
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
