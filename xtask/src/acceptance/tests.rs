@@ -233,6 +233,84 @@ fn ci_004_zero_missing_skipped_and_duplicate_tests_are_rejected() {
 }
 
 #[test]
+fn ci_004_junit_attributes_preserve_unicode_entities_and_normalization() {
+    let xml = concat!(
+        "<?xml version=\"1.0\"?><testsuites><testsuite>",
+        "<testcase classname=\"pkg::α&amp;β\" ",
+        "name=\"a\tb\r\nc\rd\ne &lt;&gt;&amp;&apos;&quot; &#x1F600; &amp;lt;\"/>",
+        "<testcase classname=\"pkg::α&amp;β\" ",
+        "name=\"character&#x9;references&#10;stay&#13;distinct\"></testcase>",
+        "</testsuite></testsuites>",
+    );
+    let expected = [
+        TestId {
+            binary: "pkg::α&β".into(),
+            test: "a b c d e <>&'\" 😀 &lt;".into(),
+        },
+        TestId {
+            binary: "pkg::α&β".into(),
+            test: "character\treferences\nstay\rdistinct".into(),
+        },
+    ]
+    .into();
+    junit::verify(&expected, &junit::results(xml).unwrap()).unwrap();
+}
+
+#[test]
+fn ci_004_junit_failure_variants_never_pass() {
+    let id = TestId {
+        binary: "pkg::integration".into(),
+        test: "checks_contract".into(),
+    };
+    let expected = [id.clone()].into();
+    for tag in [
+        "failure",
+        "error",
+        "skipped",
+        "flakyFailure",
+        "flakyError",
+        "rerunFailure",
+        "rerunError",
+    ] {
+        for marker in [
+            format!("<{tag}/>"),
+            format!("<{tag}><![CDATA[diagnostic <text> & Unicode α]]></{tag}>"),
+        ] {
+            let xml = format!(
+                "<testsuites><testsuite><testcase classname=\"pkg::integration\" \
+                 name=\"checks_contract\">{marker}</testcase></testsuite></testsuites>"
+            );
+            let actual = junit::results(&xml).unwrap();
+            assert_eq!(
+                actual.get(&id).map(String::as_str),
+                Some("fail"),
+                "{marker}"
+            );
+            assert!(junit::verify(&expected, &actual).is_err(), "{marker}");
+            let outside_testcase = format!("<testsuites>{marker}</testsuites>");
+            assert!(junit::results(&outside_testcase).is_err(), "{marker}");
+        }
+    }
+}
+
+#[test]
+fn ci_004_junit_rejects_malformed_and_equivalent_duplicate_results() {
+    for xml in [
+        "<testsuites><testcase name=\"test\"/></testsuites>",
+        "<testsuites><testcase classname=\"pkg\"/></testsuites>",
+        "<testsuites><testcase classname=\"pkg\" name=\"test\" name=\"other\"/></testsuites>",
+        "<testsuites><testcase classname=\"pkg\" name=\"&unknown;\"/></testsuites>",
+        "<testsuites><testcase classname=\"pkg\" name=\"&#x110000;\"/></testsuites>",
+        "<testsuites><testcase classname=\"pkg\" name=\"test\">",
+        "<testsuites><testcase classname=\"pkg\" name=\"test\"></testsuites>",
+        "<testsuites><testcase classname=\"pkg\" name=\"test\"><testcase classname=\"pkg\" name=\"nested\"/></testcase></testsuites>",
+        "<testsuites><testcase classname=\"pkg\" name=\"a&amp;b\"/><testcase classname=\"pkg\" name=\"a&#38;b\"/></testsuites>",
+    ] {
+        assert!(junit::results(xml).is_err(), "{xml}");
+    }
+}
+
+#[test]
 fn ci_005_fanin_rejects_missing_stale_and_changed_evidence() {
     let directory = tempfile::tempdir().unwrap();
     let plan = fixture_plan();
