@@ -71,8 +71,9 @@ pub fn cli(root: &Path, args: &[String]) -> Result<()> {
                 "shadow" => Profile::Shadow,
                 "full" => Profile::Full,
                 "release" => Profile::Release,
+                "preflight" => Profile::Preflight,
                 "live" => Profile::Live,
-                _ => return Err("profile must be local|shadow|full|release|live".into()),
+                _ => return Err("profile must be local|shadow|full|release|preflight|live".into()),
             };
             let plan = plan::create(root, profile, options.get("--base").cloned())?;
             let output = safe_output(root, Path::new(required(&options, "--out")?))?;

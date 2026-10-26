@@ -4,22 +4,23 @@ All notable changes to `math_talk_radar` are documented here. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project adheres to [Semantic Versioning](https://semver.org/).
 
-## [0.1.0] — 2026-08-23
+## [0.1.1] — 2026-09-09
 
-First public release, rewritten before the v0.1.0 tag/Release is finalized.
-Pure Rust CLI for discovering public mathematics conferences, talks, lecture
-series, recordings, slides, and related resources. No LLM, no browser
-automation, no JS runtime.
+Reliability, performance and security fixes. Public JSON schema remains `1.0`
+and the persisted state schema remains v4.
 
 ### Security
 
-- Update the locked `h2` dependency from 0.4.15 to 0.4.16 to address
+- Update the locked `h2` dependency from 0.4.15 to 0.4.18, including the fix for
   RUSTSEC-2026-0258 (unbounded empty HTTP/2 DATA frame queuing).
 - Require a matching install manifest (or explicit `--force-unmanaged`) for
   update/uninstall in every directory. Custom Cargo target/profile paths are
   protected; lifecycle regression tests operate on temporary executable copies.
+- Prevent configuration parser snippets and values from entering diagnostics.
+  Update errors omit signed URLs, credentials, redirect values and malformed
+  release metadata; regression tests use synthetic markers.
 
-### Engineering optimization — 2026-09-09
+### Fixed and optimized
 
 - Ranking no longer selects canonical events or changes persistent identity;
   score once after dedup and state reconciliation.
@@ -43,7 +44,18 @@ automation, no JS runtime.
 - Accept valid musl static PIE in the linkage gate while rejecting dynamic ELF
   and ambiguous tool output. Release CI installs musl-tools and uses the same
   xtask linkage validator as local builds.
+- Bind acceptance receipts to their exact source, run and artifacts. Release
+  verifies checksums, clean-container execution and build provenance before
+  publication, then reads back the published assets. Manual preflight collects
+  automated release evidence without publication; human review remains required.
+- Restrict musl tool installation to Ubuntu's configured package source, so
+  unrelated runner repositories cannot prevent release verification.
 
+## [0.1.0] — 2026-08-23
+
+First public release. Pure Rust CLI for discovering public mathematics
+conferences, talks, lecture series, recordings, slides, and related resources.
+No LLM, no browser automation, no JS runtime.
 
 ### Added
 
@@ -110,4 +122,5 @@ automation, no JS runtime.
   for v0.1 (P0-04(a) design decision).
 
 [0.1.0]: https://github.com/Develata/math_talk_radar/releases/tag/v0.1.0
-[Unreleased]: https://github.com/Develata/math_talk_radar/compare/v0.1.0...HEAD
+[0.1.1]: https://github.com/Develata/math_talk_radar/compare/v0.1.0...v0.1.1
+[Unreleased]: https://github.com/Develata/math_talk_radar/compare/v0.1.1...HEAD

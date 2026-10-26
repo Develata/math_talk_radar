@@ -12,6 +12,7 @@ pub enum Profile {
     Shadow,
     Full,
     Release,
+    Preflight,
     Live,
 }
 
@@ -188,16 +189,19 @@ pub fn checks(profile: &Profile, full: bool, modules: &BTreeSet<String>) -> BTre
     if full {
         checks.extend(["security", "coverage", "performance", "msrv"].map(str::to_owned));
     }
+    if matches!(profile, Profile::Release | Profile::Preflight) {
+        checks.extend(["build", "artifact", "attestation"].map(str::to_owned));
+    }
     if *profile == Profile::Release {
-        checks.extend(["build", "artifact", "review", "attestation"].map(str::to_owned));
+        checks.insert("review".into());
     }
     checks
 }
 
 pub fn create(root: &Path, profile: Profile, base: Option<String>) -> Result<Plan> {
     let identity = evidence::identity(root)?;
-    if profile == Profile::Release && identity.dirty {
-        return Err("release requires a clean source checkout".into());
+    if matches!(profile, Profile::Release | Profile::Preflight) && identity.dirty {
+        return Err("release/preflight requires a clean source checkout".into());
     }
     let cases = catalog::load(root)?;
     let metadata = crate::architecture::metadata(root)?;
@@ -309,13 +313,11 @@ pub fn validate(root: &Path, plan: &Plan) -> Result<()> {
     {
         return Err("runner differs from planned artifact".into());
     }
-    for (key, expected) in [
-        ("GITHUB_RUN_ID", &plan.run_id),
-        ("GITHUB_RUN_ATTEMPT", &plan.attempt),
-    ] {
-        if std::env::var(key).is_ok_and(|value| &value != expected) {
-            return Err(format!("wrong {key}"));
-        }
+    // Workflow attempt is retry provenance, not immutable plan identity. A
+    // later attempt may intentionally consume the verified control bundle from
+    // an earlier attempt of the same GitHub run.
+    if std::env::var("GITHUB_RUN_ID").is_ok_and(|value| value.as_str() != plan.run_id.as_str()) {
+        return Err("wrong GITHUB_RUN_ID".into());
     }
     let recomputed = create(root, plan.profile.clone(), plan.base.clone())?;
     if plan.cases != recomputed.cases
@@ -341,7 +343,8 @@ pub fn selected_cases(plan: &Plan) -> Vec<&Case> {
             plan.checks.contains(&case.check)
                 && (case.check != "tests" || plan.modules.contains(&case.module))
                 && (case.scope == "baseline"
-                    || (case.scope == "release" && plan.profile == Profile::Release)
+                    || (case.scope == "release"
+                        && matches!(plan.profile, Profile::Release | Profile::Preflight))
                     || (case.scope == "live" && plan.profile == Profile::Live))
         })
         .collect()

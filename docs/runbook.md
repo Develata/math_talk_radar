@@ -130,6 +130,26 @@ may prevent a Rust summary from being produced; the workflow still fails closed.
 
 ## Release evidence
 
+Run `gh workflow run live-smoke.yml --ref main` for the separate LIVE-003
+observation. For automated release evidence without publication, run:
+
+```bash
+gh workflow run release.yml --ref main
+```
+
+Manual dispatch selects `preflight`: full baseline, musl build, exact-artifact
+checks, clean Ubuntu smoke and attestation. Download `final-acceptance-summary-*`
+and `receipts-*-*` from that run. PERF-002 and RELS-001/002/003 require actual
+passing receipts; SEC-003 remains `not-selected`, awaiting human review.
+The publication job is restricted to a version-tag push, and additionally
+checks the event and release profile immediately before publishing.
+
+Evidence collection order: run live observation; run automated preflight;
+prepare the logging/security review with reproduction logs; resolve findings;
+obtain the maintainer's commit-bound review; then authorize the version tag.
+Do not copy a preflight receipt into a later release run: run/attempt, profile,
+source and artifact identities remain binding. Release always reruns its gates.
+
 The release tag must match the workspace version. Release planning requires a
 clean checkout and executes full acceptance. One musl build produces both the
 product binary and a standalone smoke runner. The artifact lane checks linkage,

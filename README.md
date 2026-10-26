@@ -9,7 +9,7 @@ v0.1 is a pure Rust CLI — no LLM, no browser automation, no JS runtime.
 
 ## Status
 
-v0.1.0 implementation is present. Acceptance definitions are not a current-run
+v0.1.1 implementation is present. Acceptance definitions are not a current-run
 pass claim; use the verified acceptance summary for the tested revision/profile.
 Historical milestone evidence is in `docs/report/implementation-status.md`.
 
