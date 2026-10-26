@@ -52,7 +52,7 @@ futures = "0.3"
 
 # Parsing
 scraper = "0.27"
-feed-rs = "2.4"
+feed-rs = "3.0"
 icalendar = { version = "0.17", features = ["parser"] }
 
 # State
