@@ -31,6 +31,15 @@ leaves no half-migrated state. Destructive migrations must be explicit.
 `first_seen` and media history must not be silently lost (state is rebuildable
 but history should not vanish without notice).
 
+Proposed engine upgrade policy (ADR-0018, pending user approval): ordinary
+opens reject redb file format v2 with migration instructions. Explicit
+`state migrate --from OLD --to NEW` locks and retains OLD unchanged, upgrades
+and validates a private copy, and publishes NEW only if NEW does not exist.
+Application migrations run on that copy. A failed migration must not publish
+a partial database or overwrite either user path. Select NEW explicitly for
+subsequent scans; keep OLD and the previous binary for rollback. Engine file
+format v3 is independent of application state schema v4.
+
 Ordered persisted keys must use a canonical fixed-width UTC timestamp
 representation. Chrono's variable-precision default RFC3339 formatting is not
 permitted for lexicographically ordered state keys because values within the

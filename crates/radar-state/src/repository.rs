@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
 use radar_core::{Event, EventId, SourceHealth};
-use redb::ReadableTable;
+use redb::{ReadableDatabase, ReadableTable};
 use serde::{Deserialize, Serialize};
 
 use crate::changes::ChangeRecord;
@@ -46,6 +46,10 @@ pub enum StateError {
     Schema { expected: u32, found: u32 },
     #[error("state migration error: {0}")]
     Migration(String),
+    #[error(
+        "state file format v{found} requires migration; run `math_talk_radar state migrate --from <old-db> --to <new-db>`, keep the original for rollback, then scan with `--state <new-db>`"
+    )]
+    FileFormat { found: u8 },
     #[error("state backend error: {0}")]
     Backend(Box<redb::Error>),
     #[error("state read-only: write attempted on a read-only repository")]
@@ -59,7 +63,10 @@ pub enum StateError {
 // embed a ReadTransaction, which is large — clippy::result_large_err).
 impl From<redb::DatabaseError> for StateError {
     fn from(e: redb::DatabaseError) -> Self {
-        Self::Backend(Box::new(e.into()))
+        match e {
+            redb::DatabaseError::UpgradeRequired(found) => Self::FileFormat { found },
+            other => Self::Backend(Box::new(other.into())),
+        }
     }
 }
 impl From<redb::TransactionError> for StateError {

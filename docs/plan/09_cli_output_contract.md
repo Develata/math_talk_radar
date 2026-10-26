@@ -6,7 +6,12 @@
 ## Commands (§27)
 
 `scan`, `sources` (`list` | `check [id]` — deferred, see ADR-0009), `doctor`,
-`update`, `uninstall`, `schema`.
+`update`, `uninstall`, `schema`, `state migrate --from OLD --to NEW`
+(proposed in ADR-0018, pending user approval).
+
+`state migrate` performs no network access and emits human-readable success
+only after validating and publishing the copy. Migration failures return exit
+5; missing required paths return usage exit 2. Neither path may be overwritten.
 
 ## scan options (§27.2)
 

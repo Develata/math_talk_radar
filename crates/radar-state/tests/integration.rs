@@ -10,7 +10,7 @@ use radar_core::{
     SourceEvidence, SourceHealth, SourceStatus,
 };
 use radar_state::{ChangeKind, Repository, StateError, detect_changes};
-use redb::ReadableTable;
+use redb::{ReadableDatabase, ReadableTable};
 use url::Url;
 
 fn t0() -> DateTime<Utc> {
@@ -78,6 +78,334 @@ fn base_event(id: &str, media: Vec<MediaResource>) -> Event {
         rank_reasons: Vec::new(),
         first_seen_at: None,
         last_seen_at: None,
+    }
+}
+
+/// Generate real file-format-v2 bytes with the maintenance branch of the old
+/// engine, including all five application tables and an unknown extra table.
+fn legacy_file(path: &std::path::Path) {
+    let seed = tempfile::TempDir::new().unwrap();
+    let seed_path = seed.path().join("seed.redb");
+    {
+        let repo = Repository::open(&seed_path).unwrap();
+        repo.store_scan_bundle(
+            &[base_event("e1", vec![]), base_event("cancelled", vec![])],
+            &[health("s1", SourceStatus::Ok, t0())],
+            t0(),
+        )
+        .unwrap();
+        repo.store_scan_bundle(
+            &[base_event("e1", vec![video("https://example.com/v1")])],
+            &[health("s1", SourceStatus::Ok, t1())],
+            t1(),
+        )
+        .unwrap();
+    }
+    let new = redb::ReadOnlyDatabase::open(&seed_path).unwrap();
+    let read = new.begin_read().unwrap();
+    let old = redb_legacy::Database::create(path).unwrap();
+    let write = old.begin_write().unwrap();
+    for name in ["events", "cancelled_events", "source_health", "change_log"] {
+        let table = read
+            .open_table(redb::TableDefinition::<&str, &[u8]>::new(name))
+            .unwrap();
+        let mut target = write
+            .open_table(redb_legacy::TableDefinition::<&str, &[u8]>::new(name))
+            .unwrap();
+        for row in table.iter().unwrap() {
+            let (key, value) = row.unwrap();
+            target.insert(key.value(), value.value()).unwrap();
+        }
+    }
+    write
+        .open_table(redb_legacy::TableDefinition::<&str, u32>::new(
+            "schema_version",
+        ))
+        .unwrap()
+        .insert("version", 4)
+        .unwrap();
+    write
+        .open_table(redb_legacy::TableDefinition::<&str, &[u8]>::new("extra"))
+        .unwrap()
+        .insert("opaque", b"keep me".as_slice())
+        .unwrap();
+    write.commit().unwrap();
+}
+
+#[test]
+fn redb_v2_open_refuses_without_changing_file() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().join("old.redb");
+    legacy_file(&path);
+    let before = std::fs::read(&path).unwrap();
+    for result in [Repository::open(&path), Repository::open_read_only(&path)] {
+        let error = result.unwrap_err();
+        assert!(matches!(error, StateError::FileFormat { found: 2 }));
+        assert!(error.to_string().contains("state migrate --from"));
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+    }
+}
+
+#[test]
+fn redb_copy_migration_preserves_history_and_rollback_source() {
+    use redb_legacy::ReadableTable as _;
+    let dir = tempfile::TempDir::new().unwrap();
+    let old_path = dir.path().join("old.redb");
+    let new_path = dir.path().join("new.redb");
+    legacy_file(&old_path);
+    let before = std::fs::read(&old_path).unwrap();
+    radar_state::file_migration::migrate_copy(&old_path, &new_path).unwrap();
+    assert_eq!(std::fs::read(&old_path).unwrap(), before);
+    // Every stored byte survives; the previous engine still opens OLD. Never
+    // rely on it opening NEW after a redb-4 write for binary rollback.
+    {
+        let old = redb_legacy::Database::open(&old_path).unwrap();
+        let new = redb::ReadOnlyDatabase::open(&new_path).unwrap();
+        let old_read = old.begin_read().unwrap();
+        let new_read = new.begin_read().unwrap();
+        for name in [
+            "events",
+            "cancelled_events",
+            "source_health",
+            "change_log",
+            "extra",
+        ] {
+            let old_table = old_read
+                .open_table(redb_legacy::TableDefinition::<&str, &[u8]>::new(name))
+                .unwrap();
+            let new_table = new_read
+                .open_table(redb::TableDefinition::<&str, &[u8]>::new(name))
+                .unwrap();
+            let old_rows: Vec<_> = old_table
+                .iter()
+                .unwrap()
+                .map(|row| {
+                    let (k, v) = row.unwrap();
+                    (k.value().to_owned(), v.value().to_vec())
+                })
+                .collect();
+            let new_rows: Vec<_> = new_table
+                .iter()
+                .unwrap()
+                .map(|row| {
+                    let (k, v) = row.unwrap();
+                    (k.value().to_owned(), v.value().to_vec())
+                })
+                .collect();
+            assert!(!old_rows.is_empty(), "fixture must exercise {name}");
+            assert_eq!(old_rows, new_rows, "{name}");
+        }
+        assert_eq!(
+            new_read
+                .open_table(radar_state::schema::SCHEMA_VERSION)
+                .unwrap()
+                .get("version")
+                .unwrap()
+                .unwrap()
+                .value(),
+            4
+        );
+    }
+    let repo = Repository::open(&new_path).unwrap();
+    assert_eq!(repo.list_source_health("s1").unwrap().len(), 2);
+    let mut event = repo.get_event(&EventId("e1".into())).unwrap().unwrap();
+    assert_eq!(event.first_seen_at, Some(t0()));
+    assert_eq!(event.last_seen_at, Some(t1()));
+    assert_eq!(event.media.len(), 1);
+    event.media.push(video("https://example.com/v2"));
+    let (stored, changes) = repo
+        .store_scan_bundle(
+            &[event, base_event("cancelled", vec![])],
+            &[health("s1", SourceStatus::Ok, t2())],
+            t2(),
+        )
+        .unwrap();
+    assert!(stored.iter().all(|event| event.first_seen_at == Some(t0())));
+    assert!(
+        changes
+            .iter()
+            .any(|change| change.kind == ChangeKind::MediaAdded)
+    );
+    drop(repo);
+    let reopened = Repository::open(&new_path).unwrap();
+    assert_eq!(
+        reopened
+            .get_event(&EventId("e1".into()))
+            .unwrap()
+            .unwrap()
+            .media
+            .len(),
+        2
+    );
+    assert_eq!(std::fs::read(&old_path).unwrap(), before);
+}
+
+#[test]
+fn redb_copy_migration_runs_existing_application_migrations() {
+    use redb_legacy::ReadableTable as _;
+    for version in [1, 2, 3] {
+        let dir = tempfile::TempDir::new().unwrap();
+        let old_path = dir.path().join("old.redb");
+        let new_path = dir.path().join("new.redb");
+        legacy_file(&old_path);
+        {
+            let old = redb_legacy::Database::open(&old_path).unwrap();
+            let write = old.begin_write().unwrap();
+            write
+                .open_table(redb_legacy::TableDefinition::<&str, u32>::new(
+                    "schema_version",
+                ))
+                .unwrap()
+                .insert("version", version)
+                .unwrap();
+            if version < 3 {
+                // Real v1/v2 shape: one bare source key, no recorded_at,
+                // and no change log. v1 predates cancellation tombstones.
+                write
+                    .delete_table(redb_legacy::TableDefinition::<&str, &[u8]>::new(
+                        "change_log",
+                    ))
+                    .unwrap();
+                if version == 1 {
+                    write
+                        .delete_table(redb_legacy::TableDefinition::<&str, &[u8]>::new(
+                            "cancelled_events",
+                        ))
+                        .unwrap();
+                }
+                let mut table = write
+                    .open_table(redb_legacy::TableDefinition::<&str, &[u8]>::new(
+                        "source_health",
+                    ))
+                    .unwrap();
+                table.retain(|_, _| false).unwrap();
+                let mut record =
+                    serde_json::to_value(health("s1", SourceStatus::Ok, t0())).unwrap();
+                record.as_object_mut().unwrap().remove("recorded_at");
+                table
+                    .insert("s1", serde_json::to_vec(&record).unwrap().as_slice())
+                    .unwrap();
+            } else {
+                // v3 used variable-width RFC3339 timestamps in ordered keys.
+                for name in ["source_health", "change_log"] {
+                    let mut table = write
+                        .open_table(redb_legacy::TableDefinition::<&str, &[u8]>::new(name))
+                        .unwrap();
+                    let rows: Vec<_> = table
+                        .iter()
+                        .unwrap()
+                        .map(|row| {
+                            let (key, value) = row.unwrap();
+                            (
+                                key.value().replace(".000000000Z", "Z"),
+                                value.value().to_vec(),
+                            )
+                        })
+                        .collect();
+                    table.retain(|_, _| false).unwrap();
+                    for (key, value) in rows {
+                        table.insert(key.as_str(), value.as_slice()).unwrap();
+                    }
+                }
+            }
+            write.commit().unwrap();
+        }
+        let before = std::fs::read(&old_path).unwrap();
+        radar_state::file_migration::migrate_copy(&old_path, &new_path).unwrap();
+        assert_eq!(std::fs::read(&old_path).unwrap(), before);
+        let repo = Repository::open(&new_path).unwrap();
+        assert_eq!(
+            repo.get_event(&EventId("e1".into()))
+                .unwrap()
+                .unwrap()
+                .first_seen_at,
+            Some(t0())
+        );
+        let health = repo.list_source_health("s1").unwrap();
+        assert_eq!(health.len(), if version < 3 { 1 } else { 2 });
+        assert!(health.iter().all(|record| record.recorded_at.is_some()));
+        let changes = repo.list_changes(t0()).unwrap();
+        if version < 3 {
+            assert!(changes.is_empty());
+        } else {
+            assert!(changes.iter().any(|c| c.kind == ChangeKind::MediaAdded));
+        }
+    }
+}
+
+#[test]
+fn redb_copy_migration_rejects_existing_destination_and_active_writer() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let old_path = dir.path().join("old.redb");
+    let new_path = dir.path().join("new.redb");
+    legacy_file(&old_path);
+    let before = std::fs::read(&old_path).unwrap();
+    std::fs::write(&new_path, b"do not replace").unwrap();
+    assert!(radar_state::file_migration::migrate_copy(&old_path, &new_path).is_err());
+    assert!(radar_state::file_migration::migrate_copy(&old_path, &old_path).is_err());
+    assert_eq!(std::fs::read(&new_path).unwrap(), b"do not replace");
+    assert_eq!(std::fs::read(&old_path).unwrap(), before);
+    let active = redb_legacy::Database::open(&old_path).unwrap();
+    let other_path = dir.path().join("other.redb");
+    let error = radar_state::file_migration::migrate_copy(&old_path, &other_path).unwrap_err();
+    assert!(error.to_string().contains("cannot lock source"));
+    assert!(!other_path.exists());
+    drop(active);
+    assert_eq!(std::fs::read(&old_path).unwrap(), before);
+}
+
+#[test]
+fn redb_copy_migration_failure_does_not_publish_or_modify_source() {
+    for failure in [
+        "future",
+        "missing-version",
+        "events",
+        "cancelled_events",
+        "source_health",
+        "change_log",
+        "corrupt",
+        "savepoint",
+    ] {
+        let dir = tempfile::TempDir::new().unwrap();
+        let old_path = dir.path().join("old.redb");
+        let new_path = dir.path().join("new.redb");
+        legacy_file(&old_path);
+        if failure == "corrupt" {
+            std::fs::write(&old_path, b"not a database").unwrap();
+        } else {
+            let old = redb_legacy::Database::open(&old_path).unwrap();
+            let write = old.begin_write().unwrap();
+            if failure == "savepoint" {
+                write.persistent_savepoint().unwrap();
+            } else if failure == "future" || failure == "missing-version" {
+                write
+                    .open_table(redb_legacy::TableDefinition::<&str, u32>::new(
+                        "schema_version",
+                    ))
+                    .unwrap()
+                    .insert("version", if failure == "future" { 99 } else { 0 })
+                    .unwrap();
+            } else {
+                write
+                    .open_table(redb_legacy::TableDefinition::<&str, &[u8]>::new(failure))
+                    .unwrap()
+                    .insert("malformed", b"not json".as_slice())
+                    .unwrap();
+            }
+            write.commit().unwrap();
+        }
+        let before = std::fs::read(&old_path).unwrap();
+        assert!(
+            radar_state::file_migration::migrate_copy(&old_path, &new_path).is_err(),
+            "{failure}"
+        );
+        assert_eq!(std::fs::read(&old_path).unwrap(), before, "{failure}");
+        assert!(!new_path.exists(), "{failure}");
+        assert_eq!(
+            std::fs::read_dir(dir.path()).unwrap().count(),
+            1,
+            "temporary candidate leaked for {failure}"
+        );
     }
 }
 

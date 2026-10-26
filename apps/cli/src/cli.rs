@@ -65,6 +65,27 @@ pub enum Command {
     Uninstall(UninstallArgs),
     /// Print the current public JSON output schema.
     Schema(SchemaArgs),
+    /// Migrate a state database while retaining the original for rollback.
+    State(StateArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct StateArgs {
+    #[command(subcommand)]
+    pub action: StateAction,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum StateAction {
+    /// Upgrade a copy into a new file; never overwrite either supplied path.
+    Migrate {
+        /// Existing database to retain unchanged for rollback.
+        #[arg(long, value_name = "OLD_DB")]
+        from: PathBuf,
+        /// New database path (must not exist). Select it with scan --state.
+        #[arg(long, value_name = "NEW_DB")]
+        to: PathBuf,
+    },
 }
 
 #[derive(Debug, Args)]
