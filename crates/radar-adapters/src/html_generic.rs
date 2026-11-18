@@ -331,10 +331,7 @@ mod tests {
             status: 200,
             content_type: Some("text/html; charset=utf-8".into()),
             body: body.as_bytes().to_vec(),
-            // chrono is not a direct dependency of radar-adapters; rely on the
-            // `From<SystemTime> for DateTime<Utc>` impl with the target type
-            // inferred from the field.
-            fetched_at: std::time::SystemTime::now().into(),
+            fetched_at: jiff::Timestamp::now(),
         }
     }
 

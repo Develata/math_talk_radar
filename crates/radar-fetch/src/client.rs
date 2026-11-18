@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use radar_core::FetchedDocument;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use url::Url;
@@ -101,7 +101,7 @@ pub fn make_document(
     status: u16,
     content_type: Option<String>,
     body: Vec<u8>,
-    fetched_at: DateTime<Utc>,
+    fetched_at: Timestamp,
 ) -> FetchedDocument {
     FetchedDocument {
         url,

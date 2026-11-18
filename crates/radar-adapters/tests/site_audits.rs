@@ -28,7 +28,7 @@ fn make_doc(body: &str, content_type: &str, url: &str) -> FetchedDocument {
         status: 200,
         content_type: Some(content_type.into()),
         body: body.as_bytes().to_vec(),
-        fetched_at: std::time::SystemTime::now().into(),
+        fetched_at: jiff::Timestamp::now(),
     }
 }
 

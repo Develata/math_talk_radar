@@ -3,7 +3,7 @@
 //! Covers STATE-001..004 from `docs/acceptance-cases/06_state_changes.md`.
 //! Uses `tempfile::TempDir` so each test gets an isolated redb database file.
 
-use chrono::{DateTime, NaiveDate, Utc};
+use jiff::{SignedDuration, Timestamp, civil::Date, tz::Offset};
 use radar_core::{
     AccessInfo, DatePrecision, DateTimeOrDate, Event, EventDate, EventId, EventStatus, EventType,
     Location, MediaId, MediaResource, MediaType, OnlineAvailability, PublicAccess, ScoreComponents,
@@ -13,22 +13,16 @@ use radar_state::{ChangeKind, Repository, StateError, detect_changes};
 use redb::{ReadableDatabase, ReadableTable};
 use url::Url;
 
-fn t0() -> DateTime<Utc> {
-    DateTime::<Utc>::from_naive_utc_and_offset(
-        NaiveDate::from_ymd_opt(2026, 8, 9)
-            .expect("valid date")
-            .and_hms_opt(12, 0, 0)
-            .expect("valid time"),
-        Utc,
-    )
+fn t0() -> Timestamp {
+    "2026-08-09T12:00:00Z".parse().unwrap()
 }
 
-fn t1() -> DateTime<Utc> {
-    t0() + chrono::Duration::hours(24)
+fn t1() -> Timestamp {
+    t0() + SignedDuration::from_hours(24)
 }
 
-fn t2() -> DateTime<Utc> {
-    t0() + chrono::Duration::hours(48)
+fn t2() -> Timestamp {
+    t0() + SignedDuration::from_hours(48)
 }
 
 fn src() -> SourceEvidence {
@@ -50,7 +44,7 @@ fn base_event(id: &str, media: Vec<MediaResource>) -> Event {
         status: EventStatus::Unknown,
         date: EventDate {
             start: Some(DateTimeOrDate::Date(
-                NaiveDate::from_ymd_opt(2026, 8, 9).expect("valid date"),
+                Date::new(2026, 8, 9).expect("valid date"),
             )),
             end: None,
             timezone: None,
@@ -746,14 +740,14 @@ fn store_scan_reappear_then_cancel_then_reappear() {
     assert_eq!(s3[0].first_seen_at, Some(first_seen_1));
 
     // scan 4: cancel again
-    repo.store_scan(&[], t0() + chrono::Duration::hours(72))
+    repo.store_scan(&[], t0() + SignedDuration::from_hours(72))
         .expect("scan 4: cancel");
 
     // scan 5: reappear again — first_seen must STILL be t0, not t2.
     let (s5, _) = repo
         .store_scan(
             std::slice::from_ref(&event),
-            t0() + chrono::Duration::hours(96),
+            t0() + SignedDuration::from_hours(96),
         )
         .expect("scan 5");
     assert_eq!(
@@ -783,7 +777,7 @@ fn store_scan_tombstone_expired_after_retention() {
 
     // scan 3: reappear 100 days later — beyond the 90-day retention window.
     // The tombstone has been purged, so the event is treated as brand-new.
-    let far_future = t0() + chrono::Duration::days(100);
+    let far_future = t0() + SignedDuration::from_hours(2400);
     let (s3, changes3) = repo
         .store_scan(std::slice::from_ref(&event), far_future)
         .expect("scan 3");
@@ -1312,7 +1306,7 @@ fn representative_alias_restores_unexpired_tombstone() {
 // retention purge, v2→v4 migration.
 // ---------------------------------------------------------------------------
 
-fn health(source: &str, status: SourceStatus, at: DateTime<Utc>) -> SourceHealth {
+fn health(source: &str, status: SourceStatus, at: Timestamp) -> SourceHealth {
     SourceHealth {
         source: source.into(),
         status,
@@ -1350,7 +1344,7 @@ fn bundle_atomicity_persists_events_changes_and_health() {
     assert_eq!(health_history.len(), 1, "health record must survive reopen");
     assert_eq!(health_history[0].source, "s1");
     let change_history = repo2
-        .list_changes(DateTime::from_timestamp(0, 0).unwrap())
+        .list_changes(Timestamp::UNIX_EPOCH)
         .expect("list changes");
     assert!(
         change_history
@@ -1415,7 +1409,7 @@ fn change_log_persists_media_added_across_reopen() {
 
     let repo2 = Repository::open(&db_path).expect("reopen");
     let changes = repo2
-        .list_changes(DateTime::from_timestamp(0, 0).unwrap())
+        .list_changes(Timestamp::UNIX_EPOCH)
         .expect("list changes");
     assert!(
         changes.iter().any(|c| c.kind == ChangeKind::MediaAdded),
@@ -1450,7 +1444,7 @@ fn change_log_preserves_multiple_same_kind_records() {
 
     let repo2 = Repository::open(&db_path).expect("reopen");
     let changes = repo2
-        .list_changes(DateTime::from_timestamp(0, 0).unwrap())
+        .list_changes(Timestamp::UNIX_EPOCH)
         .expect("list changes");
     let media_added: Vec<_> = changes
         .iter()
@@ -1490,7 +1484,7 @@ fn retention_purges_expired_health_and_changes() {
     // retention. A new scan must purge them. Store the SAME event (not empty)
     // so no EventCancelled is produced — the only old change is EventAdded
     // from t0, which must be purged.
-    let t_old = t0() + chrono::Duration::days(91);
+    let t_old = t0() + SignedDuration::from_hours(2184);
     let h_new = health("s1", SourceStatus::Ok, t_old);
     repo.store_scan_bundle(
         std::slice::from_ref(&event),
@@ -1508,7 +1502,7 @@ fn retention_purges_expired_health_and_changes() {
     assert_eq!(history[0].recorded_at, Some(t_old));
 
     let changes = repo
-        .list_changes(DateTime::from_timestamp(0, 0).unwrap())
+        .list_changes(Timestamp::UNIX_EPOCH)
         .expect("list changes");
     assert!(
         changes.iter().all(|c| c.detected_at >= t_old),
@@ -1637,6 +1631,67 @@ fn migrates_v2_to_v4_fails_on_malformed_legacy_row() {
     }
 }
 
+#[test]
+fn opens_legacy_v4_timestamps_and_matches_existing_ordered_keys() {
+    use radar_state::schema::{CHANGE_LOG, EVENTS, SOURCE_HEALTH};
+
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().join("state.redb");
+    let event = base_event("legacy", vec![]);
+    drop(Repository::open(&path).unwrap());
+
+    // Insert the previous JSON spelling and exact key bytes independently of
+    // the current serializer so either side of the migration can be checked.
+    let at: Timestamp = "2026-08-09T12:00:00.120Z".parse().unwrap();
+    let mut row = serde_json::to_value(&event).unwrap();
+    row["first_seen_at"] = "2026-08-09T12:00:00.120Z".into();
+    row["last_seen_at"] = "2026-08-09T12:00:00.120Z".into();
+    let event_bytes = serde_json::to_vec(&row).unwrap();
+    let legacy_health =
+        br#"{"source":"s1","status":"ok","duration_ms":50,"requests":1,"events":1,"recorded_at":"2026-08-09T12:00:00.120Z"}"#;
+    let legacy_change =
+        br#"{"kind":"event_added","event_id":"legacy","detected_at":"2026-08-09T12:00:00.120Z","detail":null}"#;
+    {
+        let db = redb::Database::open(&path).unwrap();
+        let tx = db.begin_write().unwrap();
+        tx.open_table(EVENTS)
+            .unwrap()
+            .insert("legacy", event_bytes.as_slice())
+            .unwrap();
+        tx.open_table(SOURCE_HEALTH)
+            .unwrap()
+            .insert(
+                "s1\u{0}2026-08-09T12:00:00.120000000Z",
+                legacy_health.as_slice(),
+            )
+            .unwrap();
+        let key = format!(
+            "2026-08-09T12:00:00.120000000Z\0legacy\0event_added\0{}",
+            radar_core::deterministic_id(&[""])
+        );
+        tx.open_table(CHANGE_LOG)
+            .unwrap()
+            .insert(key.as_str(), legacy_change.as_slice())
+            .unwrap();
+        tx.commit().unwrap();
+    }
+
+    let repo = Repository::open(&path).unwrap();
+    assert_eq!(repo.schema_version().unwrap(), 4);
+    assert_eq!(repo.list_changes(at).unwrap()[0].detected_at, at);
+    let just_after = at + SignedDuration::from_millis(1);
+    assert!(repo.list_changes(just_after).unwrap().is_empty());
+    repo.store_scan_bundle(&[event], &[health("s1", SourceStatus::Ok, at)], at)
+        .unwrap();
+    assert_eq!(repo.list_source_health("s1").unwrap().len(), 1);
+    let events = repo.list_events().unwrap();
+    assert_eq!(events[0].first_seen_at, Some(at));
+    assert_eq!(
+        serde_json::to_value(&events[0]).unwrap()["first_seen_at"],
+        "2026-08-09T12:00:00.120Z"
+    );
+}
+
 /// State-v4: fixed-width timestamp keys preserve chronological order for
 /// observations that differ only within one second.
 #[test]
@@ -1644,7 +1699,7 @@ fn fixed_width_source_health_keys_order_same_second() {
     let dir = tempfile::TempDir::new().expect("temp dir");
     let db_path = dir.path().join("state.redb");
     let repo = Repository::open(&db_path).expect("open");
-    let later = t0() + chrono::Duration::milliseconds(100);
+    let later = t0() + SignedDuration::from_millis(100);
     let event = base_event("e1", vec![]);
 
     // Insert later first to prove ordering comes from the key, not insertion.
@@ -1674,7 +1729,7 @@ fn fixed_width_change_keys_respect_same_second_range() {
     let dir = tempfile::TempDir::new().expect("temp dir");
     let db_path = dir.path().join("state.redb");
     let repo = Repository::open(&db_path).expect("open");
-    let later = t0() + chrono::Duration::milliseconds(100);
+    let later = t0() + SignedDuration::from_millis(100);
 
     let base = base_event("e1", vec![]);
     repo.store_scan_bundle(std::slice::from_ref(&base), &[], t0())
@@ -1684,7 +1739,7 @@ fn fixed_width_change_keys_respect_same_second_range() {
         .expect("later change");
 
     let changes = repo
-        .list_changes(t0() + chrono::Duration::milliseconds(50))
+        .list_changes(t0() + SignedDuration::from_millis(50))
         .expect("range");
     assert!(changes.iter().all(|change| change.detected_at >= later));
     assert!(
@@ -1711,13 +1766,11 @@ fn fixed_width_change_keys_respect_fractional_retention_cutoff() {
     repo.store_scan_bundle(std::slice::from_ref(&event), &[], t0())
         .expect("seed");
 
-    let now = t0() + chrono::Duration::days(90) + chrono::Duration::milliseconds(50);
+    let now = t0() + SignedDuration::from_hours(2160) + SignedDuration::from_millis(50);
     repo.store_scan_bundle(std::slice::from_ref(&event), &[], now)
         .expect("purge scan");
 
-    let changes = repo
-        .list_changes(DateTime::from_timestamp(0, 0).expect("epoch"))
-        .expect("changes");
+    let changes = repo.list_changes(Timestamp::UNIX_EPOCH).expect("changes");
     assert!(
         changes.iter().all(|change| change.detected_at >= now),
         "the t0 EventAdded row must be older than the fractional cutoff: {changes:?}"
@@ -1730,7 +1783,7 @@ fn fixed_width_change_keys_respect_fractional_retention_cutoff() {
 fn migrates_v3_to_v4_rekeys_ordered_tables() {
     let dir = tempfile::TempDir::new().expect("temp dir");
     let db_path = dir.path().join("state.redb");
-    let later = t0() + chrono::Duration::milliseconds(100);
+    let later = t0() + SignedDuration::from_millis(100);
 
     {
         use radar_state::ChangeRecord;
@@ -1752,7 +1805,11 @@ fn migrates_v3_to_v4_rekeys_ordered_tables() {
                 health("s1", SourceStatus::Partial, later),
             ] {
                 let at = record.recorded_at.expect("timestamp");
-                let key = format!("{}\u{0}{}", record.source, at.to_rfc3339());
+                let key = format!(
+                    "{}\u{0}{}",
+                    record.source,
+                    at.display_with_offset(Offset::UTC)
+                );
                 let bytes = serde_json::to_vec(&record).expect("serialize health");
                 health_table
                     .insert(key.as_str(), bytes.as_slice())
@@ -1778,7 +1835,7 @@ fn migrates_v3_to_v4_rekeys_ordered_tables() {
                 let detail = record.detail.as_deref().unwrap_or("");
                 let key = format!(
                     "{}\u{0}{}\u{0}{}\u{0}{}",
-                    record.detected_at.to_rfc3339(),
+                    record.detected_at.display_with_offset(Offset::UTC),
                     record.event_id.0,
                     record.kind.as_str(),
                     detail
@@ -1800,7 +1857,7 @@ fn migrates_v3_to_v4_rekeys_ordered_tables() {
         vec![Some(t0()), Some(later)]
     );
     let changes = repo
-        .list_changes(t0() + chrono::Duration::milliseconds(50))
+        .list_changes(t0() + SignedDuration::from_millis(50))
         .expect("change range");
     assert_eq!(changes.len(), 1);
     assert_eq!(changes[0].kind, ChangeKind::MediaAdded);

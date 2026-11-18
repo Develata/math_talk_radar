@@ -4,11 +4,8 @@
 //! Selectors are never hardcoded here: every query reads from `source.selectors`.
 //! A configured-HTML source without `selectors` fails fast with `AdapterError`
 //! (Metis D5: no automatic fallback to the generic HTML adapter).
+use jiff::{civil::Date, tz::Offset};
 use radar_core::adapter::MAX_DISCOVERED_STUBS;
-use scraper::{ElementRef, Html, Node, Selector};
-
-use chrono::NaiveDate;
-
 use radar_core::config::HtmlSelectors;
 use radar_core::date::{DatePrecision, EventDate, parse_date, parse_date_with_reference};
 use radar_core::{
@@ -16,6 +13,7 @@ use radar_core::{
     FetchedDocument, Location, OnlineAvailability, PersonHit, PersonRole, PublicAccess,
     SourceAdapter, SourceEvidence, SourceSpec, Talk, TalkId, deterministic_id,
 };
+use scraper::{ElementRef, Html, Node, Selector};
 
 use crate::helpers::{classify_access, detect_event_type, detect_media};
 
@@ -73,7 +71,11 @@ impl SourceAdapter for HtmlConfigAdapter {
                     continue;
                 }
                 let date_hint = date_selector.as_ref().and_then(|sel| {
-                    first_date_in(&container, sel, document.fetched_at.date_naive())
+                    first_date_in(
+                        &container,
+                        sel,
+                        Offset::UTC.to_datetime(document.fetched_at).date(),
+                    )
                 });
                 stubs.push(EventStub {
                     title,
@@ -294,11 +296,7 @@ fn first_text_in(scope: &ElementRef, selector: &Selector) -> Option<String> {
     if text.is_empty() { None } else { Some(text) }
 }
 
-fn first_date_in(
-    scope: &ElementRef,
-    selector: &Selector,
-    ref_date: NaiveDate,
-) -> Option<EventDate> {
+fn first_date_in(scope: &ElementRef, selector: &Selector, ref_date: Date) -> Option<EventDate> {
     let element = scope.select(selector).next()?;
     if let Some(dt) = element.attr("datetime")
         && let Ok(d) = parse_date(dt)
@@ -410,18 +408,8 @@ mod tests {
     };
     use url::Url;
 
-    // chrono is only a transitive dependency (via radar-core), so this crate
-    // cannot name `DateTime<Utc>` directly. Obtain one by deserializing a
-    // SourceEvidence whose `captured_at` is a serde DateTime — serde_json is a
-    // direct dep and SourceEvidence: Deserialize.
     fn make_doc(url: &str, body: &str) -> FetchedDocument {
-        let evidence: SourceEvidence = serde_json::from_str(
-            r#"{"source_id":"x","source_url":"https://example.com/","captured_at":"2026-08-09T00:00:00Z"}"#,
-        )
-        .expect("SourceEvidence fixture parses");
-        let fetched_at = evidence
-            .captured_at
-            .expect("captured_at present in fixture");
+        let fetched_at = "2026-08-09T00:00:00Z".parse().unwrap();
         FetchedDocument {
             url: Url::parse(url).expect("valid url"),
             final_url: Url::parse(url).expect("valid url"),
@@ -433,13 +421,7 @@ mod tests {
     }
 
     fn make_doc_bytes(url: &str, body: &[u8]) -> FetchedDocument {
-        let evidence: SourceEvidence = serde_json::from_str(
-            r#"{"source_id":"x","source_url":"https://example.com/","captured_at":"2026-08-09T00:00:00Z"}"#,
-        )
-        .expect("SourceEvidence fixture parses");
-        let fetched_at = evidence
-            .captured_at
-            .expect("captured_at present in fixture");
+        let fetched_at = "2026-08-09T00:00:00Z".parse().unwrap();
         FetchedDocument {
             url: Url::parse(url).expect("valid url"),
             final_url: Url::parse(url).expect("valid url"),

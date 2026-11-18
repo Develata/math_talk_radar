@@ -2,7 +2,7 @@
 use crate::model::{Event, Location};
 use crate::normalize::{canonicalize_url, normalize_name};
 use crate::people::PersonRole;
-use chrono::NaiveDate;
+use jiff::civil::Date;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
@@ -34,7 +34,7 @@ impl DedupSignal {
 
 /// Earliest calendar start date among an event's sources, or `None` if the
 /// event has no parseable start.
-fn start_date(event: &Event) -> Option<NaiveDate> {
+fn start_date(event: &Event) -> Option<Date> {
     event.date.start_date()
 }
 
@@ -115,7 +115,7 @@ pub(super) struct DedupKeys {
     canonical_url: Option<String>,
     source_ids: Vec<(String, String)>,
     title: String,
-    start_date: Option<NaiveDate>,
+    start_date: Option<Date>,
     organizer: Option<String>,
     location: Option<String>,
 }
@@ -317,6 +317,6 @@ pub(super) fn native_identity_keys(event: &Event) -> impl Iterator<Item = Identi
 pub(super) enum IdentityKey {
     Url(String),
     Native(String, String),
-    Organizer(String, NaiveDate, String),
-    Location(String, NaiveDate, String),
+    Organizer(String, Date, String),
+    Location(String, Date, String),
 }

@@ -4,7 +4,7 @@
 //! given the user's mode (upcoming / recordings / both) and date window. Lives
 //! in `radar-core` so it is testable without the CLI composition root and can
 //! be reused by any downstream consumer of the domain model.
-use chrono::NaiveDate;
+use jiff::{Span, civil::Date};
 use serde::{Deserialize, Serialize};
 
 use crate::Event;
@@ -43,19 +43,21 @@ impl ScanMode {
 pub fn matches_mode_and_window(
     event: &Event,
     mode: ScanMode,
-    today: NaiveDate,
+    today: Date,
     before_days: u32,
     after_days: u32,
 ) -> bool {
     let has_media = !event.media.is_empty();
     let has_start = event.date.start.is_some();
 
-    let window_start = today
-        .checked_sub_signed(chrono::Duration::days(before_days as i64))
-        .unwrap_or(NaiveDate::MIN);
-    let window_end = today
-        .checked_add_signed(chrono::Duration::days(after_days as i64))
-        .unwrap_or(NaiveDate::MAX);
+    let window_start = Span::new()
+        .try_days(before_days)
+        .and_then(|days| today.checked_sub(days))
+        .unwrap_or(Date::MIN);
+    let window_end = Span::new()
+        .try_days(after_days)
+        .and_then(|days| today.checked_add(days))
+        .unwrap_or(Date::MAX);
     let in_window = interval_overlap(&event.date, window_start, window_end);
 
     match mode {
@@ -75,13 +77,13 @@ mod tests {
     };
     use url::Url;
 
-    fn event_with(start: Option<chrono::NaiveDate>, media: Vec<MediaResource>) -> Event {
+    fn event_with(start: Option<Date>, media: Vec<MediaResource>) -> Event {
         event_with_range(start, None, media)
     }
 
     fn event_with_range(
-        start: Option<chrono::NaiveDate>,
-        end: Option<chrono::NaiveDate>,
+        start: Option<Date>,
+        end: Option<Date>,
         media: Vec<MediaResource>,
     ) -> Event {
         Event {
@@ -128,8 +130,8 @@ mod tests {
         }
     }
 
-    fn date(y: i32, m: u32, d: u32) -> chrono::NaiveDate {
-        chrono::NaiveDate::from_ymd_opt(y, m, d).unwrap()
+    fn date(y: i16, m: i8, d: i8) -> Date {
+        Date::new(y, m, d).unwrap()
     }
 
     fn media() -> MediaResource {

@@ -4,7 +4,7 @@
 //! does not create a crate cycle: adapters must not depend on `radar-fetch`
 //! (§11), so the shared document type they both touch is defined here. The fetch
 //! layer produces [`FetchedDocument`]; adapters and the coordinator consume it.
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
@@ -15,7 +15,7 @@ pub struct FetchedDocument {
     pub status: u16,
     pub content_type: Option<String>,
     pub body: Vec<u8>,
-    pub fetched_at: DateTime<Utc>,
+    pub fetched_at: Timestamp,
 }
 
 /// A planned detail request emitted by

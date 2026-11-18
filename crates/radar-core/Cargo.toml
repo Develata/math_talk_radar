@@ -14,8 +14,7 @@ unsafe_code = "forbid"
 thiserror.workspace = true
 serde.workspace = true
 schemars.workspace = true
-chrono.workspace = true
-chrono-tz.workspace = true
+jiff = { workspace = true, features = ["tzdb-bundle-always"] }
 url.workspace = true
 blake3.workspace = true
 regex.workspace = true
@@ -25,3 +24,4 @@ toml.workspace = true
 
 [dev-dependencies]
 serde.workspace = true
+serde_json.workspace = true

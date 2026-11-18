@@ -1,7 +1,7 @@
 //! Owned scan writes, v4 history, and the all-healthy absence guard (ADR-0016).
 use std::collections::{HashMap, HashSet};
 
-use chrono::{DateTime, Utc};
+use jiff::{SignedDuration, Timestamp};
 use radar_core::{Event, EventId, SourceHealth, SourceStatus};
 use redb::ReadableTable;
 
@@ -18,7 +18,7 @@ impl Repository {
     pub fn store_scan(
         &self,
         events: &[Event],
-        now: DateTime<Utc>,
+        now: Timestamp,
     ) -> Result<(Vec<Event>, Vec<ChangeRecord>), StateError> {
         self.store_scan_owned(events.to_vec(), now)
     }
@@ -27,7 +27,7 @@ impl Repository {
     pub fn store_scan_owned(
         &self,
         events: Vec<Event>,
-        now: DateTime<Utc>,
+        now: Timestamp,
     ) -> Result<(Vec<Event>, Vec<ChangeRecord>), StateError> {
         self.store_scan_bundle_owned(events, &[], now, &HashMap::new())
     }
@@ -38,7 +38,7 @@ impl Repository {
         &self,
         events: &[Event],
         source_health: &[SourceHealth],
-        now: DateTime<Utc>,
+        now: Timestamp,
     ) -> Result<(Vec<Event>, Vec<ChangeRecord>), StateError> {
         self.store_scan_bundle_owned(events.to_vec(), source_health, now, &HashMap::new())
     }
@@ -52,7 +52,7 @@ impl Repository {
         &self,
         mut events: Vec<Event>,
         source_health: &[SourceHealth],
-        now: DateTime<Utc>,
+        now: Timestamp,
         aliases: &HashMap<EventId, EventId>,
     ) -> Result<(Vec<Event>, Vec<ChangeRecord>), StateError> {
         if self.read_only {
@@ -109,8 +109,10 @@ impl Repository {
                 previous.sort_by(|a, b| a.id.0.cmp(&b.id.0));
             }
 
-            let cutoff = now - chrono::Duration::days(RETENTION_DAYS);
-            let mut tombstone_first: HashMap<EventId, DateTime<Utc>> = HashMap::new();
+            let cutoff = now
+                .saturating_sub(SignedDuration::from_hours(24 * RETENTION_DAYS))
+                .unwrap_or(Timestamp::MIN);
+            let mut tombstone_first: HashMap<EventId, Timestamp> = HashMap::new();
             let mut obsolete_tombstones = Vec::new();
             for entry in tombstones.iter()? {
                 let (key, value) = entry?;

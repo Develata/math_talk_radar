@@ -1,4 +1,4 @@
-use std::time::SystemTime;
+use jiff::Timestamp;
 
 use radar_adapters::rss::RssAdapter;
 use radar_core::config::{AdapterKind, SourceKind, SourceSpec, SourceTier};
@@ -40,7 +40,7 @@ fn main() {
                 status: 200,
                 content_type: Some("application/rss+xml".into()),
                 body: body.into_bytes(),
-                fetched_at: SystemTime::now().into(),
+                fetched_at: Timestamp::now(),
             };
             let source = SourceSpec {
                 id: (*id).into(),
@@ -66,7 +66,7 @@ fn main() {
                     status: 200,
                     content_type: Some("text/html".into()),
                     body: b"<html><body><p>detail</p></body></html>".to_vec(),
-                    fetched_at: SystemTime::now().into(),
+                    fetched_at: Timestamp::now(),
                 };
                 let _ = adapter
                     .enrich(stub, &[detail_doc], &source)

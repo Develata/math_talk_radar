@@ -1,5 +1,5 @@
 //! Retry decision logic (§15). Pure.
-use chrono::{DateTime, NaiveDateTime, Utc};
+use jiff::{Timestamp, civil::DateTime, tz::Offset};
 use std::time::Duration;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -55,19 +55,19 @@ pub fn is_transient_network_error(err: &reqwest::Error) -> bool {
 /// instant, clamped to zero if the date is in the past relative to `now`.
 /// `now` is a parameter (not read from the system clock) so the function stays
 /// pure and unit-testable.
-pub fn parse_retry_after(value: &str, now: DateTime<Utc>) -> Option<Duration> {
+pub fn parse_retry_after(value: &str, now: Timestamp) -> Option<Duration> {
     let trimmed = value.trim();
     if let Ok(secs) = trimmed.parse::<u64>() {
         return Some(Duration::from_secs(secs));
     }
-    let target = NaiveDateTime::parse_from_str(trimmed, "%a, %d %b %Y %H:%M:%S GMT").ok()?;
-    let target_utc = target.and_utc();
-    let expected_abbrev = target_utc.format("%a").to_string();
+    let target = DateTime::strptime("%a, %d %b %Y %H:%M:%S GMT", trimmed).ok()?;
+    let target_utc = Offset::UTC.to_timestamp(target).ok()?;
+    let expected_abbrev = target.strftime("%a").to_string();
     let input_abbrev = trimmed.split(',').next().unwrap_or("").trim();
     if !input_abbrev.eq_ignore_ascii_case(&expected_abbrev) {
         return None;
     }
-    let secs = target_utc.signed_duration_since(now).num_seconds();
+    let secs = target_utc.duration_since(now).as_secs();
     if secs <= 0 {
         return Some(Duration::ZERO);
     }
@@ -77,7 +77,7 @@ pub fn parse_retry_after(value: &str, now: DateTime<Utc>) -> Option<Duration> {
 #[cfg(test)]
 mod tests {
     use super::{Duration, RetryDecision, parse_retry_after, retry_for_status};
-    use chrono::{NaiveDateTime, Utc};
+    use jiff::Timestamp;
 
     #[test]
     fn retries_transient_only() {
@@ -163,7 +163,7 @@ mod tests {
 
     #[test]
     fn parse_retry_after_delta_seconds() {
-        let now = Utc::now();
+        let now = Timestamp::now();
         assert_eq!(
             parse_retry_after("120", now),
             Some(Duration::from_secs(120))
@@ -177,12 +177,7 @@ mod tests {
 
     #[test]
     fn parse_retry_after_http_date_future() {
-        let now = NaiveDateTime::parse_from_str(
-            "Sun, 06 Nov 1994 08:49:37 GMT",
-            "%a, %d %b %Y %H:%M:%S GMT",
-        )
-        .unwrap()
-        .and_utc();
+        let now = "1994-11-06T08:49:37Z".parse().unwrap();
         let future = "Sun, 06 Nov 1994 08:51:37 GMT";
         assert_eq!(
             parse_retry_after(future, now),
@@ -192,29 +187,23 @@ mod tests {
 
     #[test]
     fn parse_retry_after_http_date_past_clamps_to_zero() {
-        let now = NaiveDateTime::parse_from_str(
-            "Sun, 06 Nov 1994 08:49:37 GMT",
-            "%a, %d %b %Y %H:%M:%S GMT",
-        )
-        .unwrap()
-        .and_utc();
+        let now = "1994-11-06T08:49:37Z".parse().unwrap();
         let past = "Sun, 06 Nov 1994 08:47:37 GMT";
         assert_eq!(parse_retry_after(past, now), Some(Duration::from_secs(0)));
     }
 
     #[test]
     fn parse_retry_after_invalid_returns_none() {
-        let now = Utc::now();
+        let now = Timestamp::now();
         assert_eq!(parse_retry_after("not a date", now), None);
         assert_eq!(parse_retry_after("", now), None);
     }
 
     // FETCH-9: a mismatched weekday (e.g. "Mon, 06 Nov 1994" when Nov 6 1994
-    // is actually a Sunday) must be rejected — chrono's %a accepts any weekday
-    // name without cross-checking the actual date.
+    // is actually a Sunday) must be rejected even if %a matches a weekday name.
     #[test]
     fn parse_retry_after_rejects_mismatched_weekday() {
-        let now = Utc::now();
+        let now = Timestamp::now();
         assert_eq!(
             parse_retry_after("Mon, 06 Nov 1994 08:49:37 GMT", now),
             None,
@@ -224,12 +213,7 @@ mod tests {
 
     #[test]
     fn parse_retry_after_accepts_correct_weekday() {
-        let now = NaiveDateTime::parse_from_str(
-            "Sun, 06 Nov 1994 08:49:37 GMT",
-            "%a, %d %b %Y %H:%M:%S GMT",
-        )
-        .unwrap()
-        .and_utc();
+        let now = "1994-11-06T08:49:37Z".parse().unwrap();
         assert_eq!(
             parse_retry_after("Sun, 06 Nov 1994 08:51:37 GMT", now),
             Some(Duration::from_secs(120))

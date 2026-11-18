@@ -41,10 +41,9 @@ subsequent scans; keep OLD and the previous binary for rollback. Engine file
 format v3 is independent of application state schema v4.
 
 Ordered persisted keys must use a canonical fixed-width UTC timestamp
-representation. Chrono's variable-precision default RFC3339 formatting is not
-permitted for lexicographically ordered state keys because values within the
-same second can sort incorrectly. The canonical form is RFC3339 UTC with nine
-fractional digits (`SecondsFormat::Nanos`, `Z`).
+representation. Variable fractional precision can sort values within the same
+second incorrectly. The canonical form is RFC3339 UTC with nine fractional
+digits and a `Z` suffix (ADR-0019).
 
 `SOURCE_HEALTH` keys are `{source}\0{fixed_timestamp}`. `CHANGE_LOG` keys are
 `{fixed_timestamp}\0{event_id}\0{kind}\0{detail_digest}`. The detail component

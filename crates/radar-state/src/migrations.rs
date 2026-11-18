@@ -62,7 +62,7 @@ pub fn run_migrations(db: &Database) -> Result<u32, MigrateError> {
 }
 
 fn migrate_legacy_source_health(txn: &WriteTransaction) -> Result<(), MigrateError> {
-    let migration_time = chrono::Utc::now();
+    let migration_time = jiff::Timestamp::now();
     let mut health = txn.open_table(SOURCE_HEALTH)?;
     let rows: Vec<(String, Vec<u8>)> = {
         let mut rows = Vec::new();

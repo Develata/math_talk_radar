@@ -146,10 +146,7 @@ fn union_topics(a: Vec<TopicMatch>, b: Vec<TopicMatch>) -> Vec<TopicMatch> {
     out
 }
 
-fn earliest(
-    a: Option<chrono::DateTime<chrono::Utc>>,
-    b: Option<chrono::DateTime<chrono::Utc>>,
-) -> Option<chrono::DateTime<chrono::Utc>> {
+fn earliest(a: Option<jiff::Timestamp>, b: Option<jiff::Timestamp>) -> Option<jiff::Timestamp> {
     match (a, b) {
         (Some(x), Some(y)) => Some(x.min(y)),
         (Some(x), None) | (None, Some(x)) => Some(x),
@@ -157,10 +154,7 @@ fn earliest(
     }
 }
 
-fn latest(
-    a: Option<chrono::DateTime<chrono::Utc>>,
-    b: Option<chrono::DateTime<chrono::Utc>>,
-) -> Option<chrono::DateTime<chrono::Utc>> {
+fn latest(a: Option<jiff::Timestamp>, b: Option<jiff::Timestamp>) -> Option<jiff::Timestamp> {
     match (a, b) {
         (Some(x), Some(y)) => Some(x.max(y)),
         (Some(x), None) | (None, Some(x)) => Some(x),

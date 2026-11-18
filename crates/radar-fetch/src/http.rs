@@ -6,7 +6,7 @@ use crate::fetch_policy::FetchPolicy;
 use crate::policy::HttpPolicy;
 use crate::retry::{is_transient_network_error, retry_for_status};
 use crate::robots::{RobotsCache, RobotsRules};
-use chrono::Utc;
+use jiff::Timestamp;
 use radar_core::FetchedDocument;
 use std::time::Instant;
 use url::Url;
@@ -289,7 +289,7 @@ pub async fn fetch_one(
             resp.headers()
                 .get(reqwest::header::RETRY_AFTER)
                 .and_then(|v| v.to_str().ok())
-                .and_then(|s| crate::retry::parse_retry_after(s, Utc::now())),
+                .and_then(|s| crate::retry::parse_retry_after(s, Timestamp::now())),
         );
         if let crate::retry::RetryDecision::Retry { after } = retry {
             if retries_used < http_policy.max_retry {
@@ -359,7 +359,7 @@ pub async fn fetch_one(
             status,
             content_type,
             body,
-            Utc::now(),
+            Timestamp::now(),
         ));
     }
 }

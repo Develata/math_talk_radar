@@ -2,7 +2,7 @@
 //! source id, composite keys); values are `&[u8]` serde_json-serialized domain
 //! types. The schema version table stores the persisted `STATE_SCHEMA_VERSION`.
 
-use chrono::{DateTime, SecondsFormat, Utc};
+use jiff::Timestamp;
 use redb::TableDefinition;
 
 use crate::changes::ChangeRecord;
@@ -63,15 +63,14 @@ pub const CHANGE_LOG: TableDefinition<&str, &[u8]> = TableDefinition::new("chang
 /// Schema version. Single row keyed by `"version"`.
 pub const SCHEMA_VERSION: TableDefinition<&str, u32> = TableDefinition::new("schema_version");
 
-/// Canonical timestamp representation for persisted ordered keys. Chrono's
-/// default `to_rfc3339()` uses variable fractional precision; that makes
-/// lexicographic order disagree with time order inside a second.
-pub(crate) fn timestamp_key(timestamp: DateTime<Utc>) -> String {
-    timestamp.to_rfc3339_opts(SecondsFormat::Nanos, true)
+/// Canonical timestamp representation for persisted ordered keys. Fixed
+/// fractional precision preserves lexicographic order within each second.
+pub(crate) fn timestamp_key(timestamp: Timestamp) -> String {
+    radar_core::date::wire::format_utc(timestamp, 9).to_string()
 }
 
 /// Composite key for one source-health observation.
-pub(crate) fn source_health_key(source: &str, recorded_at: DateTime<Utc>) -> String {
+pub(crate) fn source_health_key(source: &str, recorded_at: Timestamp) -> String {
     format!("{source}\u{0}{}", timestamp_key(recorded_at))
 }
 

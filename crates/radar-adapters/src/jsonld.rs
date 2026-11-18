@@ -493,7 +493,7 @@ mod tests {
             status: 200,
             content_type: Some("text/html".into()),
             body: html.as_bytes().to_vec(),
-            fetched_at: std::time::SystemTime::now().into(),
+            fetched_at: jiff::Timestamp::now(),
         }
     }
 
@@ -571,16 +571,13 @@ mod tests {
         let doc = make_doc(html);
         let stubs = JsonLdAdapter.discover(&doc, &make_spec()).unwrap();
         let date = stubs[0].date_hint.as_ref().expect("date hint");
-        assert_eq!(
-            date.start_date(),
-            chrono::NaiveDate::from_ymd_opt(2026, 8, 1)
-        );
+        assert_eq!(date.start_date(), jiff::civil::Date::new(2026, 8, 1).ok());
         assert_eq!(
             date.end.as_ref().map(|end| match end {
                 DateTimeOrDate::Date(value) => *value,
-                DateTimeOrDate::DateTime(value) => value.date_naive(),
+                DateTimeOrDate::DateTime(value) => jiff::tz::Offset::UTC.to_datetime(*value).date(),
             }),
-            chrono::NaiveDate::from_ymd_opt(2026, 8, 5)
+            jiff::civil::Date::new(2026, 8, 5).ok()
         );
     }
 

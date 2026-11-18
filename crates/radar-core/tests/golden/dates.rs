@@ -1,7 +1,7 @@
 //! Date parser golden tests — parses `dates.toml` and evaluates each case
 //! against `radar_core::date::parse_date`.
 
-use chrono::NaiveDate;
+use jiff::civil::Date;
 use radar_core::date::{DatePrecision, DateTimeOrDate, EventDate, parse_date};
 use serde::Deserialize;
 
@@ -25,11 +25,11 @@ pub struct DateStats {
     pub passed: usize,
 }
 
-fn parse_expected(s: &str) -> Option<NaiveDate> {
+fn parse_expected(s: &str) -> Option<Date> {
     if s == "null" {
         return None;
     }
-    NaiveDate::parse_from_str(s, "%Y-%m-%d").ok()
+    Date::strptime("%Y-%m-%d", s).ok()
 }
 
 fn parse_precision(s: &str) -> DatePrecision {
@@ -44,14 +44,14 @@ fn parse_precision(s: &str) -> DatePrecision {
     }
 }
 
-fn to_naive(d: &DateTimeOrDate) -> NaiveDate {
+fn to_naive(d: &DateTimeOrDate) -> Date {
     match d {
-        DateTimeOrDate::DateTime(dt) => dt.date_naive(),
+        DateTimeOrDate::DateTime(dt) => jiff::tz::Offset::UTC.to_datetime(*dt).date(),
         DateTimeOrDate::Date(d) => *d,
     }
 }
 
-fn event_to_naive(opt: &Option<DateTimeOrDate>) -> Option<NaiveDate> {
+fn event_to_naive(opt: &Option<DateTimeOrDate>) -> Option<Date> {
     opt.as_ref().map(to_naive)
 }
 

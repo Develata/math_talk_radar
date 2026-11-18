@@ -2,7 +2,7 @@
 use crate::cli::{ScanArgs, ScanMode};
 use crate::config_loader::load_sources;
 use crate::runtime::CliError;
-use chrono::{NaiveDate, Utc};
+use jiff::{Timestamp, civil::Date, tz::TimeZone};
 use radar_core::filter::ScanMode as CoreScanMode;
 use radar_core::people::NormalizedScholar;
 use radar_core::ranking::InterestWeights;
@@ -16,7 +16,7 @@ pub(super) struct ScanContext {
     pub interests: Option<InterestWeights>,
     pub topics: Vec<NormalizedTopic>,
     pub scholars: Vec<NormalizedScholar>,
-    pub today: NaiveDate,
+    pub today: Date,
     pub timezone: String,
     pub mode: CoreScanMode,
 }
@@ -40,16 +40,16 @@ pub(super) fn load(args: &ScanArgs) -> Result<ScanContext, CliError> {
             })?;
             (parsed, tz.to_string())
         }
-        None => (chrono_tz::Tz::UTC, "UTC".to_string()),
+        None => (TimeZone::UTC, "UTC".to_string()),
     };
     // CLI-24: validate --today before any network I/O. An invalid value
     // should fail fast (exit 3) without having already burned the request
     // budget on a scan whose output would be discarded.
     let today = match args.today.as_deref() {
-        Some(s) => NaiveDate::parse_from_str(s, "%Y-%m-%d").map_err(|e| {
+        Some(s) => Date::strptime("%Y-%m-%d", s).map_err(|e| {
             CliError::config(format!("invalid --today {s:?}: {e}; expected YYYY-MM-DD"))
         })?,
-        None => Utc::now().with_timezone(&tz.0).date_naive(),
+        None => tz.0.to_datetime(Timestamp::now()).date(),
     };
     let core_mode = match args.mode {
         ScanMode::Upcoming => CoreScanMode::Upcoming,

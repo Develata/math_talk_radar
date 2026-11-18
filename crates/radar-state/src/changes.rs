@@ -6,7 +6,7 @@
 //! unchanged event produces no records (STATE-002).
 use std::collections::{HashMap, HashSet};
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use radar_core::{Event, EventDate, EventId};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -28,18 +28,18 @@ pub enum ChangeKind {
 pub struct ChangeRecord {
     pub kind: ChangeKind,
     pub event_id: EventId,
-    pub detected_at: DateTime<Utc>,
+    #[serde(
+        serialize_with = "radar_core::date::wire::serialize_timestamp",
+        deserialize_with = "radar_core::date::wire::deserialize_timestamp"
+    )]
+    #[schemars(with = "radar_core::date::wire::TimestampSchema")]
+    pub detected_at: Timestamp,
     #[serde(default)]
     pub detail: Option<String>,
 }
 
 impl ChangeRecord {
-    fn new(
-        kind: ChangeKind,
-        event_id: EventId,
-        now: DateTime<Utc>,
-        detail: Option<String>,
-    ) -> Self {
+    fn new(kind: ChangeKind, event_id: EventId, now: Timestamp, detail: Option<String>) -> Self {
         Self {
             kind,
             event_id,
@@ -93,11 +93,7 @@ impl ChangeKind {
 /// Unchanged events produce no records (STATE-002). The output is sorted by
 /// `(event_id, kind)` so identical inputs yield identical output regardless of
 /// map iteration order (§11 determinism).
-pub fn detect_changes(
-    previous: &[Event],
-    current: &[Event],
-    now: DateTime<Utc>,
-) -> Vec<ChangeRecord> {
+pub fn detect_changes(previous: &[Event], current: &[Event], now: Timestamp) -> Vec<ChangeRecord> {
     detect_changes_when(previous, current, now, |_| true)
 }
 
@@ -106,7 +102,7 @@ pub fn detect_changes(
 pub(crate) fn detect_changes_when(
     previous: &[Event],
     current: &[Event],
-    now: DateTime<Utc>,
+    now: Timestamp,
     can_cancel: impl Fn(&Event) -> bool,
 ) -> Vec<ChangeRecord> {
     let prev_by_id: HashMap<&EventId, &Event> = previous.iter().map(|e| (&e.id, e)).collect();
@@ -287,21 +283,15 @@ fn new_speakers(prev: &Event, curr: &Event) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::NaiveDate;
+    use jiff::civil::Date;
     use radar_core::{
         AccessInfo, EventDate, EventId, EventStatus, EventType, MediaId, MediaResource, MediaType,
         OnlineAvailability, PersonHit, PersonRole, PublicAccess, SourceEvidence, Talk, TalkId,
     };
     use url::Url;
 
-    fn now() -> DateTime<Utc> {
-        DateTime::<Utc>::from_naive_utc_and_offset(
-            NaiveDate::from_ymd_opt(2026, 8, 9)
-                .unwrap()
-                .and_hms_opt(12, 0, 0)
-                .unwrap(),
-            Utc,
-        )
+    fn now() -> Timestamp {
+        "2026-08-09T12:00:00Z".parse().unwrap()
     }
 
     fn src() -> SourceEvidence {
@@ -625,7 +615,7 @@ mod tests {
         let mut prev = event("e1", vec![]);
         prev.date = EventDate {
             start: Some(radar_core::DateTimeOrDate::Date(
-                NaiveDate::from_ymd_opt(2026, 9, 1).unwrap(),
+                Date::new(2026, 9, 1).unwrap(),
             )),
             end: None,
             timezone: None,
@@ -635,7 +625,7 @@ mod tests {
         let mut curr = event("e1", vec![]);
         curr.date = EventDate {
             start: Some(radar_core::DateTimeOrDate::Date(
-                NaiveDate::from_ymd_opt(2026, 9, 1).unwrap(),
+                Date::new(2026, 9, 1).unwrap(),
             )),
             end: None,
             timezone: None,
@@ -659,7 +649,7 @@ mod tests {
         let mut prev = event("e1", vec![]);
         prev.date = EventDate {
             start: Some(radar_core::DateTimeOrDate::Date(
-                NaiveDate::from_ymd_opt(2026, 9, 1).unwrap(),
+                Date::new(2026, 9, 1).unwrap(),
             )),
             end: None,
             timezone: None,
@@ -669,7 +659,7 @@ mod tests {
         let mut curr = event("e1", vec![]);
         curr.date = EventDate {
             start: Some(radar_core::DateTimeOrDate::Date(
-                NaiveDate::from_ymd_opt(2026, 9, 2).unwrap(),
+                Date::new(2026, 9, 2).unwrap(),
             )),
             end: None,
             timezone: None,

@@ -8,7 +8,7 @@
 //! reads a wall clock, so identical inputs produce identical persisted state.
 use std::path::{Path, PathBuf};
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use radar_core::{Event, EventId, SourceHealth};
 use redb::{ReadableDatabase, ReadableTable};
 use serde::{Deserialize, Serialize};
@@ -34,8 +34,16 @@ const RETENTION_DAYS: i64 = 90;
 /// [`RETENTION_DAYS`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CancelledEventTombstone {
-    pub first_seen_at: DateTime<Utc>,
-    pub cancelled_at: DateTime<Utc>,
+    #[serde(
+        serialize_with = "radar_core::date::wire::serialize_timestamp",
+        deserialize_with = "radar_core::date::wire::deserialize_timestamp"
+    )]
+    pub first_seen_at: Timestamp,
+    #[serde(
+        serialize_with = "radar_core::date::wire::serialize_timestamp",
+        deserialize_with = "radar_core::date::wire::deserialize_timestamp"
+    )]
+    pub cancelled_at: Timestamp,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -166,7 +174,7 @@ impl Repository {
 
     /// Persist `event`, preserving any existing `first_seen_at` and stamping
     /// `last_seen_at = now`. Returns the stored event as written.
-    pub fn store_event(&self, event: &Event, now: DateTime<Utc>) -> Result<Event, StateError> {
+    pub fn store_event(&self, event: &Event, now: Timestamp) -> Result<Event, StateError> {
         if self.read_only {
             return Err(StateError::ReadOnly);
         }
@@ -235,7 +243,7 @@ impl Repository {
 
     /// List change records since `since` (ADR-0011 §3, R9-H08). Ordered
     /// oldest-to-newest by `detected_at` (composite key lexicographic sort).
-    pub fn list_changes(&self, since: DateTime<Utc>) -> Result<Vec<ChangeRecord>, StateError> {
+    pub fn list_changes(&self, since: Timestamp) -> Result<Vec<ChangeRecord>, StateError> {
         let txn = self.db.begin_read()?;
         let table = txn.open_table(CHANGE_LOG)?;
         let start = timestamp_key(since);

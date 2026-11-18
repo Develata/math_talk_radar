@@ -5,6 +5,7 @@
 //! to prevent a stack-overflow DoS in `icalendar`'s nom recursive-descent
 //! parser. The guard tracks actual BEGIN/END nesting depth (not flat component
 //! count) so legitimate calendars with many flat VEVENTs are not rejected.
+use jiff::Span;
 use radar_core::adapter::MAX_DISCOVERED_STUBS;
 use radar_core::{
     AccessInfo, AdapterError, DateTimeOrDate, EventCandidate, EventDate, EventStatus, EventStub,
@@ -327,7 +328,7 @@ fn parse_ics_date_range(
         // explicit instant that already lands on the inclusive last day at
         // date precision.
         let final_end = if is_date_valued(dtend_val) {
-            end_date.checked_add_signed(chrono::Duration::days(-1))
+            end_date.yesterday().ok()
         } else {
             Some(end_date)
         };
@@ -344,7 +345,8 @@ fn parse_ics_date_range(
         && let Some(days) = parse_ics_duration_days(dur_val)
         && let Some(start_date) = ed.start_date()
         && days > 0
-        && let Some(end_date) = start_date.checked_add_signed(chrono::Duration::days(days - 1))
+        && let Ok(span) = Span::new().try_days(days - 1)
+        && let Ok(end_date) = start_date.checked_add(span)
     {
         // P1-07: DURATION is elapsed time. A P3D event starting Aug 10 spans
         // Aug 10–12 (inclusive last day = start + days - 1). A negative or
@@ -396,11 +398,11 @@ fn parse_ics_duration_days(value: &str) -> Option<i64> {
         if ch.is_ascii_digit() {
             num.push(ch);
         } else if ch == 'W' {
-            days += num.parse::<i64>().ok()? * 7;
+            days = days.checked_add(num.parse::<i64>().ok()?.checked_mul(7)?)?;
             num.clear();
             found_date_component = true;
         } else if ch == 'D' {
-            days += num.parse::<i64>().ok()?;
+            days = days.checked_add(num.parse::<i64>().ok()?)?;
             num.clear();
             found_date_component = true;
         } else {
@@ -474,6 +476,32 @@ DTSTART;VALUE=DATE:20260810
 END:VEVENT
 END:VCALENDAR
 ";
+
+    #[test]
+    fn discover_ignores_extensions_and_preserves_folded_text() {
+        let calendar = concat!(
+            "BEGIN:VCALENDAR\r\nVERSION:2.0\r\n",
+            "BEGIN:X-SUPPLEMENT\r\nEND:X-SUPPLEMENT\r\n",
+            "BEGIN:VEVENT\r\n",
+            "SUMMARY:Algebra \\, \\; \\n and \\\\ \r\n continuation\r\n",
+            "DTSTART;VALUE=DATE:20261117\r\nDTEND;VALUE=DATE:20261119\r\n",
+            "END:VEVENT\r\nEND:VCALENDAR\r\n",
+        );
+        let stubs = IcsAdapter
+            .discover(&make_doc(calendar.as_bytes()), &make_source())
+            .unwrap();
+        assert_eq!(stubs.len(), 1);
+        assert_eq!(stubs[0].title, "Algebra , ; \n and \\ continuation");
+        let date = stubs[0].date_hint.as_ref().unwrap();
+        assert_eq!(
+            date.start,
+            Some(DateTimeOrDate::Date(jiff::civil::date(2026, 11, 17)))
+        );
+        assert_eq!(
+            date.end,
+            Some(DateTimeOrDate::Date(jiff::civil::date(2026, 11, 18)))
+        );
+    }
 
     #[test]
     fn discover_three_events() {
@@ -872,8 +900,8 @@ END:VCALENDAR
                 DateTimeOrDate::DateTime(_) => None,
             })
             .expect("end present as Date");
-        assert_eq!(start, chrono::NaiveDate::from_ymd_opt(2026, 8, 8).unwrap());
-        assert_eq!(end, chrono::NaiveDate::from_ymd_opt(2026, 8, 11).unwrap());
+        assert_eq!(start, jiff::civil::Date::new(2026, 8, 8).unwrap());
+        assert_eq!(end, jiff::civil::Date::new(2026, 8, 11).unwrap());
     }
 
     // R9-H06: DURATION must populate the end date when DTEND is absent.
@@ -908,8 +936,8 @@ END:VCALENDAR
                 DateTimeOrDate::DateTime(_) => None,
             })
             .expect("end present as Date");
-        assert_eq!(start, chrono::NaiveDate::from_ymd_opt(2026, 8, 10).unwrap());
-        assert_eq!(end, chrono::NaiveDate::from_ymd_opt(2026, 8, 12).unwrap());
+        assert_eq!(start, jiff::civil::Date::new(2026, 8, 10).unwrap());
+        assert_eq!(end, jiff::civil::Date::new(2026, 8, 12).unwrap());
     }
 
     // R9-H06: DTEND takes precedence over DURATION per RFC 5545 §3.6.1.
@@ -1009,8 +1037,8 @@ END:VCALENDAR
                 DateTimeOrDate::DateTime(_) => None,
             })
             .expect("end present as Date");
-        assert_eq!(start, chrono::NaiveDate::from_ymd_opt(2026, 8, 8).unwrap());
-        assert_eq!(end, chrono::NaiveDate::from_ymd_opt(2026, 8, 9).unwrap());
+        assert_eq!(start, jiff::civil::Date::new(2026, 8, 8).unwrap());
+        assert_eq!(end, jiff::civil::Date::new(2026, 8, 9).unwrap());
     }
 
     #[test]
@@ -1029,10 +1057,12 @@ END:VCALENDAR
         // positive DURATION in a VEVENT). Previously the sign was stripped
         // and `-P1D` returned Some(1).
         assert_eq!(parse_ics_duration_days("-P1D"), None);
+        assert_eq!(parse_ics_duration_days("P9223372036854775807W"), None);
+        assert_eq!(parse_ics_duration_days("P1W9223372036854775807D"), None);
     }
 
     // §66: parser must not panic on untrusted input. A crafted DURATION with
-    // an oversized day count overflows NaiveDate's valid range; the parser must
+    // an oversized day count overflows Date's valid range; the parser must
     // leave end unset rather than panic.
     #[test]
     fn discover_duration_overflow_does_not_panic() {

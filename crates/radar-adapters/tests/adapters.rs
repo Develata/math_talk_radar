@@ -30,10 +30,6 @@ const MEDIA_DETECTION: &str = include_str!("fixtures/media_detection.html");
 const MALFORMED_ICS: &str = include_str!("fixtures/malformed_ics.ics");
 
 /// Build a `FetchedDocument` from a fixture body and content type.
-/// `fetched_at` uses `SystemTime::now().into()` because chrono is only a
-/// transitive dependency (via radar-core); the `From<SystemTime> for
-/// `DateTime<Utc>` impl is available with the target type inferred from the
-/// field, matching the pattern used by the inline adapter tests.
 fn make_doc(body: &str, content_type: &str) -> FetchedDocument {
     FetchedDocument {
         url: Url::parse("https://example.com/test").unwrap(),
@@ -41,7 +37,7 @@ fn make_doc(body: &str, content_type: &str) -> FetchedDocument {
         status: 200,
         content_type: Some(content_type.into()),
         body: body.as_bytes().to_vec(),
-        fetched_at: std::time::SystemTime::now().into(),
+        fetched_at: jiff::Timestamp::now(),
     }
 }
 

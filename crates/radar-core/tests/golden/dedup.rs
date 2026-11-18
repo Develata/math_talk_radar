@@ -2,7 +2,7 @@
 //! `radar_core::dedup::duplicate_signal`. Also covers REL-003 (stable
 //! deterministic IDs) via `deterministic_id`.
 
-use chrono::NaiveDate;
+use jiff::civil::Date;
 use radar_core::{
     AccessInfo, DatePrecision, DateTimeOrDate, Event, EventDate, EventId, EventStatus, EventType,
     Location, OnlineAvailability, PersonHit, PersonRole, PublicAccess, ScoreComponents,
@@ -114,8 +114,8 @@ fn build_event(spec: &EventSpec, id_suffix: &str) -> Event {
     }
 }
 
-fn parse_date(s: &str) -> Option<NaiveDate> {
-    NaiveDate::parse_from_str(s, "%Y-%m-%d").ok()
+fn parse_date(s: &str) -> Option<Date> {
+    Date::strptime("%Y-%m-%d", s).ok()
 }
 
 fn signal_name(signal: dedup::DedupSignal) -> &'static str {

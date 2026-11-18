@@ -215,7 +215,7 @@ mod tests {
         id: &str,
         title: &str,
         url: Option<&str>,
-        start: Option<chrono::NaiveDate>,
+        start: Option<jiff::civil::Date>,
         sources: Vec<SourceEvidence>,
     ) -> Event {
         Event {
@@ -335,7 +335,7 @@ mod tests {
                 let id = format!("{:04}", next() % 24);
                 let title = format!("Talk {}", next() % 8);
                 let url = (next() % 4 != 0).then(|| format!("https://events.org/{}", next() % 20));
-                let day = (next() % 3 != 0).then(|| date(2026, 9, (next() % 4 + 1) as u32));
+                let day = (next() % 3 != 0).then(|| date(2026, 9, (next() % 4 + 1) as i8));
                 let sources = (0..next() % 4)
                     .map(|_| {
                         src(
@@ -542,8 +542,8 @@ mod tests {
         assert!(!aliases.contains_key(&events[0].id));
     }
 
-    fn date(y: i32, m: u32, d: u32) -> chrono::NaiveDate {
-        chrono::NaiveDate::from_ymd_opt(y, m, d).unwrap()
+    fn date(y: i16, m: i8, d: i8) -> jiff::civil::Date {
+        jiff::civil::Date::new(y, m, d).unwrap()
     }
 
     #[test]

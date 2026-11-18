@@ -7,8 +7,9 @@
 //! shared HTML helpers. Feed entry authors are intentionally not promoted to
 //! event speakers: an article/video author is not reliable evidence of the
 //! mathematical speaker (§P-2, §6.2).
+use jiff::tz::Offset;
 use radar_core::adapter::MAX_DISCOVERED_STUBS;
-use radar_core::date::parse_date;
+use radar_core::date::{parse_date, wire::parse_timestamp};
 use radar_core::{
     AccessInfo, AdapterError, EventCandidate, EventDate, EventStatus, EventStub, FetchPlan,
     FetchedDocument, Location, MediaId, MediaResource, MediaType, OnlineAvailability, PublicAccess,
@@ -50,15 +51,19 @@ impl SourceAdapter for RssAdapter {
                     .join(&link.href)
                     .ok()
                     .filter(crate::helpers::is_http_url)?;
-                let date_hint = entry.published.or(entry.updated).map(|dt| {
-                    let date_text = dt.date_naive().to_string();
+                let date_hint = entry.published.or(entry.updated).and_then(|dt| {
+                    // feed-rs 3 supplies a Chrono UTC instant. Keep the existing
+                    // original_text spelling while converting at the feed boundary.
+                    let original = dt.to_rfc3339();
+                    let instant = parse_timestamp(&original).ok()?;
+                    let date_text = Offset::UTC.to_datetime(instant).date().to_string();
                     let mut hint =
                         parse_date(&date_text).unwrap_or_else(|_| EventDate::unknown(date_text));
                     // Keep the event fallback at day precision (publication
                     // time is not necessarily the event time), but preserve
                     // the exact feed timestamp for media-plane published_at.
-                    hint.original_text = dt.to_rfc3339();
-                    hint
+                    hint.original_text = original;
+                    Some(hint)
                 });
                 let native_id = (!entry.id.is_empty()).then_some(entry.id);
                 Some(EventStub {
@@ -173,8 +178,7 @@ impl RssAdapter {
         let published_at = stub
             .date_hint
             .as_ref()
-            .and_then(|date| chrono::DateTime::parse_from_rfc3339(&date.original_text).ok())
-            .map(|dt| dt.with_timezone(&chrono::Utc));
+            .and_then(|date| parse_timestamp(&date.original_text).ok());
         let date = stub
             .date_hint
             .clone()
@@ -216,6 +220,7 @@ impl RssAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use jiff::Timestamp;
     use radar_core::{AdapterKind, EventType, MediaType, SourceKind, SourceTier};
     use url::Url;
 
@@ -245,10 +250,7 @@ mod tests {
             status: 200,
             content_type: Some(content_type.to_string()),
             body: body.as_bytes().to_vec(),
-            // chrono is not a direct dependency of radar-adapters; rely on the
-            // `From<SystemTime> for DateTime<Utc>` impl exposed transitively via
-            // feed-rs, with the target type inferred from the field.
-            fetched_at: std::time::SystemTime::now().into(),
+            fetched_at: jiff::Timestamp::now(),
         }
     }
 
@@ -275,6 +277,49 @@ mod tests {
     </item>
   </channel>
 </rss>"#;
+
+    #[test]
+    fn feed_dates_share_the_utc_day_and_keep_publication_priority() {
+        let rss = SAMPLE_RSS.replace(
+            "Mon, 01 Jan 2024 00:00:00 +0000",
+            "Wed, 18 Nov 2026 00:30:00 +0800",
+        );
+        let atom = r#"<feed xmlns="http://www.w3.org/2005/Atom">
+            <id>https://example.com/feed</id><title>Talks</title>
+            <entry><id>publication-wins</id><title>Talk 1</title>
+                <link href="https://example.com/1"/>
+                <published>2026-11-17T16:30:00Z</published>
+                <updated>2026-11-19T12:00:00Z</updated>
+            </entry>
+            <entry><id>updated-fallback</id><title>Talk 2</title>
+                <link href="https://example.com/2"/>
+                <updated>2026-11-17T16:30:00Z</updated>
+            </entry>
+        </feed>"#;
+        let mut source = test_source();
+        source.media_strategy = Some("youtube_channel".into());
+        let expected: Timestamp = "2026-11-17T16:30:00Z".parse().unwrap();
+        let rss = RssAdapter
+            .discover(&make_doc(&rss, "application/rss+xml"), &source)
+            .unwrap();
+        let atom = RssAdapter
+            .discover(&make_doc(atom, "application/atom+xml"), &source)
+            .unwrap();
+        assert!(!rss.is_empty());
+        assert_eq!(atom.len(), 2);
+        for stub in rss.into_iter().take(1).chain(atom) {
+            let hint = stub.date_hint.as_ref().unwrap();
+            assert_eq!(hint.precision, radar_core::DatePrecision::Day);
+            assert_eq!(hint.start_date(), jiff::civil::Date::new(2026, 11, 17).ok());
+            assert_eq!(hint.original_text, "2026-11-17T16:30:00+00:00");
+
+            let event = RssAdapter.enrich(stub, &[], &source).unwrap().event;
+            assert_eq!(event.media[0].published_at, Some(expected));
+            let json = serde_json::to_value(event).unwrap();
+            assert_eq!(json["date"]["start"], "2026-11-17");
+            assert_eq!(json["media"][0]["published_at"], "2026-11-17T16:30:00Z");
+        }
+    }
 
     #[test]
     fn discover_minimal_rss() {
@@ -408,19 +453,17 @@ mod tests {
 
     #[test]
     fn youtube_media_preserves_feed_publication_timestamp() {
-        let published_at = chrono::DateTime::parse_from_rfc3339("2024-01-02T12:34:56Z")
-            .unwrap()
-            .with_timezone(&chrono::Utc);
+        let published_at: Timestamp = "2024-01-02T12:34:56Z".parse().unwrap();
         let stub = EventStub {
             title: "Recorded Lecture".to_string(),
             url: Url::parse("https://www.youtube.com/watch?v=abc123").unwrap(),
             date_hint: Some(EventDate {
                 start: Some(radar_core::DateTimeOrDate::Date(
-                    chrono::NaiveDate::from_ymd_opt(2024, 1, 2).unwrap(),
+                    jiff::civil::Date::new(2024, 1, 2).unwrap(),
                 )),
                 end: None,
                 timezone: None,
-                original_text: published_at.to_rfc3339(),
+                original_text: published_at.display_with_offset(Offset::UTC).to_string(),
                 precision: radar_core::DatePrecision::Day,
             }),
             source: SourceEvidence {
@@ -482,7 +525,7 @@ mod tests {
             .date
             .start_date()
             .expect("detail-page date should populate start");
-        assert_eq!(start, chrono::NaiveDate::from_ymd_opt(2024, 3, 15).unwrap());
+        assert_eq!(start, jiff::civil::Date::new(2024, 3, 15).unwrap());
     }
 
     // P0-07: when the HTML detail page carries an event date, it must override
@@ -520,7 +563,7 @@ mod tests {
             .expect("event date should be populated");
         assert_eq!(
             start,
-            chrono::NaiveDate::from_ymd_opt(2024, 3, 15).unwrap(),
+            jiff::civil::Date::new(2024, 3, 15).unwrap(),
             "detail-page date must override the feed pubDate"
         );
     }
@@ -534,7 +577,7 @@ mod tests {
             url: Url::parse("https://example.com/talks/2").unwrap(),
             date_hint: Some(EventDate {
                 start: Some(radar_core::DateTimeOrDate::Date(
-                    chrono::NaiveDate::from_ymd_opt(2024, 1, 2).unwrap(),
+                    jiff::civil::Date::new(2024, 1, 2).unwrap(),
                 )),
                 end: None,
                 timezone: None,
@@ -564,7 +607,7 @@ mod tests {
             .expect("feed pubDate should populate start as fallback");
         assert_eq!(
             start,
-            chrono::NaiveDate::from_ymd_opt(2024, 1, 2).unwrap(),
+            jiff::civil::Date::new(2024, 1, 2).unwrap(),
             "feed pubDate must be used when the detail page has no date"
         );
     }

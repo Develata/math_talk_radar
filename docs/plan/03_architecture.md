@@ -33,7 +33,7 @@ separate from production edges.
 ## Technology stack (§37)
 
 Rust 2024, stable. tokio, clap, reqwest (rustls, no OpenSSL), scraper, feed-rs,
-chrono, chrono-tz, redb, serde/serde_json/toml/schemars, blake3, sha2, semver,
+Jiff (ADR-0019), redb, serde/serde_json/toml/schemars, blake3, sha2, semver,
 tracing, thiserror (libs), anyhow (CLI composition).
 
 ## Dependency policy (§38)

@@ -15,7 +15,7 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use chrono::{TimeZone, Utc};
+use jiff::{Timestamp, civil::Date};
 use math_talk_radar_cli::cli::{DetailLevel, OutputFormat};
 use math_talk_radar_cli::output::{OUTPUT_SCHEMA_VERSION, QuerySpec, ScanOutput, render_to};
 use radar_core::dedup::dedup_events;
@@ -43,10 +43,7 @@ struct CaseMetrics {
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let fixed_now = Utc
-        .with_ymd_and_hms(2026, 8, 23, 0, 0, 0)
-        .single()
-        .ok_or("invalid fixed benchmark timestamp")?;
+    let fixed_now = "2026-08-23T00:00:00Z".parse()?;
 
     for &n in DISTINCT_CASES {
         let metrics = run_distinct_case(n, fixed_now)?;
@@ -98,10 +95,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn run_distinct_case(
-    n: usize,
-    fixed_now: chrono::DateTime<Utc>,
-) -> Result<CaseMetrics, Box<dyn Error>> {
+fn run_distinct_case(n: usize, fixed_now: Timestamp) -> Result<CaseMetrics, Box<dyn Error>> {
     let events = make_events(n, false)?;
 
     let started = Instant::now();
@@ -169,7 +163,7 @@ fn run_distinct_case(
     })
 }
 
-fn output_for(events: Vec<Event>, generated_at: chrono::DateTime<Utc>) -> ScanOutput {
+fn output_for(events: Vec<Event>, generated_at: Timestamp) -> ScanOutput {
     ScanOutput {
         schema_version: OUTPUT_SCHEMA_VERSION.to_string(),
         generated_at,
@@ -187,7 +181,7 @@ fn output_for(events: Vec<Event>, generated_at: chrono::DateTime<Utc>) -> ScanOu
 
 fn make_events(n: usize, high_collision: bool) -> Result<Vec<Event>, Box<dyn Error>> {
     let source_url = Url::parse("https://example.edu/calendar")?;
-    let date = chrono::NaiveDate::from_ymd_opt(2026, 9, 1).ok_or("invalid benchmark date")?;
+    let date = Date::new(2026, 9, 1)?;
     let mut out = Vec::with_capacity(n);
 
     for i in 0..n {

@@ -3,7 +3,7 @@
 //! Types here are the public JSON contract surface. Field names use
 //! `#[serde(rename_all = "snake_case")]` via per-enum attributes so the wire
 //! shape matches the engineering contract exactly.
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use url::Url;
@@ -91,10 +91,12 @@ pub struct Event {
     pub score_components: ScoreComponents,
     #[serde(default)]
     pub rank_reasons: Vec<String>,
-    #[serde(default)]
-    pub first_seen_at: Option<DateTime<Utc>>,
-    #[serde(default)]
-    pub last_seen_at: Option<DateTime<Utc>>,
+    #[serde(default, with = "crate::date::wire::optional_timestamp")]
+    #[schemars(with = "Option<crate::date::wire::TimestampSchema>")]
+    pub first_seen_at: Option<Timestamp>,
+    #[serde(default, with = "crate::date::wire::optional_timestamp")]
+    #[schemars(with = "Option<crate::date::wire::TimestampSchema>")]
+    pub last_seen_at: Option<Timestamp>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
@@ -170,7 +172,12 @@ pub struct MediaResource {
     pub url: Url,
     pub platform: Option<String>,
     pub public_access: PublicAccess,
-    pub published_at: Option<DateTime<Utc>>,
+    #[serde(default, with = "crate::date::wire::optional_timestamp")]
+    #[schemars(
+        with = "Option<crate::date::wire::TimestampSchema>",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub published_at: Option<Timestamp>,
     pub source: SourceEvidence,
 }
 
@@ -225,8 +232,9 @@ pub struct SourceEvidence {
     pub source_url: Url,
     #[serde(default)]
     pub evidence: Option<String>,
-    #[serde(default)]
-    pub captured_at: Option<DateTime<Utc>>,
+    #[serde(default, with = "crate::date::wire::optional_timestamp")]
+    #[schemars(with = "Option<crate::date::wire::TimestampSchema>")]
+    pub captured_at: Option<Timestamp>,
     /// Source-declared canonical event id (e.g. Indico event id, ICS UID). Used
     /// by the §25 `SourceCanonicalId` dedup signal. Optional: most sources do
     /// not declare one. Per §64, adding an optional field is schema-compatible
@@ -261,8 +269,13 @@ pub struct SourceHealth {
     /// When this observation was taken (scan timestamp). Always `Some` when
     /// produced by the scan path; `Option` + `skip_serializing_if` keeps it
     /// optional in the public JSON schema (§64 v0.x path, ADR-0011 §1).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub recorded_at: Option<DateTime<Utc>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "crate::date::wire::optional_timestamp"
+    )]
+    #[schemars(with = "Option<crate::date::wire::TimestampSchema>")]
+    pub recorded_at: Option<Timestamp>,
 }
 
 #[cfg(test)]

@@ -3,11 +3,18 @@
 //! The full date parser (range formats, cross-month ranges, US vs UK ordering,
 //! interval-overlap filtering) lands in M1. This module establishes the
 //! canonical [`EventDate`] shape and the clock-injection surface used by tests.
-use chrono::{DateTime, Datelike, NaiveDate, Utc};
+use jiff::{
+    Timestamp,
+    civil::Date,
+    tz::{Offset, TimeZone, TimeZoneDatabase},
+};
 use regex::Regex;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
+
+#[doc(hidden)]
+pub mod wire;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct EventDate {
@@ -22,8 +29,8 @@ impl EventDate {
     /// Best-effort calendar-date extraction of the start. Returns `None` when
     /// `start` is absent. Used by dedup signatures (§25) and interval overlap
     /// (§8) which compare on the date component regardless of time.
-    pub fn start_date(&self) -> Option<NaiveDate> {
-        self.start.as_ref().map(to_naive_date)
+    pub fn start_date(&self) -> Option<Date> {
+        self.start.as_ref().map(calendar_date)
     }
 
     /// An `EventDate` with no known start/end/timezone and `Unknown` precision,
@@ -45,8 +52,22 @@ impl EventDate {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
 pub enum DateTimeOrDate {
-    DateTime(DateTime<Utc>),
-    Date(NaiveDate),
+    DateTime(
+        #[serde(
+            serialize_with = "wire::serialize_timestamp",
+            deserialize_with = "wire::deserialize_timestamp"
+        )]
+        #[schemars(with = "wire::TimestampSchema")]
+        Timestamp,
+    ),
+    Date(
+        #[serde(
+            serialize_with = "wire::serialize_date",
+            deserialize_with = "wire::deserialize_date"
+        )]
+        #[schemars(schema_with = "wire::date_schema")]
+        Date,
+    ),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
@@ -67,8 +88,18 @@ pub enum DatePrecision {
 /// A wall-clock range for an individual talk (§5.3 `date_time`).
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct DateTimeRange {
-    pub start: DateTime<Utc>,
-    pub end: Option<DateTime<Utc>>,
+    #[serde(
+        serialize_with = "wire::serialize_timestamp",
+        deserialize_with = "wire::deserialize_timestamp"
+    )]
+    #[schemars(with = "wire::TimestampSchema")]
+    pub start: Timestamp,
+    #[serde(default, with = "wire::optional_timestamp")]
+    #[schemars(
+        with = "Option<wire::TimestampSchema>",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub end: Option<Timestamp>,
     pub timezone: Option<String>,
 }
 
@@ -81,8 +112,10 @@ pub enum DateError {
 
 /// Parse an IANA timezone name. Returns `None` if unknown. Used by the CLI's
 /// `--timezone` and `--today` clock-injection surface (§8.4).
-pub fn parse_timezone(name: &str) -> Option<chrono_tz::Tz> {
-    name.parse::<chrono_tz::Tz>().ok()
+pub fn parse_timezone(name: &str) -> Option<TimeZone> {
+    let zone = TimeZoneDatabase::bundled().get(name).ok()?;
+    // Jiff's lookup is case-insensitive; keep the CLI's exact-name check.
+    (zone.iana_name() == Some(name)).then_some(zone)
 }
 
 // --- M1 date parsing -------------------------------------------------------
@@ -93,7 +126,7 @@ pub fn parse_timezone(name: &str) -> Option<chrono_tz::Tz> {
 
 /// Map an English month name (full or 3-letter abbreviation, case-insensitive)
 /// to its 1-based month number. Returns `None` for unknown names.
-fn month_from_name(name: &str) -> Option<u32> {
+fn month_from_name(name: &str) -> Option<i8> {
     let lower = name.to_ascii_lowercase();
     match lower.as_str() {
         "january" | "jan" => Some(1),
@@ -274,14 +307,14 @@ pub fn parse_date(text: &str) -> Result<EventDate, DateError> {
 /// derived from `FetchedDocument::fetched_at` in `radar-adapters`), not read
 /// from a system clock inside `radar-core`.
 pub fn parse_date_with_year_hint(text: &str, year_hint: i32) -> Result<EventDate, DateError> {
-    parse_date_inner(text, Some(year_hint))
+    parse_date_inner(text, i16::try_from(year_hint).ok())
 }
 
 /// Parse a free-text date string with a calendar reference for year-less
 /// patterns.
 ///
-/// Like [`parse_date_with_year_hint`], but uses a full [`NaiveDate`] (typically
-/// `FetchedDocument::fetched_at.date_naive()`) as the year reference and
+/// Like [`parse_date_with_year_hint`], but uses a full [`Date`] (typically
+/// the UTC day of `FetchedDocument::fetched_at`) as the year reference and
 /// applies a **next-occurrence rollover**: if the parsed date's latest day
 /// (the range end, or the single day for a Day-precision date) falls strictly
 /// before `ref_date`, the year is advanced by one and the text is re-parsed.
@@ -296,14 +329,14 @@ pub fn parse_date_with_year_hint(text: &str, year_hint: i32) -> Result<EventDate
 ///
 /// The crate remains clock-free: `ref_date` is supplied by the caller, not
 /// read from a system clock inside `radar-core`.
-pub fn parse_date_with_reference(text: &str, ref_date: NaiveDate) -> Result<EventDate, DateError> {
+pub fn parse_date_with_reference(text: &str, ref_date: Date) -> Result<EventDate, DateError> {
     let first = parse_date_inner(text, Some(ref_date.year()))?;
     if first.precision == DatePrecision::Unknown {
         return Ok(first);
     }
     let latest = match (&first.end, &first.start) {
-        (Some(e), _) => Some(to_naive_date(e)),
-        (None, Some(s)) => Some(to_naive_date(s)),
+        (Some(e), _) => Some(calendar_date(e)),
+        (None, Some(s)) => Some(calendar_date(s)),
         (None, None) => None,
     };
     let Some(latest) = latest else {
@@ -320,7 +353,7 @@ pub fn parse_date_with_reference(text: &str, ref_date: NaiveDate) -> Result<Even
     }
 }
 
-fn parse_date_inner(text: &str, year_hint: Option<i32>) -> Result<EventDate, DateError> {
+fn parse_date_inner(text: &str, year_hint: Option<i16>) -> Result<EventDate, DateError> {
     let trimmed = text.trim();
 
     // 1. ISO 8601 date range: "2026-08-08 - 2026-08-10" or "2026-08-08/2026-08-10",
@@ -342,7 +375,7 @@ fn parse_date_inner(text: &str, year_hint: Option<i32>) -> Result<EventDate, Dat
         .find(['T', ' '])
         .map(|i| &trimmed[..i])
         .unwrap_or(trimmed);
-    if let Ok(d) = NaiveDate::parse_from_str(iso_date_part, "%Y-%m-%d") {
+    if let Ok(d) = Date::strptime("%Y-%m-%d", iso_date_part) {
         if iso_date_part.len() < trimmed.len() {
             let remainder = &trimmed[iso_date_part.len()..];
             if [" - ", " – ", " to ", " / "]
@@ -388,8 +421,8 @@ fn parse_date_inner(text: &str, year_hint: Option<i32>) -> Result<EventDate, Dat
 /// Separator may be en-dash, ASCII hyphen, or slash (ISO 8601 interval).
 fn try_iso_date_range(trimmed: &str, original: &str) -> Option<EventDate> {
     let caps = re_iso_date_range().captures(trimmed)?;
-    let start = NaiveDate::parse_from_str(&caps[1], "%Y-%m-%d").ok()?;
-    let end = NaiveDate::parse_from_str(&caps[2], "%Y-%m-%d").ok()?;
+    let start = Date::strptime("%Y-%m-%d", &caps[1]).ok()?;
+    let end = Date::strptime("%Y-%m-%d", &caps[2]).ok()?;
     if start > end {
         return None;
     }
@@ -405,8 +438,8 @@ fn try_iso_date_range(trimmed: &str, original: &str) -> Option<EventDate> {
 /// Space-separated ISO date range: "2026-08-08 2026-08-10" (no dash/slash).
 fn try_iso_date_range_space(trimmed: &str, original: &str) -> Option<EventDate> {
     let caps = re_iso_date_range_space().captures(trimmed)?;
-    let start = NaiveDate::parse_from_str(&caps[1], "%Y-%m-%d").ok()?;
-    let end = NaiveDate::parse_from_str(&caps[2], "%Y-%m-%d").ok()?;
+    let start = Date::strptime("%Y-%m-%d", &caps[1]).ok()?;
+    let end = Date::strptime("%Y-%m-%d", &caps[2]).ok()?;
     if start > end {
         return None;
     }
@@ -424,13 +457,13 @@ fn try_iso_date_range_space(trimmed: &str, original: &str) -> Option<EventDate> 
 fn try_us_full_date_range(trimmed: &str, original: &str) -> Option<EventDate> {
     let caps = re_us_full_date_range().captures(trimmed)?;
     let m1 = month_from_name(&caps[1])?;
-    let d1: u32 = caps[2].parse().ok()?;
-    let y1: i32 = caps[3].parse().ok()?;
+    let d1: i8 = caps[2].parse().ok()?;
+    let y1: i16 = caps[3].parse().ok()?;
     let m2 = month_from_name(&caps[4])?;
-    let d2: u32 = caps[5].parse().ok()?;
-    let y2: i32 = caps[6].parse().ok()?;
-    let start = NaiveDate::from_ymd_opt(y1, m1, d1)?;
-    let end = NaiveDate::from_ymd_opt(y2, m2, d2)?;
+    let d2: i8 = caps[5].parse().ok()?;
+    let y2: i16 = caps[6].parse().ok()?;
+    let start = Date::new(y1, m1, d1).ok()?;
+    let end = Date::new(y2, m2, d2).ok()?;
     if start > end {
         return None;
     }
@@ -446,14 +479,14 @@ fn try_us_full_date_range(trimmed: &str, original: &str) -> Option<EventDate> {
 /// CORE-14: DMY full date range: "31 December 2026 - 2 January 2027".
 fn try_dmy_full_date_range(trimmed: &str, original: &str) -> Option<EventDate> {
     let caps = re_dmy_full_date_range().captures(trimmed)?;
-    let d1: u32 = caps[1].parse().ok()?;
+    let d1: i8 = caps[1].parse().ok()?;
     let m1 = month_from_name(&caps[2])?;
-    let y1: i32 = caps[3].parse().ok()?;
-    let d2: u32 = caps[4].parse().ok()?;
+    let y1: i16 = caps[3].parse().ok()?;
+    let d2: i8 = caps[4].parse().ok()?;
     let m2 = month_from_name(&caps[5])?;
-    let y2: i32 = caps[6].parse().ok()?;
-    let start = NaiveDate::from_ymd_opt(y1, m1, d1)?;
-    let end = NaiveDate::from_ymd_opt(y2, m2, d2)?;
+    let y2: i16 = caps[6].parse().ok()?;
+    let start = Date::new(y1, m1, d1).ok()?;
+    let end = Date::new(y2, m2, d2).ok()?;
     if start > end {
         return None;
     }
@@ -469,12 +502,12 @@ fn try_dmy_full_date_range(trimmed: &str, original: &str) -> Option<EventDate> {
 /// Same-month range: "3–7 August 2026" / "3-7 August 2026".
 fn try_same_month_range(trimmed: &str, original: &str) -> Option<EventDate> {
     let caps = re_same_month_range().captures(trimmed)?;
-    let d1: u32 = caps[1].parse().ok()?;
-    let d2: u32 = caps[2].parse().ok()?;
+    let d1: i8 = caps[1].parse().ok()?;
+    let d2: i8 = caps[2].parse().ok()?;
     let month = month_from_name(&caps[3])?;
-    let year: i32 = caps[4].parse().ok()?;
-    let start = NaiveDate::from_ymd_opt(year, month, d1)?;
-    let end = NaiveDate::from_ymd_opt(year, month, d2)?;
+    let year: i16 = caps[4].parse().ok()?;
+    let start = Date::new(year, month, d1).ok()?;
+    let end = Date::new(year, month, d2).ok()?;
     if start > end {
         return None;
     }
@@ -490,13 +523,13 @@ fn try_same_month_range(trimmed: &str, original: &str) -> Option<EventDate> {
 /// Cross-month range: "31 August – 4 September 2026".
 fn try_cross_month_range(trimmed: &str, original: &str) -> Option<EventDate> {
     let caps = re_cross_month_range().captures(trimmed)?;
-    let d1: u32 = caps[1].parse().ok()?;
+    let d1: i8 = caps[1].parse().ok()?;
     let m1 = month_from_name(&caps[2])?;
-    let d2: u32 = caps[3].parse().ok()?;
+    let d2: i8 = caps[3].parse().ok()?;
     let m2 = month_from_name(&caps[4])?;
-    let year: i32 = caps[5].parse().ok()?;
-    let start = NaiveDate::from_ymd_opt(year, m1, d1)?;
-    let end = NaiveDate::from_ymd_opt(year, m2, d2)?;
+    let year: i16 = caps[5].parse().ok()?;
+    let start = Date::new(year, m1, d1).ok()?;
+    let end = Date::new(year, m2, d2).ok()?;
     if start > end {
         return None;
     }
@@ -513,11 +546,11 @@ fn try_cross_month_range(trimmed: &str, original: &str) -> Option<EventDate> {
 fn try_us_range(trimmed: &str, original: &str) -> Option<EventDate> {
     let caps = re_us_range().captures(trimmed)?;
     let month = month_from_name(&caps[1])?;
-    let d1: u32 = caps[2].parse().ok()?;
-    let d2: u32 = caps[3].parse().ok()?;
-    let year: i32 = caps[4].parse().ok()?;
-    let start = NaiveDate::from_ymd_opt(year, month, d1)?;
-    let end = NaiveDate::from_ymd_opt(year, month, d2)?;
+    let d1: i8 = caps[2].parse().ok()?;
+    let d2: i8 = caps[3].parse().ok()?;
+    let year: i16 = caps[4].parse().ok()?;
+    let start = Date::new(year, month, d1).ok()?;
+    let end = Date::new(year, month, d2).ok()?;
     if start > end {
         return None;
     }
@@ -534,9 +567,9 @@ fn try_us_range(trimmed: &str, original: &str) -> Option<EventDate> {
 fn try_us_single(trimmed: &str, original: &str) -> Option<EventDate> {
     let caps = re_us_single().captures(trimmed)?;
     let month = month_from_name(&caps[1])?;
-    let day: u32 = caps[2].parse().ok()?;
-    let year: i32 = caps[3].parse().ok()?;
-    let d = NaiveDate::from_ymd_opt(year, month, day)?;
+    let day: i8 = caps[2].parse().ok()?;
+    let year: i16 = caps[3].parse().ok()?;
+    let d = Date::new(year, month, day).ok()?;
     Some(EventDate {
         start: Some(DateTimeOrDate::Date(d)),
         end: None,
@@ -549,10 +582,10 @@ fn try_us_single(trimmed: &str, original: &str) -> Option<EventDate> {
 /// Day Month Year single: "8 August 2026".
 fn try_day_month_year_single(trimmed: &str, original: &str) -> Option<EventDate> {
     let caps = re_day_month_year_single().captures(trimmed)?;
-    let day: u32 = caps[1].parse().ok()?;
+    let day: i8 = caps[1].parse().ok()?;
     let month = month_from_name(&caps[2])?;
-    let year: i32 = caps[3].parse().ok()?;
-    let d = NaiveDate::from_ymd_opt(year, month, day)?;
+    let year: i16 = caps[3].parse().ok()?;
+    let d = Date::new(year, month, day).ok()?;
     Some(EventDate {
         start: Some(DateTimeOrDate::Date(d)),
         end: None,
@@ -566,7 +599,7 @@ fn try_day_month_year_single(trimmed: &str, original: &str) -> Option<EventDate>
 /// ranges whose end precedes the start (e.g. "Dec 30 – Jan 2") roll the end
 /// forward into `year + 1`; same-month ranges with `d1 > d2` are rejected
 /// (no plausible year wrap within one month).
-fn try_yearless(trimmed: &str, original: &str, year: i32) -> Option<EventDate> {
+fn try_yearless(trimmed: &str, original: &str, year: i16) -> Option<EventDate> {
     try_same_month_range_no_year(trimmed, original, year)
         .or_else(|| try_cross_month_range_no_year(trimmed, original, year))
         .or_else(|| try_us_cross_month_range_no_year(trimmed, original, year))
@@ -575,13 +608,13 @@ fn try_yearless(trimmed: &str, original: &str, year: i32) -> Option<EventDate> {
         .or_else(|| try_dmy_single_no_year(trimmed, original, year))
 }
 
-fn try_same_month_range_no_year(trimmed: &str, original: &str, year: i32) -> Option<EventDate> {
+fn try_same_month_range_no_year(trimmed: &str, original: &str, year: i16) -> Option<EventDate> {
     let caps = re_same_month_range_no_year().captures(trimmed)?;
-    let d1: u32 = caps[1].parse().ok()?;
-    let d2: u32 = caps[2].parse().ok()?;
+    let d1: i8 = caps[1].parse().ok()?;
+    let d2: i8 = caps[2].parse().ok()?;
     let month = month_from_name(&caps[3])?;
-    let start = NaiveDate::from_ymd_opt(year, month, d1)?;
-    let end = NaiveDate::from_ymd_opt(year, month, d2)?;
+    let start = Date::new(year, month, d1).ok()?;
+    let end = Date::new(year, month, d2).ok()?;
     if start > end {
         return None;
     }
@@ -594,16 +627,16 @@ fn try_same_month_range_no_year(trimmed: &str, original: &str, year: i32) -> Opt
     })
 }
 
-fn try_cross_month_range_no_year(trimmed: &str, original: &str, year: i32) -> Option<EventDate> {
+fn try_cross_month_range_no_year(trimmed: &str, original: &str, year: i16) -> Option<EventDate> {
     let caps = re_cross_month_range_no_year().captures(trimmed)?;
-    let d1: u32 = caps[1].parse().ok()?;
+    let d1: i8 = caps[1].parse().ok()?;
     let m1 = month_from_name(&caps[2])?;
-    let d2: u32 = caps[3].parse().ok()?;
+    let d2: i8 = caps[3].parse().ok()?;
     let m2 = month_from_name(&caps[4])?;
-    let start = NaiveDate::from_ymd_opt(year, m1, d1)?;
+    let start = Date::new(year, m1, d1).ok()?;
     // If end month precedes start month, the range crosses the year boundary.
     let end_year = if m2 < m1 { year + 1 } else { year };
-    let end = NaiveDate::from_ymd_opt(end_year, m2, d2)?;
+    let end = Date::new(end_year, m2, d2).ok()?;
     if start > end {
         return None;
     }
@@ -616,15 +649,15 @@ fn try_cross_month_range_no_year(trimmed: &str, original: &str, year: i32) -> Op
     })
 }
 
-fn try_us_cross_month_range_no_year(trimmed: &str, original: &str, year: i32) -> Option<EventDate> {
+fn try_us_cross_month_range_no_year(trimmed: &str, original: &str, year: i16) -> Option<EventDate> {
     let caps = re_us_cross_month_range_no_year().captures(trimmed)?;
     let m1 = month_from_name(&caps[1])?;
-    let d1: u32 = caps[2].parse().ok()?;
+    let d1: i8 = caps[2].parse().ok()?;
     let m2 = month_from_name(&caps[3])?;
-    let d2: u32 = caps[4].parse().ok()?;
-    let start = NaiveDate::from_ymd_opt(year, m1, d1)?;
+    let d2: i8 = caps[4].parse().ok()?;
+    let start = Date::new(year, m1, d1).ok()?;
     let end_year = if m2 < m1 { year + 1 } else { year };
-    let end = NaiveDate::from_ymd_opt(end_year, m2, d2)?;
+    let end = Date::new(end_year, m2, d2).ok()?;
     if start > end {
         return None;
     }
@@ -637,13 +670,13 @@ fn try_us_cross_month_range_no_year(trimmed: &str, original: &str, year: i32) ->
     })
 }
 
-fn try_us_range_no_year(trimmed: &str, original: &str, year: i32) -> Option<EventDate> {
+fn try_us_range_no_year(trimmed: &str, original: &str, year: i16) -> Option<EventDate> {
     let caps = re_us_range_no_year().captures(trimmed)?;
     let month = month_from_name(&caps[1])?;
-    let d1: u32 = caps[2].parse().ok()?;
-    let d2: u32 = caps[3].parse().ok()?;
-    let start = NaiveDate::from_ymd_opt(year, month, d1)?;
-    let end = NaiveDate::from_ymd_opt(year, month, d2)?;
+    let d1: i8 = caps[2].parse().ok()?;
+    let d2: i8 = caps[3].parse().ok()?;
+    let start = Date::new(year, month, d1).ok()?;
+    let end = Date::new(year, month, d2).ok()?;
     if start > end {
         return None;
     }
@@ -656,11 +689,11 @@ fn try_us_range_no_year(trimmed: &str, original: &str, year: i32) -> Option<Even
     })
 }
 
-fn try_us_single_no_year(trimmed: &str, original: &str, year: i32) -> Option<EventDate> {
+fn try_us_single_no_year(trimmed: &str, original: &str, year: i16) -> Option<EventDate> {
     let caps = re_us_single_no_year().captures(trimmed)?;
     let month = month_from_name(&caps[1])?;
-    let day: u32 = caps[2].parse().ok()?;
-    let d = NaiveDate::from_ymd_opt(year, month, day)?;
+    let day: i8 = caps[2].parse().ok()?;
+    let d = Date::new(year, month, day).ok()?;
     Some(EventDate {
         start: Some(DateTimeOrDate::Date(d)),
         end: None,
@@ -670,11 +703,11 @@ fn try_us_single_no_year(trimmed: &str, original: &str, year: i32) -> Option<Eve
     })
 }
 
-fn try_dmy_single_no_year(trimmed: &str, original: &str, year: i32) -> Option<EventDate> {
+fn try_dmy_single_no_year(trimmed: &str, original: &str, year: i16) -> Option<EventDate> {
     let caps = re_dmy_single_no_year().captures(trimmed)?;
-    let day: u32 = caps[1].parse().ok()?;
+    let day: i8 = caps[1].parse().ok()?;
     let month = month_from_name(&caps[2])?;
-    let d = NaiveDate::from_ymd_opt(year, month, day)?;
+    let d = Date::new(year, month, day).ok()?;
     Some(EventDate {
         start: Some(DateTimeOrDate::Date(d)),
         end: None,
@@ -684,10 +717,10 @@ fn try_dmy_single_no_year(trimmed: &str, original: &str, year: i32) -> Option<Ev
     })
 }
 
-/// Extract the [`NaiveDate`] component from a [`DateTimeOrDate`].
-fn to_naive_date(d: &DateTimeOrDate) -> NaiveDate {
+/// Extract the [`Date`] component from a [`DateTimeOrDate`].
+fn calendar_date(d: &DateTimeOrDate) -> Date {
     match d {
-        DateTimeOrDate::DateTime(dt) => dt.date_naive(),
+        DateTimeOrDate::DateTime(dt) => Offset::UTC.to_datetime(*dt).date(),
         DateTimeOrDate::Date(d) => *d,
     }
 }
@@ -696,17 +729,17 @@ fn to_naive_date(d: &DateTimeOrDate) -> NaiveDate {
 /// event.end >= query.start`. `None` start/end are treated as unbounded. A
 /// single-day event (`Some` start, `None` end) overlaps iff its start lies
 /// within `[query_start, query_end]`.
-pub fn interval_overlap(event: &EventDate, query_start: NaiveDate, query_end: NaiveDate) -> bool {
+pub fn interval_overlap(event: &EventDate, query_start: Date, query_end: Date) -> bool {
     let event_start_inclusive = match &event.start {
         None => true,
-        Some(d) => to_naive_date(d) <= query_end,
+        Some(d) => calendar_date(d) <= query_end,
     };
     let event_end_inclusive = match &event.end {
         None => match &event.start {
             None => true,
-            Some(sd) => to_naive_date(sd) >= query_start,
+            Some(sd) => calendar_date(sd) >= query_start,
         },
-        Some(d) => to_naive_date(d) >= query_start,
+        Some(d) => calendar_date(d) >= query_start,
     };
     event_start_inclusive && event_end_inclusive
 }
@@ -715,18 +748,50 @@ pub fn interval_overlap(event: &EventDate, query_start: NaiveDate, query_end: Na
 mod tests {
     use super::*;
 
-    fn d(y: i32, m: u32, day: u32) -> NaiveDate {
-        NaiveDate::from_ymd_opt(y, m, day).unwrap()
+    #[test]
+    fn bundled_timezone_handles_dst_overlap_and_gap() {
+        use jiff::civil::datetime;
+
+        let zone = parse_timezone("America/New_York").unwrap();
+        assert!(parse_timezone("america/new_york").is_none());
+        assert!(parse_timezone("America/Not_A_Zone").is_none());
+        assert!(parse_timezone("UTC").is_some());
+        assert!(parse_timezone("US/Eastern").is_some());
+
+        let fold = datetime(2026, 11, 1, 1, 30, 0, 0);
+        let before_fold = "2026-11-01T05:30:00Z".parse().unwrap();
+        let after_fold = "2026-11-01T06:30:00Z".parse().unwrap();
+        assert_eq!(zone.to_datetime(before_fold), fold);
+        assert_eq!(zone.to_datetime(after_fold), fold);
+        let ambiguous = zone.to_ambiguous_timestamp(fold);
+        assert!(ambiguous.unambiguous().is_err());
+        assert_eq!(ambiguous.earlier().unwrap(), before_fold);
+        assert_eq!(ambiguous.later().unwrap(), after_fold);
+
+        let gap = datetime(2026, 3, 8, 2, 30, 0, 0);
+        assert!(zone.to_ambiguous_timestamp(gap).unambiguous().is_err());
+        assert_eq!(
+            zone.to_datetime("2026-03-08T06:59:59Z".parse().unwrap()),
+            datetime(2026, 3, 8, 1, 59, 59, 0),
+        );
+        assert_eq!(
+            zone.to_datetime("2026-03-08T07:00:00Z".parse().unwrap()),
+            datetime(2026, 3, 8, 3, 0, 0, 0),
+        );
     }
 
-    fn start_date(ed: &EventDate) -> NaiveDate {
+    fn d(y: i16, m: i8, day: i8) -> Date {
+        Date::new(y, m, day).unwrap()
+    }
+
+    fn start_date(ed: &EventDate) -> Date {
         match ed.start.as_ref().unwrap() {
             DateTimeOrDate::Date(n) => *n,
             DateTimeOrDate::DateTime(_) => panic!("expected Date, got DateTime"),
         }
     }
 
-    fn end_date(ed: &EventDate) -> NaiveDate {
+    fn end_date(ed: &EventDate) -> Date {
         match ed.end.as_ref().unwrap() {
             DateTimeOrDate::Date(n) => *n,
             DateTimeOrDate::DateTime(_) => panic!("expected Date, got DateTime"),
@@ -779,7 +844,7 @@ mod tests {
         let q_start = d(2026, 8, 10);
         let q_end = d(2026, 8, 20);
 
-        let mk = |s: Option<NaiveDate>, e: Option<NaiveDate>, p: DatePrecision| EventDate {
+        let mk = |s: Option<Date>, e: Option<Date>, p: DatePrecision| EventDate {
             start: s.map(DateTimeOrDate::Date),
             end: e.map(DateTimeOrDate::Date),
             timezone: None,
@@ -1150,7 +1215,7 @@ mod tests {
         let ref_jan1 = d(2026, 1, 1);
         for c in cases {
             let with_ref = parse_date_with_reference(c, ref_jan1).unwrap();
-            let with_hint = parse_date_with_year_hint(c, ref_jan1.year()).unwrap();
+            let with_hint = parse_date_with_year_hint(c, i32::from(ref_jan1.year())).unwrap();
             assert_eq!(
                 with_ref, with_hint,
                 "ref=Jan 1 must match year_hint for {c:?}: got {with_ref:?} vs {with_hint:?}"

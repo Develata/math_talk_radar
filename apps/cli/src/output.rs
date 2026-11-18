@@ -1,6 +1,6 @@
 //! Public JSON output contract (§29, §31, §64).
-use chrono::{DateTime, Utc};
-use radar_core::{Event, SourceHealth};
+use jiff::Timestamp;
+use radar_core::{Event, SourceHealth, date::wire::WireTimestamp};
 use radar_state::ChangeRecord;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -15,7 +15,12 @@ pub struct ScanOutput {
     /// `#[schemars(schema_with = ...)]` so consumers can validate compatibility.
     #[schemars(schema_with = "const_schema_1_0")]
     pub schema_version: String,
-    pub generated_at: DateTime<Utc>,
+    #[serde(
+        serialize_with = "radar_core::date::wire::serialize_timestamp",
+        deserialize_with = "radar_core::date::wire::deserialize_timestamp"
+    )]
+    #[schemars(with = "radar_core::date::wire::TimestampSchema")]
+    pub generated_at: Timestamp,
     pub query: QuerySpec,
     #[serde(default)]
     pub events: Vec<Event>,
@@ -113,7 +118,7 @@ fn render_jsonl_to<W: std::io::Write>(
     let envelope = serde_json::json!({
         "kind": "scan",
         "schema_version": output.schema_version,
-        "generated_at": output.generated_at,
+        "generated_at": WireTimestamp(output.generated_at),
         "query": output.query,
         "source_health": output.source_health,
         "changes": output.changes,

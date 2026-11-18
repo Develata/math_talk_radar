@@ -26,7 +26,7 @@ fn template() -> Event {
         content_type: Some("application/rss+xml".into()),
         body: include_bytes!("../../../crates/radar-adapters/tests/fixtures/sites/clay-list.xml")
             .to_vec(),
-        fetched_at: chrono::DateTime::UNIX_EPOCH,
+        fetched_at: jiff::Timestamp::UNIX_EPOCH,
     };
     let adapter = radar_adapters::rss::RssAdapter;
     let stub = adapter
@@ -83,7 +83,7 @@ fn main() {
     let dir = tempfile::tempdir().expect("temporary state");
     let repo = radar_state::Repository::open(&dir.path().join("state.redb")).expect("state open");
     let mut events = corpus(&template, 10_000, false);
-    let now = chrono::DateTime::UNIX_EPOCH;
+    let now = jiff::Timestamp::UNIX_EPOCH;
     let tiers = HashMap::new();
     let start = Instant::now();
     events = dedup_events(events);

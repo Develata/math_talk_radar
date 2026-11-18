@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use radar_core::dedup::{dedup_events, dedup_events_with_aliases};
 use radar_core::filter::matches_mode_and_window;
 use radar_core::ranking::score_event;
@@ -64,7 +64,7 @@ pub async fn run_scan(args: ScanArgs) -> Result<ScanOutput, CliError> {
     } else {
         dedup_events_with_aliases(events)
     };
-    let now = Utc::now();
+    let now = Timestamp::now();
     for health in &mut source_health {
         health.recorded_at = Some(now);
     }
@@ -97,7 +97,7 @@ pub async fn run_scan(args: ScanArgs) -> Result<ScanOutput, CliError> {
 fn persist_scan(
     events: Vec<Event>,
     args: &ScanArgs,
-    now: DateTime<Utc>,
+    now: Timestamp,
     health: &[SourceHealth],
     aliases: &HashMap<EventId, EventId>,
 ) -> Result<(Vec<Event>, Vec<ChangeRecord>), CliError> {
